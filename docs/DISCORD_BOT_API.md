@@ -30,6 +30,14 @@ The token returns only the columns of its own board:
 
 Use one of these values as `list_id` when creating a card.
 
+## List cards on the board
+
+```http
+GET /v1/integrations/discord/cards
+```
+
+Returns active cards from this token's board only. Each entry contains `id`, `list_id`, `title`, and `description`. Use the card `id` to retrieve or append its conversation.
+
 ## Create (or safely repeat) a suggestion card
 
 `source_id` is the original Discord message ID. Sending the same ID again returns the same card instead of making a duplicate.
