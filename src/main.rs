@@ -676,6 +676,7 @@ struct BoardCardRow {
     checklist_completed: i64,
     comment_count: i64,
     attachment_count: i64,
+    has_unread_mentions: bool,
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -734,6 +735,7 @@ struct BoardCard {
     checklist_completed: i64,
     comment_count: i64,
     attachment_count: i64,
+    has_unread_mentions: bool,
     labels: Vec<LabelResponse>,
     assignees: Vec<MemberResponse>,
 }
@@ -853,6 +855,7 @@ struct CardDetail {
     cover_attachment_id: Option<Uuid>,
     cover_mode: String,
     background_image_url: Option<String>,
+    unread_mention_source_ids: Vec<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -970,6 +973,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
         .route("/v1/cards/{card_id}/public-visibility", patch(update_card_public_visibility))
         .route("/v1/cards/{card_id}/details", get(get_card_detail))
+        .route("/v1/cards/{card_id}/mentions/read", post(mark_card_mentions_read))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
         .route("/v1/checklists/{checklist_id}", axum::routing::delete(delete_checklist))
@@ -1864,7 +1868,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -1907,10 +1911,11 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         checklist_completed: card.checklist_completed,
         comment_count: card.comment_count,
         attachment_count: card.attachment_count,
+        has_unread_mentions: card.has_unread_mentions,
         labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone() }).collect(),
         assignees: card_assignees.iter().filter(|member| member.card_id == card.id).map(|member| MemberResponse { id: member.id, display_name: member.display_name.clone(), avatar_url: member.avatar_url.clone() }).collect(),
     }).collect();
-    let mut members = sqlx::query_as::<_, MemberResponse>("SELECT u.id, u.display_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url FROM board_members bm INNER JOIN users u ON u.id = bm.user_id WHERE bm.board_id = $1 ORDER BY u.display_name")
+    let mut members = sqlx::query_as::<_, MemberResponse>("SELECT u.id, u.display_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url FROM board_members bm INNER JOIN users u ON u.id = bm.user_id WHERE bm.board_id = $1 AND u.password_hash IS NOT NULL AND u.disabled_at IS NULL ORDER BY u.display_name")
         .bind(board.id)
         .fetch_all(pool)
         .await
@@ -2399,6 +2404,46 @@ async fn comment_responses(pool: &PgPool, rows: Vec<CommentRow>, current_user_id
     Ok(comments)
 }
 
+fn mentioned_usernames(value: &str) -> Vec<String> {
+    let bytes = value.as_bytes();
+    let mut names = HashSet::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'@' { index += 1; continue; }
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && (bytes[end].is_ascii_lowercase() || bytes[end].is_ascii_uppercase() || bytes[end].is_ascii_digit() || matches!(bytes[end], b'_' | b'-' | b'.')) { end += 1; }
+        if (3..=32).contains(&(end - start)) {
+            names.insert(value[start..end].to_ascii_lowercase());
+        }
+        index = end.max(start);
+    }
+    names.into_iter().collect()
+}
+
+async fn replace_card_mentions(pool: &PgPool, card_id: Uuid, actor_id: Uuid, source_kind: &str, source_id: Uuid, body: &str) -> Result<(), ApiError> {
+    sqlx::query("DELETE FROM card_mentions WHERE source_kind = $1 AND source_id = $2")
+        .bind(source_kind).bind(source_id).execute(pool).await.map_err(ApiError::internal)?;
+    let usernames = mentioned_usernames(body);
+    if usernames.is_empty() { return Ok(()); }
+    let users = sqlx::query_scalar::<_, Uuid>("SELECT bm.user_id FROM cards c JOIN board_members bm ON bm.board_id = c.board_id JOIN users u ON u.id = bm.user_id WHERE c.id = $1 AND bm.user_id <> $2 AND u.disabled_at IS NULL AND lower(u.username) = ANY($3)")
+        .bind(card_id).bind(actor_id).bind(usernames).fetch_all(pool).await.map_err(ApiError::internal)?;
+    for user_id in users {
+        sqlx::query("INSERT INTO card_mentions (id, card_id, user_id, source_kind, source_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, source_kind, source_id) DO UPDATE SET card_id = EXCLUDED.card_id, created_at = now(), read_at = NULL")
+            .bind(Uuid::new_v4()).bind(card_id).bind(user_id).bind(source_kind).bind(source_id).execute(pool).await.map_err(ApiError::internal)?;
+    }
+    Ok(())
+}
+
+async fn mark_card_mentions_read(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    sqlx::query("UPDATE card_mentions SET read_at = now() WHERE card_id = $1 AND user_id = $2 AND read_at IS NULL")
+        .bind(card_id).bind(current.id).execute(pool).await.map_err(ApiError::internal)?;
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<CardDetail> {
     let pool = database(&state)?;
     let actor_id = current.0.map(|user| user.id);
@@ -2490,7 +2535,11 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
     .fetch_all(pool)
     .await
     .map_err(ApiError::internal)?;
-    Ok(Json(CardDetail { checklists, comments, attachments, activity, cover_attachment_id, cover_mode, background_image_url }))
+    let unread_mention_source_ids = if let Some(actor_id) = actor_id {
+        sqlx::query_scalar::<_, Uuid>("SELECT source_id FROM card_mentions WHERE card_id = $1 AND user_id = $2 AND read_at IS NULL")
+            .bind(card_id).bind(actor_id).fetch_all(pool).await.map_err(ApiError::internal)?
+    } else { vec![] };
+    Ok(Json(CardDetail { checklists, comments, attachments, activity, cover_attachment_id, cover_mode, background_image_url, unread_mention_source_ids }))
 }
 
 fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {
@@ -2637,6 +2686,7 @@ async fn update_checklist_item(State(state): State<AppState>, current: CurrentUs
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
     let action = if request.description.is_some() { "Изменено описание пункта чек-листа" } else if item.is_completed { "Отмечен пункт чек-листа" } else { "Снята отметка с пункта" };
+    if request.description.is_some() { replace_card_mentions(pool, item.card_id, actor_id, "checklist_item_description", item.id, &item.description).await?; }
     record_card_activity(pool, item.card_id, actor_id, action, &format!("{}: {}", item.checklist_title, item.title)).await;
     let _ = state.events.send(());
     let attachments = sqlx::query_as::<_, AttachmentResponse>("SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE checklist_item_id = $1 ORDER BY created_at DESC")
@@ -2680,11 +2730,12 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     .bind(Uuid::new_v4())
     .bind(card_id)
     .bind(actor_id)
-    .bind(body)
+    .bind(&body)
     .bind(request.parent_comment_id)
     .fetch_one(pool)
     .await
     .map_err(ApiError::internal)?;
+    replace_card_mentions(pool, card_id, actor_id, "comment", comment_id, &body).await?;
     let comment = load_card_comments(pool, card_id, Some(actor_id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     record_card_activity(pool, card_id, actor_id, if comment.parent_comment_id.is_some() { "Добавлен ответ" } else { "Добавлен комментарий" }, "").await;
@@ -3053,13 +3104,14 @@ async fn update_comment(State(state): State<AppState>, current: CurrentUser, Pat
     let card_id = sqlx::query_scalar::<_, Uuid>(
         "UPDATE comments c SET body = $1, edited_at = now() FROM cards card INNER JOIN boards b ON b.id = card.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $2 AND c.card_id = card.id AND c.author_id = $3 AND m.user_id = $3 AND card.archived_at IS NULL RETURNING c.card_id",
     )
-    .bind(body)
+    .bind(&body)
     .bind(comment_id)
     .bind(current.id)
     .fetch_optional(database(&state)?)
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError::forbidden("Only the comment author can edit it."))?;
+    replace_card_mentions(database(&state)?, card_id, current.id, "comment", comment_id, &body).await?;
     let comment = load_card_comments(database(&state)?, card_id, Some(current.id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     let _ = state.events.send(());
@@ -3271,6 +3323,7 @@ async fn create_card(State(state): State<AppState>, current: CurrentUser, Path(l
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "list_not_found", "List was not found.".to_owned()))?;
+    replace_card_mentions(database(&state)?, card.id, actor_id, "card_description", card.id, &card.description).await?;
     record_card_activity(database(&state)?, card.id, actor_id, "Создана задача", &card.title).await;
     let _ = state.events.send(());
     Ok(Json(card))
@@ -3289,6 +3342,7 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
         None => None,
     };
     if title.is_none() && description.is_none() { return Err(ApiError::bad_request("At least one editable field is required.")); }
+    let description_changed = description.is_some();
     let card = sqlx::query_as::<_, CardResponse>(
         "UPDATE cards c SET title = COALESCE($1, c.title), description = COALESCE($2, c.description), updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $3 AND c.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $4 RETURNING c.id, c.list_id, c.title, c.description",
     )
@@ -3300,6 +3354,7 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
+    if description_changed { replace_card_mentions(database(&state)?, card.id, actor_id, "card_description", card.id, &card.description).await?; }
     record_card_activity(database(&state)?, card.id, actor_id, "Изменена задача", "Название или описание").await;
     let _ = state.events.send(());
     Ok(Json(card))
