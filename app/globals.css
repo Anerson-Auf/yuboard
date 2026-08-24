@@ -156,8 +156,8 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 /* Leave a deliberate gutter between cards and a column's vertical scrollbar. */
 .card-list { padding-right: 10px; }
 
-/* Text stays readable on the graphite palette; completed checklist chips retain black text. */
-.app-shell, .app-shell.light { --text: #cecfd2; --muted: #cecfd2; --faint: #cecfd2; color: #cecfd2; }
+/* The graphite palette keeps light text; the light theme preserves its own dark contrast tokens. */
+.app-shell:not(.light) { --text: #cecfd2; --muted: #cecfd2; --faint: #cecfd2; color: #cecfd2; }
 
 /* Console events are part of the stream, but are not user-message bubbles. */
 .activity-message { padding: 2px 0; background: transparent; }
