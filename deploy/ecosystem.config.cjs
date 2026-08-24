@@ -26,5 +26,14 @@ module.exports = {
       min_uptime: '10s',
       restart_delay: 1500,
     },
+    {
+      name: 'flowboard-tunnel',
+      cwd: root,
+      script: './deploy/flowboard-tunnel.sh',
+      interpreter: 'bash',
+      max_restarts: 8,
+      min_uptime: '10s',
+      restart_delay: 1500,
+    },
   ],
 };

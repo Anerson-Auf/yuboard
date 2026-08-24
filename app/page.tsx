@@ -22,7 +22,7 @@ type Attachment = { id: string; original_name: string; media_type: string; byte_
 type Activity = { id: string; action: string; detail: string; actor_name: string | null; created_at: string };
 type CardDetail = { checklists: Checklist[]; comments: Comment[]; attachments: Attachment[]; activity: Activity[]; cover_attachment_id: string | null; cover_mode: 'full' | 'top'; background_image_url: string | null };
 type AuthAccount = { user: { id: string; username: string; avatar_url: string | null; is_system_owner: boolean } };
-type AuthState = 'checking' | 'signed-out' | 'signed-in';
+type AuthState = 'checking' | 'signed-out' | 'signed-in' | 'public';
 type Workspace = { id: string; name: string };
 type BoardSummary = { id: string; title: string; visibility: string };
 type FilterMode = 'all' | 'assigned' | 'due' | 'overdue';
@@ -34,8 +34,20 @@ type AdminAccount = { id: string; username: string; avatar_url?: string | null; 
 type AccountInvite = { id: string; expires_at: string; token?: string | null };
 type AdminWorkspace = { id: string; name: string; owner_username: string; member_count: number; archived_at: string | null };
 type AuthSession = { id: string; created_at: string; last_seen_at: string; expires_at: string; current: boolean };
-type Diagram = { id: string; card_id: string; title: string; document: { strokes: { points: { x: number; y: number }[] }[] }; version: number };
 type DiagramPoint = { x: number; y: number };
+type DiagramStroke = { points: DiagramPoint[]; color?: string; width?: number };
+type DiagramRectangle = { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number };
+type DiagramArrow = { type: 'arrow'; x: number; y: number; x2: number; y2: number; color: string; lineWidth: number };
+type DiagramText = { type: 'text'; x: number; y: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
+type DiagramCallout = { type: 'callout'; x: number; y: number; x2: number; y2: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
+type DiagramElement = DiagramRectangle | DiagramArrow | DiagramText | DiagramCallout;
+type DiagramDocument = { strokes: DiagramStroke[]; elements?: DiagramElement[] };
+type Diagram = { id: string; card_id: string; title: string; document: DiagramDocument; version: number };
+type DiagramTool = 'select' | 'draw' | 'rectangle' | 'ellipse' | 'arrow' | 'text' | 'callout';
+type DiagramSnapshot = { strokes: DiagramStroke[]; elements: DiagramElement[] };
+type DiagramHandle = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'start' | 'end';
+type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean };
+type CardContextMenu = { card: Card; x: number; y: number };
 
 // Empty in local development and production: requests stay on the current origin.
 // Vite forwards /v1 to Rust locally; nginx does the same after deployment.
@@ -174,6 +186,93 @@ function ProfileAvatar({ account, member, version = 0 }: { account: AuthAccount 
   return account?.user.avatar_url ? <img className="avatar profile-image" src={`${account.user.avatar_url}?v=${encodeURIComponent(`${account.user.id}-${version}`)}`} alt="Аватар профиля" /> : <Avatar member={member} />;
 }
 
+function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramElement) {
+  context.save();
+  context.strokeStyle = element.color;
+  context.fillStyle = element.color;
+  context.lineWidth = 'lineWidth' in element ? element.lineWidth : 1;
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+
+  if (element.type === 'rectangle') {
+    context.strokeRect(element.x, element.y, element.width, element.height);
+  } else if (element.type === 'ellipse') {
+    const centerX = element.x + element.width / 2;
+    const centerY = element.y + element.height / 2;
+    context.beginPath();
+    context.ellipse(centerX, centerY, Math.abs(element.width) / 2, Math.abs(element.height) / 2, 0, 0, Math.PI * 2);
+    context.stroke();
+  } else if (element.type === 'arrow') {
+    const angle = Math.atan2(element.y2 - element.y, element.x2 - element.x);
+    const head = Math.max(10, element.lineWidth * 4);
+    context.beginPath();
+    context.moveTo(element.x, element.y);
+    context.lineTo(element.x2, element.y2);
+    context.lineTo(element.x2 - head * Math.cos(angle - Math.PI / 6), element.y2 - head * Math.sin(angle - Math.PI / 6));
+    context.moveTo(element.x2, element.y2);
+    context.lineTo(element.x2 - head * Math.cos(angle + Math.PI / 6), element.y2 - head * Math.sin(angle + Math.PI / 6));
+    context.stroke();
+  } else if (element.type === 'callout') {
+    const angle = Math.atan2(element.y - element.y2, element.x - element.x2);
+    const head = 10;
+    context.beginPath();
+    context.moveTo(element.x, element.y);
+    context.lineTo(element.x2, element.y2);
+    context.lineTo(element.x2 + head * Math.cos(angle - Math.PI / 6), element.y2 + head * Math.sin(angle - Math.PI / 6));
+    context.moveTo(element.x2, element.y2);
+    context.lineTo(element.x2 + head * Math.cos(angle + Math.PI / 6), element.y2 + head * Math.sin(angle + Math.PI / 6));
+    context.stroke();
+    context.font = `${element.fontWeight === 'bold' ? '700' : '400'} ${element.fontSize}px ${element.fontFamily}`;
+    context.textBaseline = 'top';
+    element.text.split('\n').forEach((line, index) => context.fillText(line, element.x2 + 8, element.y2 + 8 + index * element.fontSize * 1.28));
+  } else {
+    context.font = `${element.fontWeight === 'bold' ? '700' : '400'} ${element.fontSize}px ${element.fontFamily}`;
+    context.textBaseline = 'top';
+    element.text.split('\n').forEach((line, index) => context.fillText(line, element.x, element.y + index * element.fontSize * 1.28));
+  }
+  context.restore();
+}
+
+function diagramBounds(element: DiagramElement) {
+  if (element.type === 'arrow') return { left: Math.min(element.x, element.x2), top: Math.min(element.y, element.y2), right: Math.max(element.x, element.x2), bottom: Math.max(element.y, element.y2) };
+  if (element.type === 'callout') {
+    const textWidth = Math.max(...element.text.split('\n').map((line) => line.length), 1) * element.fontSize * .62;
+    const textHeight = element.text.split('\n').length * element.fontSize * 1.28;
+    return { left: Math.min(element.x, element.x2), top: Math.min(element.y, element.y2), right: Math.max(element.x, element.x2 + 8 + textWidth), bottom: Math.max(element.y, element.y2 + 8 + textHeight) };
+  }
+  if (element.type === 'text') {
+    const textWidth = Math.max(...element.text.split('\n').map((line) => line.length), 1) * element.fontSize * .62;
+    return { left: element.x, top: element.y, right: element.x + textWidth, bottom: element.y + element.text.split('\n').length * element.fontSize * 1.28 };
+  }
+  return { left: Math.min(element.x, element.x + element.width), top: Math.min(element.y, element.y + element.height), right: Math.max(element.x, element.x + element.width), bottom: Math.max(element.y, element.y + element.height) };
+}
+
+function pointToSegmentDistance(point: DiagramPoint, start: DiagramPoint, end: DiagramPoint) {
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+  if (!lengthSquared) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * deltaX + (point.y - start.y) * deltaY) / lengthSquared));
+  return Math.hypot(point.x - (start.x + deltaX * t), point.y - (start.y + deltaY * t));
+}
+
+function drawDiagramSelection(context: CanvasRenderingContext2D, element: DiagramElement) {
+  const bounds = diagramBounds(element);
+  const pad = 7;
+  context.save();
+  context.setLineDash([5, 4]);
+  context.strokeStyle = '#86aaf1';
+  context.lineWidth = 1.5;
+  context.strokeRect(bounds.left - pad, bounds.top - pad, bounds.right - bounds.left + pad * 2, bounds.bottom - bounds.top + pad * 2);
+  context.setLineDash([]);
+  context.fillStyle = '#d5e2ff';
+  const handles = element.type === 'arrow' || element.type === 'callout'
+    ? [{ x: element.x, y: element.y }, { x: element.x2, y: element.y2 }]
+    : [{ x: bounds.left, y: bounds.top }, { x: bounds.right, y: bounds.top }, { x: bounds.right, y: bounds.bottom }, { x: bounds.left, y: bounds.bottom }];
+  handles.forEach((handle) => { context.fillRect(handle.x - 4, handle.y - 4, 8, 8); context.strokeRect(handle.x - 4, handle.y - 4, 8, 8); });
+  context.restore();
+}
+
 export default function Home() {
   const [columns, setColumns] = useState(initialColumns);
   const [view, setView] = useState<View>('home');
@@ -249,7 +348,9 @@ export default function Home() {
   const [boardBackgroundUrl, setBoardBackgroundUrl] = useState<string | null>(null);
   const [boardVisibility, setBoardVisibility] = useState<'public' | 'private'>('private');
   const [backgroundDraft, setBackgroundDraft] = useState('');
+  const [isUploadingBoardBackground, setUploadingBoardBackground] = useState(false);
   const [isBoardMenuOpen, setBoardMenuOpen] = useState(false);
+  const [cardContextMenu, setCardContextMenu] = useState<CardContextMenu | null>(null);
   const [isSavingBackground, setSavingBackground] = useState(false);
   const [boardId, setBoardId] = useState<string | null>(null);
   const [isEditingBoardTitle, setEditingBoardTitle] = useState(false);
@@ -277,7 +378,19 @@ export default function Home() {
   const [isDiagramOpen, setDiagramOpen] = useState(false);
   const [diagram, setDiagram] = useState<Diagram | null>(null);
   const [diagramTitle, setDiagramTitle] = useState('Схема');
-  const [diagramStrokes, setDiagramStrokes] = useState<{ points: DiagramPoint[] }[]>([]);
+  const [diagramStrokes, setDiagramStrokes] = useState<DiagramStroke[]>([]);
+  const [diagramElements, setDiagramElements] = useState<DiagramElement[]>([]);
+  const [diagramHistory, setDiagramHistory] = useState<DiagramSnapshot[]>([]);
+  const [selectedDiagramElement, setSelectedDiagramElement] = useState<number | null>(null);
+  const [diagramPreview, setDiagramPreview] = useState<DiagramElement | null>(null);
+  const [diagramTool, setDiagramTool] = useState<DiagramTool>('draw');
+  const [diagramColor, setDiagramColor] = useState('#9ea7ff');
+  const [diagramLineWidth, setDiagramLineWidth] = useState(3);
+  const [diagramTextDraft, setDiagramTextDraft] = useState('');
+  const [diagramFontSize, setDiagramFontSize] = useState(22);
+  const [diagramFontFamily, setDiagramFontFamily] = useState('Inter, system-ui, sans-serif');
+  const [diagramFontWeight, setDiagramFontWeight] = useState<'normal' | 'bold'>('normal');
+  const [diagramZoom, setDiagramZoom] = useState(.7);
   const [isDiagramSaving, setDiagramSaving] = useState(false);
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dragOverListId, setDragOverListId] = useState<EntityId | null>(null);
@@ -293,9 +406,13 @@ export default function Home() {
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1 } | null>(null);
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
+  const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const isDrawingRef = useRef(false);
+  const diagramStartRef = useRef<DiagramPoint | null>(null);
+  const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
   const cardPropertiesRef = useRef<HTMLDivElement | null>(null);
   const selectedCardId = selected?.id;
+  const isPublicViewer = authState === 'public';
   const dueDays = useMemo(() => calendarDays(dueCursor), [dueCursor]);
   const currentMember = account ? memberFromApi({ id: account.user.id, username: account.user.username, avatar_url: account.user.avatar_url }) : { id: '', initials: '—', color: 'violet', name: 'Пользователь' };
   const boardBackgroundStyle = view === 'board' && boardBackgroundUrl ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${boardBackgroundUrl}")` } : undefined;
@@ -318,17 +435,20 @@ export default function Home() {
         if (!setup.ok) throw new Error('identity setup is unavailable');
         const { registration_open } = await setup.json() as { registration_open: boolean };
         setRegistrationOpen(registration_open);
-        if (me.status === 401) { setAuthMode(inviteToken || registration_open ? 'register' : 'login'); setAuthState('signed-out'); return; }
-        if (!me.ok) throw new Error('identity service is unavailable');
-        setAccount(await me.json() as AuthAccount);
-        setAuthState('signed-in');
         if (sharedBoardId) {
           const sharedResponse = await fetch(`${API_URL}/v1/boards/${sharedBoardId}`);
           if (!sharedResponse.ok) throw new Error('shared board could not be loaded');
           applyBoard(await sharedResponse.json() as ApiBoard);
-          setWorkspaceName('Общий доступ');
+          setWorkspaceName('Публичный доступ');
+          if (me.ok) { setAccount(await me.json() as AuthAccount); setAuthState('signed-in'); }
+          else if (me.status === 401) { setAccount(null); setAuthState('public'); }
+          else throw new Error('identity service is unavailable');
           setView('board'); setPersistence('connected'); return;
         }
+        if (me.status === 401) { setAuthMode(inviteToken || registration_open ? 'register' : 'login'); setAuthState('signed-out'); return; }
+        if (!me.ok) throw new Error('identity service is unavailable');
+        setAccount(await me.json() as AuthAccount);
+        setAuthState('signed-in');
         const spacesResponse = await fetch(`${API_URL}/v1/workspaces`);
         if (!spacesResponse.ok) throw new Error('workspaces could not be loaded');
         const spaces = await spacesResponse.json() as Workspace[];
@@ -403,9 +523,37 @@ export default function Home() {
     if (!context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = '#171923'; context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = '#9ea7ff'; context.lineWidth = 3; context.lineCap = 'round'; context.lineJoin = 'round';
-    diagramStrokes.forEach((stroke) => { const [first, ...rest] = stroke.points; if (!first) return; context.beginPath(); context.moveTo(first.x, first.y); rest.forEach((point) => context.lineTo(point.x, point.y)); context.stroke(); });
-  }, [diagramStrokes, isDiagramOpen]);
+    diagramStrokes.forEach((stroke) => {
+      const [first, ...rest] = stroke.points;
+      if (!first) return;
+      context.save();
+      context.strokeStyle = stroke.color ?? '#9ea7ff';
+      context.lineWidth = stroke.width ?? 3;
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.beginPath();
+      context.moveTo(first.x, first.y);
+      rest.forEach((point) => context.lineTo(point.x, point.y));
+      context.stroke();
+      context.restore();
+    });
+    diagramElements.forEach((element) => drawDiagramElement(context, element));
+    if (diagramPreview) drawDiagramElement(context, diagramPreview);
+    if (selectedDiagramElement !== null && diagramElements[selectedDiagramElement]) drawDiagramSelection(context, diagramElements[selectedDiagramElement]);
+  }, [diagramElements, diagramPreview, diagramStrokes, isDiagramOpen, selectedDiagramElement]);
+
+  useEffect(() => {
+    if (!isDiagramOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !target?.matches('input, textarea, select')) {
+        event.preventDefault();
+        undoDiagram();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
     if (!sidebarPanel) return;
@@ -422,6 +570,31 @@ export default function Home() {
       window.removeEventListener('keydown', closeOnEscape);
     };
   }, [sidebarPanel]);
+
+  useEffect(() => {
+    if (!cardContextMenu) return;
+    const close = () => setCardContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', closeOnEscape); };
+  }, [cardContextMenu]);
+
+  useEffect(() => {
+    const onContextMenu = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      const cardElement = target?.closest<HTMLElement>('.task-card');
+      if (!cardElement) return;
+      const flattened = visibleColumns.flatMap((column) => column.cards);
+      const index = Array.from(document.querySelectorAll<HTMLElement>('.task-card')).indexOf(cardElement);
+      const card = flattened[index];
+      if (!card) return;
+      event.preventDefault();
+      setCardContextMenu({ card, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 170) });
+    };
+    window.addEventListener('contextmenu', onContextMenu);
+    return () => window.removeEventListener('contextmenu', onContextMenu);
+  }, [visibleColumns]);
 
   useEffect(() => {
     if (!selected || !cardTitleDraft.trim() || (selected.title === cardTitleDraft.trim() && (selected.description ?? '') === cardDescriptionDraft)) return;
@@ -584,16 +757,18 @@ export default function Home() {
     setSidebarPanel(null);
     setCommentDraft('');
   }
-  function archiveSelectedCard() {
-    if (!selected) return;
-    const card = selected;
+  function archiveCard(card: Card) {
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) })));
-    setSelected(null);
+    setSelected((current) => current?.id === card.id ? null : current);
     if (persistence === 'connected' && typeof card.id === 'string') {
       void fetch(`${API_URL}/v1/cards/${card.id}`, { method: 'DELETE' })
         .then((response) => { if (!response.ok) throw new Error('archive failed'); showToast('Задача перемещена в архив'); })
         .catch(() => showToast('Не удалось сохранить архивирование'));
     } else showToast('Задача удалена');
+  }
+  function archiveSelectedCard() {
+    if (!selected) return;
+    archiveCard(selected);
   }
   function openArchive() {
     if (!boardId) return;
@@ -779,7 +954,18 @@ export default function Home() {
     setSidebarPanel(null);
     void fetch(`${API_URL}/v1/cards/${selected.id}/diagram`)
       .then(async (response) => { if (!response.ok) throw new Error('diagram load failed'); return response.json() as Promise<Diagram | null>; })
-      .then((saved) => { setDiagram(saved); setDiagramTitle(saved?.title ?? 'Схема'); setDiagramStrokes(saved?.document?.strokes ?? []); setDiagramOpen(true); })
+      .then((saved) => {
+        setDiagram(saved);
+        setDiagramTitle(saved?.title ?? 'Схема');
+        setDiagramStrokes(saved?.document?.strokes ?? []);
+        setDiagramElements(saved?.document?.elements ?? []);
+        setDiagramPreview(null);
+        setDiagramHistory([]);
+        setSelectedDiagramElement(null);
+        setDiagramTool('select');
+        setDiagramZoom(.7);
+        setDiagramOpen(true);
+      })
       .catch(() => showToast('Не удалось загрузить схему'));
   }
   function diagramPoint(event: ReactPointerEvent<HTMLCanvasElement>): DiagramPoint | null {
@@ -789,22 +975,141 @@ export default function Home() {
     if (!rect.width || !rect.height) return null;
     return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
   }
+  function rememberDiagramState() {
+    setDiagramHistory((current) => [...current.slice(-49), { strokes: diagramStrokes, elements: diagramElements }]);
+  }
+  function undoDiagram() {
+    const previous = diagramHistory.at(-1);
+    if (!previous) return;
+    setDiagramStrokes(previous.strokes);
+    setDiagramElements(previous.elements);
+    setDiagramHistory((current) => current.slice(0, -1));
+    setSelectedDiagramElement(null);
+    setDiagramPreview(null);
+  }
+  function diagramElementAtPoint(point: DiagramPoint) {
+    for (let index = diagramElements.length - 1; index >= 0; index -= 1) {
+      const element = diagramElements[index];
+      const bounds = diagramBounds(element);
+      if (element.type === 'arrow' && pointToSegmentDistance(point, { x: element.x, y: element.y }, { x: element.x2, y: element.y2 }) <= 13) return index;
+      if (element.type === 'callout' && (pointToSegmentDistance(point, { x: element.x, y: element.y }, { x: element.x2, y: element.y2 }) <= 13 || (point.x >= element.x2 && point.x <= bounds.right && point.y >= element.y2 && point.y <= bounds.bottom))) return index;
+      if (element.type === 'ellipse') {
+        const radiusX = Math.max((bounds.right - bounds.left) / 2, 1);
+        const radiusY = Math.max((bounds.bottom - bounds.top) / 2, 1);
+        const centerX = (bounds.left + bounds.right) / 2;
+        const centerY = (bounds.top + bounds.bottom) / 2;
+        if (((point.x - centerX) / radiusX) ** 2 + ((point.y - centerY) / radiusY) ** 2 <= 1.2) return index;
+      } else if (point.x >= bounds.left - 9 && point.x <= bounds.right + 9 && point.y >= bounds.top - 9 && point.y <= bounds.bottom + 9) return index;
+    }
+    return null;
+  }
+  function diagramHandleAtPoint(element: DiagramElement, point: DiagramPoint): DiagramHandle | null {
+    const near = (target: DiagramPoint) => Math.hypot(point.x - target.x, point.y - target.y) <= 11;
+    if (element.type === 'arrow' || element.type === 'callout') return near({ x: element.x, y: element.y }) ? 'start' : near({ x: element.x2, y: element.y2 }) ? 'end' : null;
+    const bounds = diagramBounds(element);
+    if (near({ x: bounds.left, y: bounds.top })) return 'nw';
+    if (near({ x: bounds.right, y: bounds.top })) return 'ne';
+    if (near({ x: bounds.right, y: bounds.bottom })) return 'se';
+    if (near({ x: bounds.left, y: bounds.bottom })) return 'sw';
+    return null;
+  }
+  function moveDiagramElement(element: DiagramElement, deltaX: number, deltaY: number): DiagramElement {
+    if (element.type === 'arrow' || element.type === 'callout') return { ...element, x: element.x + deltaX, y: element.y + deltaY, x2: element.x2 + deltaX, y2: element.y2 + deltaY };
+    return { ...element, x: element.x + deltaX, y: element.y + deltaY };
+  }
+  function resizeDiagramElement(element: DiagramElement, handle: DiagramHandle, point: DiagramPoint): DiagramElement {
+    if (element.type === 'arrow' || element.type === 'callout') return handle === 'start' ? { ...element, x: point.x, y: point.y } : { ...element, x2: point.x, y2: point.y };
+    if (element.type === 'text') {
+      const bounds = diagramBounds(element);
+      const initialWidth = Math.max(bounds.right - bounds.left, 1);
+      const ratio = Math.max(.5, Math.min(3, Math.abs(point.x - bounds.left) / initialWidth));
+      return { ...element, fontSize: Math.round(Math.max(12, Math.min(96, element.fontSize * ratio))) };
+    }
+    const bounds = diagramBounds(element);
+    let { left, top, right, bottom } = bounds;
+    if (handle === 'nw' || handle === 'sw') left = point.x;
+    if (handle === 'ne' || handle === 'se') right = point.x;
+    if (handle === 'nw' || handle === 'ne') top = point.y;
+    if (handle === 'sw' || handle === 'se') bottom = point.y;
+    return { ...element, x: Math.min(left, right), y: Math.min(top, bottom), width: Math.max(4, Math.abs(right - left)), height: Math.max(4, Math.abs(bottom - top)) };
+  }
   function startDiagramStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
     const point = diagramPoint(event);
     if (!point) return;
-    event.currentTarget.setPointerCapture(event.pointerId); isDrawingRef.current = true;
-    setDiagramStrokes((current) => [...current, { points: [point] }]);
+    if (diagramTool === 'select') {
+      const index = diagramElementAtPoint(point);
+      if (index === null) { setSelectedDiagramElement(null); return; }
+      const element = diagramElements[index];
+      const handle = selectedDiagramElement === index ? diagramHandleAtPoint(element, point) : null;
+      setSelectedDiagramElement(index);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      isDrawingRef.current = true;
+      diagramInteractionRef.current = { kind: handle ? 'resize' : 'move', index, handle: handle ?? 'move', start: point, initial: element, historyStored: false };
+      return;
+    }
+    if (diagramTool === 'text') {
+      const text = diagramTextDraft.trim();
+      if (!text) { showToast('Сначала напишите текст в панели схемы'); return; }
+      rememberDiagramState();
+      setDiagramElements((current) => [...current, { type: 'text', x: point.x, y: point.y, text, color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight }]);
+      setSelectedDiagramElement(diagramElements.length);
+      return;
+    }
+    if (diagramTool === 'callout' && !diagramTextDraft.trim()) { showToast('Сначала напишите текст выноски в панели схемы'); return; }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    isDrawingRef.current = true;
+    if (diagramTool === 'draw') {
+      rememberDiagramState();
+      setDiagramStrokes((current) => [...current, { points: [point], color: diagramColor, width: diagramLineWidth }]);
+      return;
+    }
+    diagramStartRef.current = point;
+    setDiagramPreview(null);
   }
+
+  function diagramElementFromDrag(tool: Exclude<DiagramTool, 'select' | 'draw' | 'text'>, start: DiagramPoint, end: DiagramPoint): DiagramElement {
+    if (tool === 'arrow') return { type: 'arrow', x: start.x, y: start.y, x2: end.x, y2: end.y, color: diagramColor, lineWidth: diagramLineWidth };
+    if (tool === 'callout') return { type: 'callout', x: start.x, y: start.y, x2: end.x, y2: end.y, text: diagramTextDraft.trim(), color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight };
+    return { type: tool, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), color: diagramColor, lineWidth: diagramLineWidth };
+  }
+
   function continueDiagramStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!isDrawingRef.current) return;
     const point = diagramPoint(event);
     if (!point) return;
-    setDiagramStrokes((current) => current.map((stroke, index) => index === current.length - 1 ? { ...stroke, points: [...stroke.points, point] } : stroke));
+    const interaction = diagramInteractionRef.current;
+    if (interaction) {
+      if (!interaction.historyStored && Math.hypot(point.x - interaction.start.x, point.y - interaction.start.y) > 1) { rememberDiagramState(); interaction.historyStored = true; }
+      const element = interaction.kind === 'move' ? moveDiagramElement(interaction.initial, point.x - interaction.start.x, point.y - interaction.start.y) : resizeDiagramElement(interaction.initial, interaction.handle, point);
+      setDiagramElements((current) => current.map((item, index) => index === interaction.index ? element : item));
+      return;
+    }
+    if (diagramTool === 'draw') {
+      setDiagramStrokes((current) => current.map((stroke, index) => index === current.length - 1 ? { ...stroke, points: [...stroke.points, point] } : stroke));
+      return;
+    }
+    const start = diagramStartRef.current;
+    if (start) setDiagramPreview(diagramElementFromDrag(diagramTool, start, point));
+  }
+
+  function finishDiagramInteraction(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!isDrawingRef.current) return;
+    isDrawingRef.current = false;
+    if (diagramInteractionRef.current) { diagramInteractionRef.current = null; return; }
+    const start = diagramStartRef.current;
+    const point = diagramPoint(event);
+    if (diagramTool !== 'draw' && start && point) {
+      const element = diagramElementFromDrag(diagramTool, start, point);
+      const length = element.type === 'arrow' || element.type === 'callout' ? Math.hypot(element.x2 - element.x, element.y2 - element.y) : Math.max(element.width, element.height);
+      if (length >= 5) { rememberDiagramState(); setDiagramElements((current) => [...current, element]); setSelectedDiagramElement(diagramElements.length); }
+    }
+    diagramStartRef.current = null;
+    setDiagramPreview(null);
   }
   function saveDiagram() {
     if (!selected || typeof selected.id !== 'string' || !diagramTitle.trim() || isDiagramSaving) return;
     setDiagramSaving(true);
-    void fetch(`${API_URL}/v1/cards/${selected.id}/diagram`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes }, version: diagram?.version ?? null }) })
+    void fetch(`${API_URL}/v1/cards/${selected.id}/diagram`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements }, version: diagram?.version ?? null }) })
       .then(async (response) => { if (!response.ok) { const message = (await response.json().catch(() => null) as { message?: string } | null)?.message; throw new Error(message ?? 'diagram save failed'); } return response.json() as Promise<Diagram>; })
       .then((saved) => { setDiagram(saved); setDiagramOpen(false); showToast('Схема сохранена'); })
       .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось сохранить схему'))
@@ -1134,6 +1439,21 @@ export default function Home() {
       .catch(() => showToast('Не удалось сохранить фон: нужен HTTPS-адрес изображения'))
       .finally(() => setSavingBackground(false));
   }
+  function uploadBoardBackground(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !boardId || isUploadingBoardBackground) return;
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 50 * 1024 * 1024) {
+      showToast('Выберите JPEG, PNG, GIF или WebP до 50 МиБ'); return;
+    }
+    const form = new FormData(); form.append('file', file);
+    setUploadingBoardBackground(true);
+    void fetch(`${API_URL}/v1/boards/${boardId}/background/file`, { method: 'POST', body: form })
+      .then(async (response) => { if (!response.ok) throw new Error('upload failed'); return response.json() as Promise<{ url: string }>; })
+      .then(({ url }) => { setBoardBackgroundUrl(url); setBackgroundDraft(url); showToast('Фон проекта загружен'); })
+      .catch(() => showToast('Не удалось загрузить фон проекта'))
+      .finally(() => setUploadingBoardBackground(false));
+  }
   function changeBoardVisibility(visibility: 'public' | 'private') {
     if (!boardId || visibility === boardVisibility) return;
     const previous = boardVisibility; setBoardVisibility(visibility);
@@ -1237,11 +1557,11 @@ export default function Home() {
     return <main className={`app-shell ${theme} auth-shell`}><section className="auth-card"><button className="brand auth-brand" type="button" onClick={() => setAuthMode('login')}><span className="brand-mark">✓</span><span>Flowboard</span></button><p className="eyebrow">FLOWBOARD</p><h1>{isRegistering ? inviteToken ? 'Активировать аккаунт' : 'Создать первый аккаунт' : 'С возвращением'}</h1><p className="auth-copy">{isRegistering ? inviteToken ? 'Выберите уникальный ник и пароль.' : 'Первый аккаунт станет system owner.' : 'Войдите по нику, чтобы продолжить.'}</p><form className="auth-form" onSubmit={submitAuth}><label>Ник<input value={authName} onChange={(event) => setAuthName(event.target.value)} maxLength={32} required autoComplete="username" placeholder="your_nick" /></label><label>Пароль<input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} minLength={10} maxLength={256} required autoComplete={isRegistering ? 'new-password' : 'current-password'} /></label>{authError && <p className="auth-error">{authError}</p>}<button className="create-button auth-submit" type="submit" disabled={isAuthorizing}>{isAuthorizing ? 'Подключаем…' : isRegistering ? inviteToken ? 'Активировать' : 'Создать аккаунт' : 'Войти'}</button></form></section></main>;
   }
 
-  return <main className={`app-shell ${theme} ${boardBackgroundUrl && view === 'board' ? 'has-board-background' : ''}`} style={boardBackgroundStyle}>
+  return <main className={`app-shell ${theme} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' ? 'has-board-background' : ''}`} style={boardBackgroundStyle}>
     <header className="topbar">
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
       <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам" aria-label="Поиск по задачам" /></label>
-      <div className="top-actions">{account && <button className="top-utility-button" type="button" onClick={openSessions} aria-label="Открыть сессии">◷ <span>Сессии</span></button>}{account?.user.is_system_owner && <button className="top-utility-button" type="button" onClick={openAdmin} aria-label="Открыть администрирование">⚙ <span>Админ</span></button>}<button className="theme-button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label="Переключить тему">{theme === 'dark' ? '☾' : '☀'} <span>{theme === 'dark' ? 'Ночь' : 'День'}</span></button><button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
+      <div className="top-actions">{account && <button className="top-utility-button" type="button" onClick={openSessions} aria-label="Открыть сессии">◷ <span>Сессии</span></button>}{account?.user.is_system_owner && <button className="top-utility-button" type="button" onClick={openAdmin} aria-label="Открыть администрирование">⚙ <span>Админ</span></button>}<button className="theme-button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label="Переключить тему">{theme === 'dark' ? '☾' : '☀'} <span>{theme === 'dark' ? 'Ночь' : 'День'}</span></button>{!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
     </header>
 
     {isProfileOpen && account && <div className="modal-backdrop" role="presentation" onMouseDown={() => setProfileOpen(false)}><section className="archive-modal profile-modal" role="dialog" aria-modal="true" aria-label="Профиль" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setProfileOpen(false)} aria-label="Закрыть профиль">×</button>{profilePanel === 'overview' ? <><header className="profile-modal-head"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /><div><p className="eyebrow">ПРОФИЛЬ</p><h2>@{account.user.username}</h2></div></header><div className="profile-action-list"><button onClick={() => { setProfileName(account.user.username); setProfilePanel('username'); }}>Изменить ник <span>›</span></button><button onClick={() => setProfilePanel('password')}>Сменить пароль <span>›</span></button><label>Изменить аватар<input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadProfileAvatar} disabled={isSavingProfile} /></label></div><button className="profile-signout" onClick={signOut}>Выйти из аккаунта</button></> : profilePanel === 'username' ? <><button className="text-action" onClick={() => setProfilePanel('overview')}>← Профиль</button><h2>Изменить ник</h2><form className="profile-form" onSubmit={saveProfileName}><label>Новый ник<input autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={32} /></label><div><button type="button" className="secondary-button" onClick={() => setProfilePanel('overview')}>Отмена</button><button className="create-button" type="submit" disabled={isSavingProfile}>Сохранить</button></div></form></> : <><button className="text-action" onClick={() => setProfilePanel('overview')}>← Профиль</button><h2>Сменить пароль</h2><form className="profile-form" onSubmit={changeProfilePassword}><label>Текущий пароль<input autoFocus type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>Новый пароль<input type="password" value={nextPassword} onChange={(event) => setNextPassword(event.target.value)} minLength={10} /></label><div><button type="button" className="secondary-button" onClick={() => setProfilePanel('overview')}>Отмена</button><button className="create-button" type="submit" disabled={isSavingProfile}>Сохранить</button></div></form></>}{profileError && <p className="profile-error">{profileError}</p>}</section></div>}
@@ -1259,6 +1579,8 @@ export default function Home() {
         <div><button className="breadcrumbs" onClick={openHome}>{workspaceName} <span>/</span> {boardTitle}</button><div className="board-title-row">{isEditingBoardTitle ? <form className="board-title-form" onSubmit={(event) => { event.preventDefault(); saveBoardTitle(); }}><input autoFocus value={boardTitleDraft} onChange={(event) => setBoardTitleDraft(event.target.value)} maxLength={200} onKeyDown={(event) => { if (event.key === 'Escape') setEditingBoardTitle(false); }} /><button type="submit" disabled={isSavingBoardTitle}>✓</button></form> : <h1>{boardTitle}</h1>}<span className={`sync-status ${persistence}`}>{persistence === 'connected' ? 'Сохранено' : persistence === 'connecting' ? 'Подключение…' : 'Нет подключения'}</span><button className="title-edit" onClick={beginBoardRename} aria-label="Переименовать доску">✎</button></div></div>
         <div className="board-tools"><div className="avatars">{workspaceMembers.slice(0, 3).map((person) => <Avatar key={person.name} member={person} />)}{workspaceMembers.length > 3 && <span className="more-members">+{workspaceMembers.length - 3}</span>}</div><div className="filter-control"><button className={`secondary-button ${filterMode !== 'all' ? 'active-filter' : ''}`} onClick={() => setFilterOpen((current) => !current)}>⌘ Фильтры</button>{isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['due', 'С дедлайном'], ['overdue', 'Просроченные']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}</div>}</div><button className="secondary-button" onClick={openArchive}>Архив</button><button className="share-button" onClick={openTeam}>Команда</button><div className="board-menu-control"><button className="secondary-button more" onClick={() => setBoardMenuOpen((current) => !current)} aria-expanded={isBoardMenuOpen}>•••</button>{isBoardMenuOpen && <div className="board-menu"><button onClick={exportCurrentBoard}>⇩ Экспорт JSON</button><button onClick={() => importFileRef.current?.click()}>⇧ Импорт Trello / Flowboard JSON</button><button className="danger-action" onClick={deleteCurrentBoard}>Удалить проект</button><input ref={importFileRef} type="file" accept="application/json,.json" onChange={importBoardFile} /><section className="visibility-control"><b>Доступ к доске</b><p>{boardVisibility === 'public' ? 'Public: любой аккаунт может только смотреть.' : 'Private: видят только участники проекта.'}</p><div><button type="button" className={boardVisibility === 'public' ? 'selected' : ''} onClick={() => changeBoardVisibility('public')}>Public · просмотр всем</button><button type="button" className={boardVisibility === 'private' ? 'selected' : ''} onClick={() => changeBoardVisibility('private')}>Private</button></div>{boardVisibility === 'public' && <button className="copy-public-link" type="button" onClick={copyPublicBoardLink}>Скопировать публичную ссылку</button>}</section><form onSubmit={saveBoardBackground}><label>Фон проекта<input value={backgroundDraft} onChange={(event) => setBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" /></label><div><button type="submit" disabled={isSavingBackground}>{isSavingBackground ? 'Сохраняем…' : 'Сохранить фон'}</button><button type="button" onClick={() => { setBackgroundDraft(''); }}>Снять</button></div></form></div>}</div></div>
       </section>
+      {!isPublicViewer && <div className="board-background-upload"><input ref={boardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardBackground} /><button className="secondary-button" type="button" onClick={() => boardBackgroundFileRef.current?.click()} disabled={isUploadingBoardBackground}>{isUploadingBoardBackground ? 'Загружаем фон…' : '▧ Загрузить фон проекта'}</button></div>}
+      {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
       <section className="board" aria-label="Канбан-доска">
         {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <>{visibleColumns.map((column) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${columnDropTargetId === column.id ? 'column-drop-target' : ''}`} key={column.id} aria-label={column.title} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId) { if (draggingColumnId !== column.id) setColumnDropTargetId(column.id); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { if (draggingColumnId) setColumnDropTargetId(null); else { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId) { moveColumn(draggingColumnId, column.id); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>
           <div className="column-head column-drag-handle" draggable onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData('application/x-flowboard-column', String(column.id)); event.dataTransfer.effectAllowed = 'move'; setDraggingColumnId(column.id); setColumnDropTargetId(null); }} onDragEnd={() => { setDraggingColumnId(null); setColumnDropTargetId(null); }}><div>{editingColumnId === column.id ? <form className="column-rename" onSubmit={(event) => { event.preventDefault(); saveColumnTitle(column.id); }}><input autoFocus maxLength={200} value={columnTitleDraft} onChange={(event) => setColumnTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setEditingColumnId(null); }} aria-label="Название колонки" /><button type="submit" disabled={isSavingColumn}>✓</button></form> : <><h2>{column.title}</h2><span>{column.cards.length}</span></>}</div><div className="column-actions"><button className="column-menu" aria-label={`Меню колонки ${column.title}`} onClick={() => setColumnMenuId((current) => current === column.id ? null : column.id)}>•••</button>{columnMenuId === column.id && <div className="column-popover"><button onClick={() => beginColumnRename(column)}>Переименовать</button><button className="danger-action" onClick={() => deleteColumn(column)}>Удалить пустую</button></div>}</div></div>
@@ -1274,7 +1596,38 @@ export default function Home() {
       {isTeamOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setTeamOpen(false)}><section className="archive-modal team-modal" role="dialog" aria-modal="true" aria-label="Команда проекта" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setTeamOpen(false)} aria-label="Закрыть команду">×</button><p className="eyebrow">ПРОЕКТ</p><h2>Команда и доступы</h2><p className="archive-copy">Участник получает доступ только к этому проекту. Выберите готовую роль — сервер применяет права на каждом запросе.</p><div className="role-guide">{(['viewer', 'contributor', 'editor', 'full_access'] as TeamMember['preset'][]).map((role) => <div key={role}><b>{roleLabels[role]}</b><span>{roleDescriptions[role]}</span></div>)}</div>{isTeamLoading ? <p className="detail-loading">Загружаем участников…</p> : <><form className="member-picker" onSubmit={addWorkspaceMember}><label><span>Добавить участника</span><input autoFocus value={accountSearch} onChange={(event) => { setAccountSearch(event.target.value); setSelectedAccountId(''); }} placeholder="Найти по @нику" /></label><div className="member-picker-results">{availableAccounts.filter((item) => item.username.toLowerCase().includes(accountSearch.trim().replace(/^@/, '').toLowerCase())).slice(0, 6).map((item) => <button type="button" className={selectedAccountId === item.id ? 'selected' : ''} key={item.id} onClick={() => setSelectedAccountId(item.id)}><Avatar member={memberFromApi(item)} /><span>@{item.username}</span><small>{selectedAccountId === item.id ? 'Выбран' : 'Выбрать'}</small></button>)}{!availableAccounts.filter((item) => item.username.toLowerCase().includes(accountSearch.trim().replace(/^@/, '').toLowerCase())).length && <p className="empty-comments">Подходящих активных аккаунтов нет.</p>}</div><button className="create-button" disabled={!selectedAccountId || isSavingMember}>{isSavingMember ? 'Добавляем…' : 'Добавить в проект'}</button></form><div className="team-list">{teamMembers.map((member) => <article key={member.id}><Avatar member={memberFromApi({ id: member.id, username: member.username, avatar_url: member.avatar_url })} /><div><b>@{member.username}</b><small>{roleDescriptions[member.preset]}</small></div>{member.preset === 'owner' ? <span className="role-badge owner">Владелец</span> : <div className="team-actions"><select value={member.preset} onChange={(event) => changeTeamPreset(member, event.target.value as TeamMember['preset'])} aria-label={`Роль для @${member.username}`}><option value="viewer">Наблюдатель — только просмотр</option><option value="contributor">Участник — карточки</option><option value="editor">Редактор — карточки, колонки, метки</option><option value="full_access">Полный доступ — команда и настройки</option></select><button onClick={() => removeTeamMember(member)}>Исключить</button></div>}</article>)}</div></>}</section></div>}
     </>}
 
-    {isDiagramOpen && <div className="modal-backdrop diagram-backdrop" role="presentation" onMouseDown={() => setDiagramOpen(false)}><section className="diagram-modal" role="dialog" aria-modal="true" aria-label="Схема задачи" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setDiagramOpen(false)} aria-label="Закрыть">×</button><p className="eyebrow">CANVAS</p><input className="diagram-title" value={diagramTitle} onChange={(event) => setDiagramTitle(event.target.value)} maxLength={120} aria-label="Название схемы" /><p className="diagram-hint">Рисуйте мышью или пальцем. Схема хранится в карточке, версионируется и доступна только участникам workspace.</p><canvas ref={diagramCanvasRef} className="diagram-canvas" width="900" height="460" onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={() => { isDrawingRef.current = false; }} onPointerCancel={() => { isDrawingRef.current = false; }} /><div className="diagram-actions"><button className="secondary-button" onClick={() => setDiagramStrokes([])}>Очистить</button><button className="create-button" onClick={saveDiagram} disabled={isDiagramSaving}>{isDiagramSaving ? 'Сохраняем…' : 'Сохранить схему'}</button></div></section></div>}
+    {isDiagramOpen && <div className="modal-backdrop diagram-backdrop" role="presentation" onMouseDown={() => setDiagramOpen(false)}>
+      <section className="diagram-modal" role="dialog" aria-modal="true" aria-label="Схема задачи" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="modal-close" onClick={() => setDiagramOpen(false)} aria-label="Закрыть">×</button>
+        <p className="eyebrow">CANVAS</p>
+        <input className="diagram-title" value={diagramTitle} onChange={(event) => setDiagramTitle(event.target.value)} maxLength={120} aria-label="Название схемы" />
+        <p className="diagram-hint">Выберите инструмент, затем рисуйте на полотне. Текст вставляется кликом по полотну.</p>
+        <div className="diagram-toolbar" role="toolbar" aria-label="Инструменты схемы">
+          <div className="diagram-tool-group">
+            {([
+              ['select', '⌖', 'Выбрать и перемещать'],
+              ['draw', '✎', 'Карандаш'],
+              ['rectangle', '▭', 'Прямоугольник'],
+              ['ellipse', '◯', 'Круг / овал'],
+              ['arrow', '→', 'Стрелка'],
+              ['text', 'T', 'Текст'],
+              ['callout', '↗', 'Текстовая выноска'],
+            ] as [DiagramTool, string, string][]).map(([tool, icon, label]) => <button key={tool} type="button" className={`diagram-tool ${diagramTool === tool ? 'active' : ''}`} onClick={() => setDiagramTool(tool)} title={label} aria-label={label}>{icon}</button>)}
+          </div>
+          <label className="diagram-control">Цвет<input type="color" value={diagramColor} onChange={(event) => setDiagramColor(event.target.value)} aria-label="Цвет" /></label>
+          <div className="diagram-width-picker" aria-label="Толщина кисти и линий"><span>Кисть / линия</span><div>{([2, 3, 6, 12] as const).map((width) => <button type="button" key={width} className={diagramLineWidth === width ? 'active' : ''} onClick={() => setDiagramLineWidth(width)} aria-label={`${width} px`} title={`${width} px`}><i style={{ width, height: width }} /></button>)}</div></div>
+          {(diagramTool === 'text' || diagramTool === 'callout') && <>
+            <label className="diagram-control">Шрифт<select value={diagramFontFamily} onChange={(event) => setDiagramFontFamily(event.target.value)} aria-label="Шрифт"><option value="Inter, system-ui, sans-serif">Sans</option><option value="Georgia, serif">Serif</option><option value="ui-monospace, SFMono-Regular, Menlo, monospace">Mono</option></select></label>
+            <label className="diagram-control">Размер<select value={diagramFontSize} onChange={(event) => setDiagramFontSize(Number(event.target.value))} aria-label="Размер шрифта"><option value={16}>16 px</option><option value={22}>22 px</option><option value={30}>30 px</option><option value={42}>42 px</option></select></label>
+            <button type="button" className={`diagram-tool diagram-bold ${diagramFontWeight === 'bold' ? 'active' : ''}`} onClick={() => setDiagramFontWeight((current) => current === 'bold' ? 'normal' : 'bold')} aria-label="Полужирный текст"><b>B</b></button>
+          </>}
+        </div>
+        {(diagramTool === 'text' || diagramTool === 'callout') && <label className="diagram-text-draft">Текст для вставки<textarea value={diagramTextDraft} onChange={(event) => setDiagramTextDraft(event.target.value)} maxLength={4000} placeholder={diagramTool === 'callout' ? 'Напишите текст, затем протяните выноску от объекта…' : 'Напишите текст, затем кликните по полотну…'} /></label>}
+        <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.4, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .4} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(1.6, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 1.6} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
+        <div className="diagram-viewport"><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} /></div>
+        <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length}>↶ Отменить</button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={!diagramStrokes.length && !diagramElements.length}>Очистить</button><button className="create-button" onClick={saveDiagram} disabled={isDiagramSaving}>{isDiagramSaving ? 'Сохраняем…' : 'Сохранить схему'}</button></div>
+      </section>
+    </div>}
 
     {selected && <div className="modal-backdrop" role="presentation" onMouseDown={() => setSelected(null)}>
       <section className="task-modal" role="dialog" aria-modal="true" aria-label="Детали задачи" onMouseDown={(event) => event.stopPropagation()}>
@@ -1313,6 +1666,7 @@ export default function Home() {
         </div>
       </section>
     </div>}
+    {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onClick={() => { openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button>{!isPublicViewer && <><button type="button" onClick={() => { toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button><button className="danger-action" type="button" onClick={() => { archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button></>}</div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }

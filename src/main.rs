@@ -42,6 +42,9 @@ struct CurrentUser {
     session_id: Uuid,
 }
 
+#[derive(Clone, Copy)]
+struct Viewer(Option<CurrentUser>);
+
 #[derive(Serialize)]
 struct Health {
     status: &'static str,
@@ -128,6 +131,18 @@ impl FromRequestParts<AppState> for CurrentUser {
             Ok(Self { id, session_id })
         } else {
             Err(ApiError::unauthorized())
+        }
+    }
+}
+
+impl FromRequestParts<AppState> for Viewer {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        match CurrentUser::from_request_parts(parts, state).await {
+            Ok(user) => Ok(Self(Some(user))),
+            Err(error) if error.0 == StatusCode::UNAUTHORIZED => Ok(Self(None)),
+            Err(error) => Err(error),
         }
     }
 }
@@ -281,6 +296,11 @@ struct UpdateBoardRequest {
 #[derive(Deserialize)]
 struct UpdateBoardBackgroundRequest {
     background_image_url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BoardBackgroundUploadResponse {
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -721,6 +741,7 @@ async fn main() {
         .route("/v1/boards/{board_id}/members/{user_id}", patch(update_board_member).delete(remove_board_member))
         .route("/v1/boards/{board_id}", get(get_board).patch(update_board).delete(delete_board))
         .route("/v1/boards/{board_id}/background", put(update_board_background))
+        .route("/v1/boards/{board_id}/background/file", get(download_board_background).post(upload_board_background))
         .route("/v1/boards/{board_id}/visibility", put(update_board_visibility))
         .route("/v1/boards/{board_id}/export", get(export_board))
         .route("/v1/boards/{board_id}/archived-cards", get(list_archived_cards))
@@ -1322,12 +1343,6 @@ async fn ensure_card_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, pe
     if allowed { Ok(()) } else { Err(ApiError::forbidden("This action is not permitted in the workspace.")) }
 }
 
-async fn ensure_card_read(pool: &PgPool, card_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
-    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards c JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public'))")
-        .bind(card_id).bind(actor_id).fetch_one(pool).await.map_err(ApiError::internal)?;
-    if allowed { Ok(()) } else { Err(ApiError::forbidden("This card is unavailable.")) }
-}
-
 async fn ensure_list_permission(pool: &PgPool, list_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
     let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lists l JOIN boards b ON b.id = l.board_id JOIN board_members bm ON bm.board_id = b.id WHERE l.id = $1 AND b.archived_at IS NULL AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission))")
         .bind(list_id).bind(actor_id).bind(permission).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
@@ -1552,8 +1567,8 @@ async fn create_board(State(state): State<AppState>, current: CurrentUser, Path(
     Ok(Json(board))
 }
 
-async fn get_board(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<BoardDetail> {
-    let actor_id = current.id;
+async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>) -> ApiResult<BoardDetail> {
+    let actor_id = current.0.map(|user| user.id);
     let pool = database(&state)?;
     let board = sqlx::query_as::<_, BoardAccess>(
         "SELECT b.id, b.workspace_id, b.title, b.background_image_url, b.visibility::text AS visibility FROM boards b LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
@@ -1694,6 +1709,48 @@ async fn update_board_background(State(state): State<AppState>, current: Current
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned())); }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn upload_board_background(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, mut multipart: Multipart) -> ApiResult<BoardBackgroundUploadResponse> {
+    let pool = database(&state)?;
+    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    let field = multipart.next_field().await.map_err(|_| ApiError::bad_request("Background upload form is invalid."))?
+        .ok_or_else(|| ApiError::bad_request("Background image file is required."))?;
+    if field.name() != Some("file") { return Err(ApiError::bad_request("Background image field must be named file.")); }
+    let original_name = field.file_name().unwrap_or("board-background").replace(['/', '\\'], "_");
+    let media_type = field.content_type().map(ToString::to_string).unwrap_or_default();
+    if !matches!(media_type.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
+        return Err(ApiError::bad_request("Board background must be a JPEG, PNG, GIF, or WebP image."));
+    }
+    let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Background image could not be read."))?;
+    if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Board background must be between 1 byte and 50 MiB.")); }
+    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Board background image type is unsupported."))?;
+    let object_key = format!("board-background-{}.{}", Uuid::new_v4(), extension);
+    let path = state.upload_dir.join(&object_key);
+    tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "board background write failed"); ApiError::storage() })?;
+    let previous_key = sqlx::query_scalar::<_, Option<String>>("SELECT object_key FROM board_backgrounds WHERE board_id = $1")
+        .bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?.flatten();
+    let url = format!("/v1/boards/{board_id}/background/file");
+    let result = sqlx::query("INSERT INTO board_backgrounds (board_id, uploaded_by, object_key, original_name, media_type, byte_size) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (board_id) DO UPDATE SET uploaded_by = EXCLUDED.uploaded_by, object_key = EXCLUDED.object_key, original_name = EXCLUDED.original_name, media_type = EXCLUDED.media_type, byte_size = EXCLUDED.byte_size, created_at = now()")
+        .bind(board_id).bind(current.id).bind(&object_key).bind(&original_name).bind(&media_type).bind(bytes.len() as i64).execute(pool).await;
+    if let Err(error) = result { let _ = tokio::fs::remove_file(&path).await; return Err(ApiError::internal(error)); }
+    sqlx::query("UPDATE boards SET background_image_url = $1, updated_at = now() WHERE id = $2")
+        .bind(&url).bind(board_id).execute(pool).await.map_err(ApiError::internal)?;
+    if let Some(previous_key) = previous_key { let _ = tokio::fs::remove_file(state.upload_dir.join(previous_key)).await; }
+    let _ = state.events.send(());
+    Ok(Json(BoardBackgroundUploadResponse { url }))
+}
+
+async fn download_board_background(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>) -> Result<Response, ApiError> {
+    let actor_id = current.0.map(|user| user.id);
+    let background = sqlx::query_as::<_, (String, String)>("SELECT bb.object_key, bb.media_type FROM board_backgrounds bb INNER JOIN boards b ON b.id = bb.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE bb.board_id = $1 AND b.archived_at IS NULL AND (b.visibility = 'public' OR m.user_id IS NOT NULL)")
+        .bind(board_id).bind(actor_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "background_not_found", "Board background was not found.".to_owned()))?;
+    let bytes = tokio::fs::read(state.upload_dir.join(background.0)).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "background_not_found", "Board background file was not found.".to_owned()) }
+        else { tracing::error!(?error, "board background read failed"); ApiError::storage() }
+    })?;
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
 }
 
 async fn update_board_visibility(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardVisibilityRequest>) -> Result<StatusCode, ApiError> {
@@ -1926,6 +1983,10 @@ async fn delete_list(State(state): State<AppState>, current: CurrentUser, Path(l
 }
 
 async fn ensure_card_access(pool: &PgPool, card_id: Uuid, user_id: Uuid) -> Result<(), ApiError> {
+    ensure_card_public_read(pool, card_id, Some(user_id)).await
+}
+
+async fn ensure_card_public_read(pool: &PgPool, card_id: Uuid, user_id: Option<Uuid>) -> Result<(), ApiError> {
     let card = sqlx::query_as::<_, (Uuid,)>(
         "SELECT c.id FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
     )
@@ -1951,7 +2012,7 @@ async fn record_card_activity(pool: &PgPool, card_id: Uuid, actor_id: Uuid, acti
     }
 }
 
-async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Uuid) -> Result<Vec<CommentResponse>, ApiError> {
+async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Option<Uuid>) -> Result<Vec<CommentResponse>, ApiError> {
     let rows = sqlx::query_as::<_, CommentRow>(
         "SELECT c.id, c.body, c.author_id, COALESCE(u.username, 'Deleted user') AS author_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id WHERE c.card_id = $1 ORDER BY c.created_at DESC, c.id DESC",
     )
@@ -1967,7 +2028,7 @@ async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Uuid)
 
     let comment_ids: Vec<Uuid> = comments.iter().map(|comment| comment.id).collect();
     let reactions = sqlx::query_as::<_, CommentReactionRow>(
-        "SELECT comment_id, emoji, COUNT(*)::bigint AS count, BOOL_OR(user_id = $2) AS reacted FROM comment_reactions WHERE comment_id = ANY($1) GROUP BY comment_id, emoji ORDER BY emoji",
+        "SELECT comment_id, emoji, COUNT(*)::bigint AS count, COALESCE(BOOL_OR(user_id = $2), false) AS reacted FROM comment_reactions WHERE comment_id = ANY($1) GROUP BY comment_id, emoji ORDER BY emoji",
     )
     .bind(&comment_ids)
     .bind(current_user_id)
@@ -1982,9 +2043,10 @@ async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Uuid)
     Ok(comments)
 }
 
-async fn get_card_detail(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<CardDetail> {
+async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<CardDetail> {
     let pool = database(&state)?;
-    ensure_card_access(pool, card_id, current.id).await?;
+    let actor_id = current.0.map(|user| user.id);
+    ensure_card_public_read(pool, card_id, actor_id).await?;
     let (cover_attachment_id, cover_mode, background_image_url) = sqlx::query_as::<_, (Option<Uuid>, String, Option<String>)>("SELECT cover_attachment_id, cover_mode, background_image_url FROM cards WHERE id = $1")
         .bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     let checklist_rows = sqlx::query_as::<_, ChecklistRow>(
@@ -2006,7 +2068,7 @@ async fn get_card_detail(State(state): State<AppState>, current: CurrentUser, Pa
         title: checklist.title,
         items: checklist_items.iter().filter(|item| item.checklist_id == checklist.id).map(|item| ChecklistItemResponse { id: item.id, title: item.title.clone(), is_completed: item.is_completed }).collect(),
     }).collect();
-    let comments = load_card_comments(pool, card_id, current.id).await?;
+    let comments = load_card_comments(pool, card_id, actor_id).await?;
     let attachments = sqlx::query_as::<_, AttachmentResponse>(
         "SELECT id, original_name, media_type, byte_size, COALESCE(external_url, '/v1/attachments/' || id::text || '/content') AS url FROM attachments WHERE card_id = $1 ORDER BY created_at DESC",
     )
@@ -2028,16 +2090,46 @@ fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {
     let bytes = serde_json::to_vec(document).map_err(|_| ApiError::bad_request("Diagram document is invalid."))?;
     if bytes.len() > 1024 * 1024 { return Err(ApiError::bad_request("Diagram must be smaller than 1 MiB.")); }
     let strokes = document.get("strokes").and_then(Value::as_array).ok_or_else(|| ApiError::bad_request("Diagram must contain a strokes array."))?;
-    if strokes.len() > 500 { return Err(ApiError::bad_request("Diagram can contain at most 500 strokes.")); }
-    if strokes.iter().any(|stroke| stroke.get("points").and_then(Value::as_array).is_none_or(|points| points.len() > 2_000)) {
+    let elements = match document.get("elements") {
+        Some(value) => Some(value.as_array().ok_or_else(|| ApiError::bad_request("Diagram elements must be an array."))?),
+        None => None,
+    };
+    if strokes.len() + elements.map_or(0, Vec::len) > 500 { return Err(ApiError::bad_request("Diagram can contain at most 500 objects.")); }
+    if strokes.iter().any(|stroke| {
+        stroke.get("points").and_then(Value::as_array).is_none_or(|points| points.len() > 2_000 || points.iter().any(|point| !point.get("x").is_some_and(Value::is_number) || !point.get("y").is_some_and(Value::is_number)))
+    }) {
         return Err(ApiError::bad_request("A diagram stroke is invalid or too large."));
+    }
+    if strokes.iter().any(|stroke| stroke.get("color").is_some_and(|color| !color.is_string()) || stroke.get("width").is_some_and(|width| !width.is_number())) {
+        return Err(ApiError::bad_request("A diagram stroke style is invalid."));
+    }
+    if let Some(elements) = elements {
+        for element in elements {
+            let type_name = element.get("type").and_then(Value::as_str).ok_or_else(|| ApiError::bad_request("A diagram element has no type."))?;
+            let number = |field: &str| element.get(field).is_some_and(Value::is_number);
+            let style = || element.get("color").and_then(Value::as_str).is_some_and(|value| value.len() <= 32);
+            let valid = match type_name {
+                "rectangle" | "ellipse" => number("x") && number("y") && number("width") && number("height") && number("lineWidth") && style(),
+                "arrow" => number("x") && number("y") && number("x2") && number("y2") && number("lineWidth") && style(),
+                "text" => number("x") && number("y") && number("fontSize") && style()
+                    && element.get("text").and_then(Value::as_str).is_some_and(|value| value.len() <= 4_000)
+                    && element.get("fontFamily").and_then(Value::as_str).is_some_and(|value| value.len() <= 120)
+                    && element.get("fontWeight").and_then(Value::as_str).is_some_and(|value| matches!(value, "normal" | "bold")),
+                "callout" => number("x") && number("y") && number("x2") && number("y2") && number("fontSize") && style()
+                    && element.get("text").and_then(Value::as_str).is_some_and(|value| value.len() <= 4_000)
+                    && element.get("fontFamily").and_then(Value::as_str).is_some_and(|value| value.len() <= 120)
+                    && element.get("fontWeight").and_then(Value::as_str).is_some_and(|value| matches!(value, "normal" | "bold")),
+                _ => false,
+            };
+            if !valid { return Err(ApiError::bad_request("A diagram element is invalid.")); }
+        }
     }
     Ok(())
 }
 
-async fn get_card_diagram(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Option<DiagramResponse>> {
+async fn get_card_diagram(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<Option<DiagramResponse>> {
     let pool = database(&state)?;
-    ensure_card_read(pool, card_id, current.id).await?;
+    ensure_card_public_read(pool, card_id, current.0.map(|user| user.id)).await?;
     let diagram = sqlx::query_as::<_, DiagramResponse>("SELECT id, card_id, title, document, version FROM card_diagrams WHERE card_id = $1")
         .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?;
     Ok(Json(diagram))
@@ -2171,7 +2263,7 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     .fetch_one(pool)
     .await
     .map_err(ApiError::internal)?;
-    let comment = load_card_comments(pool, card_id, actor_id).await?.into_iter().find(|item| item.id == comment_id)
+    let comment = load_card_comments(pool, card_id, Some(actor_id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     record_card_activity(pool, card_id, actor_id, if comment.parent_comment_id.is_some() { "Добавлен ответ" } else { "Добавлен комментарий" }, "").await;
     let _ = state.events.send(());
@@ -2190,7 +2282,7 @@ async fn update_comment(State(state): State<AppState>, current: CurrentUser, Pat
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError::forbidden("Only the comment author can edit it."))?;
-    let comment = load_card_comments(database(&state)?, card_id, current.id).await?.into_iter().find(|item| item.id == comment_id)
+    let comment = load_card_comments(database(&state)?, card_id, Some(current.id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     let _ = state.events.send(());
     Ok(Json(comment))
@@ -2210,7 +2302,7 @@ async fn toggle_comment_reaction(State(state): State<AppState>, current: Current
         sqlx::query("INSERT INTO comment_reactions (comment_id, user_id, emoji) VALUES ($1, $2, $3)")
             .bind(comment_id).bind(current.id).bind(emoji).execute(pool).await.map_err(ApiError::internal)?;
     }
-    let comment = load_card_comments(pool, card_id, current.id).await?.into_iter().find(|item| item.id == comment_id)
+    let comment = load_card_comments(pool, card_id, Some(current.id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     let _ = state.events.send(());
     Ok(Json(comment.reactions))
@@ -2289,12 +2381,12 @@ async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, 
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn download_attachment(State(state): State<AppState>, current: CurrentUser, Path(attachment_id): Path<Uuid>) -> Result<Response, ApiError> {
+async fn download_attachment(State(state): State<AppState>, current: Viewer, Path(attachment_id): Path<Uuid>) -> Result<Response, ApiError> {
     let attachment = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
         "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
     )
     .bind(attachment_id)
-    .bind(current.id)
+    .bind(current.0.map(|user| user.id))
     .fetch_optional(database(&state)?)
     .await
     .map_err(ApiError::internal)?

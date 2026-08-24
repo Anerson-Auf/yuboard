@@ -35,4 +35,6 @@ API и веб-интерфейс лучше публиковать за одни
 
 Если `80/443` уже заняты существующим Caddy/Nginx и на сервере используется PM2, используйте отдельную инструкцию: [docs/DEPLOY_PM2_CLOUDFLARE.md](docs/DEPLOY_PM2_CLOUDFLARE.md). Она не перезапускает другие PM2-сервисы и публикует Flowboard только через текущий HTTPS ingress.
 
+Если доступ к Nginx отсутствует, используйте [Cloudflare Tunnel без sudo](docs/DEPLOY_CLOUDFLARE_TUNNEL.md): он публикует отдельный hostname без изменения входящих портов и reverse proxy.
+
 S3/MinIO уже описан в `docker-compose.yml`, но текущий API хранит файлы в `FLOWBOARD_UPLOAD_DIR`; перенос на S3-presigned uploads оставлен отдельным масштабированием files-domain, а не маскируется как готовая функция.

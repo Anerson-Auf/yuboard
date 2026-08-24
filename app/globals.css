@@ -170,3 +170,52 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 /* The plus near labels opens the existing-label picker only. */
 .label-plus { display: inline-grid; width: 27px; height: 25px; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: transparent; color: var(--muted); font-size: 17px; line-height: 1; }
 .label-plus:hover, .label-plus.active { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
+
+/* A completed card always shows its completion marker, so its title keeps the same gutter. */
+.task-card.completed .card-title-row h3 { transform: translateX(27px); }
+
+/* Diagram canvas editor. */
+.diagram-modal { width: min(1080px, calc(100vw - 32px)); padding: 24px 28px; }
+.diagram-hint { margin: 8px 0 14px; }
+.diagram-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 9px; margin: 0 0 12px; padding: 10px; border: 1px solid #3f4448; border-radius: 12px; background: #242528; }
+.diagram-tool-group { display: flex; align-items: center; gap: 4px; padding-right: 8px; border-right: 1px solid #3f4448; }
+.diagram-tool { display: grid; width: 34px; height: 34px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #cecfd2; font-size: 17px; line-height: 1; }
+.diagram-tool:hover { border-color: #5a6066; background: #303134; }
+.diagram-tool.active { border-color: #7198e8; background: #7198e8; color: #101204; }
+.diagram-bold { margin-bottom: 1px; font-size: 16px; }
+.diagram-control { display: grid; gap: 4px; color: #cecfd2; font-size: 10px; font-weight: 750; letter-spacing: .02em; }
+.diagram-control input[type="color"] { width: 44px; height: 29px; padding: 2px; border: 1px solid #5a6066; border-radius: 7px; background: #303134; cursor: pointer; }
+.diagram-control select { min-width: 94px; height: 30px; padding: 0 26px 0 8px; border: 1px solid #5a6066; border-radius: 7px; background: #303134; color: #cecfd2; font: inherit; }
+.diagram-width-picker { display: grid; gap: 4px; color: #cecfd2; font-size: 10px; font-weight: 750; letter-spacing: .02em; }
+.diagram-width-picker > div { display: flex; height: 30px; overflow: hidden; border: 1px solid #5a6066; border-radius: 7px; background: #303134; }
+.diagram-width-picker button { display: grid; width: 30px; place-items: center; padding: 0; border: 0; border-right: 1px solid #4b5056; background: transparent; }
+.diagram-width-picker button:last-child { border-right: 0; }
+.diagram-width-picker button.active { background: #7198e8; }
+.diagram-width-picker i { display: block; max-width: 15px; max-height: 15px; border-radius: 999px; background: #cecfd2; }
+.diagram-width-picker button.active i { background: #101204; }
+.diagram-text-draft { display: grid; gap: 6px; margin: 0 0 12px; color: #cecfd2; font-size: 12px; font-weight: 700; }
+.diagram-text-draft textarea { min-height: 64px; resize: vertical; border: 1px solid #4b5056; border-radius: 9px; background: #303134; color: #cecfd2; }
+.diagram-zoom { display: flex; align-items: center; gap: 5px; margin: 0 0 8px; color: #cecfd2; font-size: 11px; font-weight: 700; }
+.diagram-zoom span { margin-right: 3px; color: var(--muted); }
+.diagram-zoom button, .diagram-zoom output { display: grid; min-width: 30px; height: 27px; place-items: center; padding: 0 7px; border: 1px solid #4b5056; border-radius: 6px; background: #303134; color: #cecfd2; font: inherit; }
+.diagram-zoom button:hover:not(:disabled) { border-color: #7198e8; background: #3a4048; }
+.diagram-zoom button:disabled { cursor: not-allowed; opacity: .42; }
+.diagram-zoom output { min-width: 47px; background: #242528; }
+.diagram-viewport { max-height: min(62vh, 680px); overflow: auto; padding: 10px; border: 1px solid #3f4448; border-radius: 12px; background: #101204; }
+.diagram-canvas { display: block; max-width: none; cursor: crosshair; background: #171923; }
+.diagram-canvas.tool-text { cursor: text; }
+.diagram-canvas.tool-callout { cursor: crosshair; }
+.diagram-canvas.tool-select { cursor: grab; }
+.diagram-canvas.tool-select:active { cursor: grabbing; }
+.board-background-upload { display: flex; justify-content: flex-end; margin: -4px 34px 8px; }
+.board-background-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.public-board-notice { margin: 0 34px 12px; color: #cecfd2; font-size: 12px; font-weight: 700; }
+.public-viewer .share-button, .public-viewer .board-menu-control, .public-viewer .board-tools > .secondary-button, .public-viewer .title-edit, .public-viewer .column-actions, .public-viewer .add-task, .public-viewer .add-column, .public-viewer .card-complete { display: none; }
+.public-viewer .task-card { cursor: pointer; }
+.public-viewer .task-modal .quick-action, .public-viewer .task-modal .member-plus, .public-viewer .task-modal .label-plus, .public-viewer .task-modal .text-action, .public-viewer .task-modal .archive-button, .public-viewer .task-modal .comment-composer, .public-viewer .task-modal .attachment-remove, .public-viewer .task-modal .upload-button { display: none; }
+.public-viewer .task-modal .card-title-input, .public-viewer .task-modal .card-description-input { pointer-events: none; }
+.card-context-menu { position: fixed; z-index: 60; display: grid; min-width: 196px; gap: 3px; padding: 6px; border: 1px solid #4b5056; border-radius: 10px; background: #303134; box-shadow: 0 16px 42px rgb(0 0 0 / 42%); }
+.card-context-menu button { min-height: 33px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: #cecfd2; text-align: left; font-size: 12px; font-weight: 700; }
+.card-context-menu button:hover { background: #3b3d40; }
+.card-context-menu .danger-action { color: #ff9bad; }
+@media (max-width: 620px) { .diagram-modal { padding: 20px 16px; }.diagram-tool-group { width: 100%; padding: 0 0 8px; border-right: 0; border-bottom: 1px solid #3f4448; }.diagram-control { flex: 1; }.diagram-control select, .diagram-control input[type="color"] { width: 100%; }.diagram-viewport { max-height: 56vh; }.diagram-canvas { min-height: 300px; } }
