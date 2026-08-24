@@ -49,6 +49,7 @@ type DiagramSnapshot = { strokes: DiagramStroke[]; elements: DiagramElement[] };
 type DiagramHandle = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'start' | 'end';
 type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean };
 type CardContextMenu = { card: Card; x: number; y: number };
+type ColumnDropTarget = { beforeColumnId: EntityId | null; visualColumnId: EntityId; edge: 'before' | 'after' };
 
 // Empty in local development and production: requests stay on the current origin.
 // Vite forwards /v1 to Rust locally; nginx does the same after deployment.
@@ -407,7 +408,7 @@ export default function Home() {
   const [dragOverListId, setDragOverListId] = useState<EntityId | null>(null);
   const [dragDropTarget, setDragDropTarget] = useState<DragDropTarget | null>(null);
   const [draggingColumnId, setDraggingColumnId] = useState<EntityId | null>(null);
-  const [columnDropTargetId, setColumnDropTargetId] = useState<EntityId | null>(null);
+  const [columnDropTarget, setColumnDropTarget] = useState<ColumnDropTarget | null>(null);
   const [columnMenuId, setColumnMenuId] = useState<EntityId | null>(null);
   const [editingColumnId, setEditingColumnId] = useState<EntityId | null>(null);
   const [columnTitleDraft, setColumnTitleDraft] = useState('');
@@ -415,6 +416,9 @@ export default function Home() {
   const didDragRef = useRef(false);
   const dragScrollFrameRef = useRef<number | null>(null);
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1 } | null>(null);
+  const boardRef = useRef<HTMLElement | null>(null);
+  const boardDragScrollFrameRef = useRef<number | null>(null);
+  const boardDragScrollDirectionRef = useRef<-1 | 1 | null>(null);
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
