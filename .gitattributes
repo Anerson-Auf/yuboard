@@ -1,0 +1,12 @@
+# Keep a single checkout format on Windows and Linux deploy hosts.  This avoids
+# phantom Git modifications caused solely by CRLF/LF conversion after a build.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.webm binary
+*.mov binary
