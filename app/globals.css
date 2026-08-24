@@ -81,7 +81,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .property-popover .label-option b, .property-popover .member-option b { margin-left: auto; color: var(--primary); }
 .property-popover .new-label-form { margin-top: 10px; }
 .card-member-control { position: relative; }
-.assignees-popover { top: calc(100% + 9px); right: 0; width: min(310px, calc(100vw - 64px)); max-height: min(440px, 58vh); overflow-y: auto; }
+.assignees-popover { top: calc(100% + 9px); right: auto; left: 0; width: min(310px, calc(100vw - 64px)); max-height: min(440px, 58vh); overflow-y: auto; }
 .assignees-popover .empty-comments { margin: 10px 0 0; padding-top: 9px; border-top: 1px solid var(--line); }
 .quick-property-popover .date-panel { padding-top: 0; }
 .quick-property-popover .calendar-head { margin-top: 2px; }

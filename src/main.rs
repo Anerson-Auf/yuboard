@@ -1690,7 +1690,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .await
         .map_err(ApiError::internal)?;
     let card_ids: Vec<Uuid> = cards.iter().map(|card| card.id).collect();
-    let card_labels = sqlx::query_as::<_, CardLabelRow>("SELECT cl.card_id, l.id, l.name, l.color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = ANY($1) ORDER BY l.name")
+    let card_labels = sqlx::query_as::<_, CardLabelRow>("SELECT cl.card_id, l.id, l.name, l.color FROM card_labels cl INNER JOIN cards c ON c.id = cl.card_id INNER JOIN labels l ON l.id = cl.label_id AND l.board_id = c.board_id WHERE cl.card_id = ANY($1) ORDER BY l.name")
         .bind(&card_ids)
         .fetch_all(pool)
         .await
@@ -1700,7 +1700,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color FROM labels l INNER JOIN boards b ON b.workspace_id = l.workspace_id WHERE b.id = $1 ORDER BY l.name")
+    let labels = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color FROM labels WHERE board_id = $1 ORDER BY name")
         .bind(board_id)
         .fetch_all(pool)
         .await
@@ -1937,9 +1937,9 @@ async fn import_trello_board(State(state): State<AppState>, current: CurrentUser
     for label in document.get("labels").and_then(Value::as_array).into_iter().flatten() {
         let (Some(source_id), Some(name)) = (import_string(label, "id", 128), import_string(label, "name", 60)) else { continue; };
         let label_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO labels (id, workspace_id, name, color) VALUES ($1, $2, $3, $4) ON CONFLICT (workspace_id, name) DO UPDATE SET color = EXCLUDED.color")
-            .bind(label_id).bind(workspace_id).bind(&name).bind(trello_label_color(label.get("color").and_then(Value::as_str))).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-        let stored_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM labels WHERE workspace_id = $1 AND name = $2").bind(workspace_id).bind(&name).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("INSERT INTO labels (id, workspace_id, board_id, name, color) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (board_id, name) DO UPDATE SET color = EXCLUDED.color")
+            .bind(label_id).bind(workspace_id).bind(board_id).bind(&name).bind(trello_label_color(label.get("color").and_then(Value::as_str))).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        let stored_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM labels WHERE board_id = $1 AND name = $2").bind(board_id).bind(&name).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
         label_ids.insert(source_id, stored_id);
     }
     let mut list_ids = HashMap::new(); let mut imported_lists = 0;
@@ -1995,7 +1995,7 @@ async fn export_board(State(state): State<AppState>, current: CurrentUser, Path(
     ensure_board_permission(database(&state)?, board_id, current.id, "manage_permissions").await?; let pool = database(&state)?;
     let board = sqlx::query_as::<_, BoardAccess>("SELECT id, workspace_id, title, background_image_url, visibility::text AS visibility FROM boards WHERE id = $1 AND archived_at IS NULL").bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
     let lists = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', id::text, 'name', title, 'closed', false, 'pos', position) ORDER BY position), '[]'::jsonb) FROM lists WHERE board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
-    let labels = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', id::text, 'name', name, 'color', color) ORDER BY name), '[]'::jsonb) FROM labels WHERE workspace_id = $1").bind(board.workspace_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
+    let labels = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', id::text, 'name', name, 'color', color) ORDER BY name), '[]'::jsonb) FROM labels WHERE board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     let cards = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', c.id::text, 'name', c.title, 'desc', c.description, 'closed', c.archived_at IS NOT NULL, 'due', c.due_at, 'dateCompleted', c.completed_at, 'idList', c.list_id::text, 'idAttachmentCover', c.cover_attachment_id::text, 'idLabels', COALESCE((SELECT jsonb_agg(label_id::text) FROM card_labels WHERE card_id = c.id), '[]'::jsonb), 'attachments', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', a.id::text, 'name', a.original_name, 'mimeType', a.media_type, 'bytes', a.byte_size, 'url', COALESCE(a.external_url, '/v1/attachments/' || a.id::text || '/content'))) FROM attachments a WHERE a.card_id = c.id), '[]'::jsonb)) ORDER BY c.position), '[]'::jsonb) FROM cards c WHERE c.board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     let checklists = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', cl.id::text, 'name', cl.title, 'idCard', cl.card_id::text, 'pos', cl.position, 'checkItems', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', ci.id::text, 'name', ci.title, 'pos', ci.position, 'state', CASE WHEN ci.is_completed THEN 'complete' ELSE 'incomplete' END) ORDER BY ci.position) FROM checklist_items ci WHERE ci.checklist_id = cl.id), '[]'::jsonb)) ORDER BY cl.position), '[]'::jsonb) FROM checklists cl INNER JOIN cards c ON c.id = cl.card_id WHERE c.board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     let actions = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(payload ORDER BY created_at DESC), '[]'::jsonb) FROM (SELECT a.created_at, jsonb_build_object('id', a.id::text, 'type', a.action, 'date', a.created_at, 'data', jsonb_build_object('text', a.detail, 'card', jsonb_build_object('id', a.card_id::text)), 'memberCreator', CASE WHEN u.id IS NULL THEN NULL ELSE jsonb_build_object('id', u.id::text, 'username', u.username) END) AS payload FROM card_activity a INNER JOIN cards c ON c.id = a.card_id LEFT JOIN users u ON u.id = a.actor_id WHERE c.board_id = $1 AND a.action <> 'Добавлен комментарий' UNION ALL SELECT cm.created_at, jsonb_build_object('id', cm.id::text, 'type', 'commentCard', 'date', cm.created_at, 'data', jsonb_build_object('text', cm.body, 'card', jsonb_build_object('id', cm.card_id::text)), 'memberCreator', CASE WHEN u.id IS NULL THEN NULL ELSE jsonb_build_object('id', u.id::text, 'username', u.username) END) AS payload FROM comments cm INNER JOIN cards c ON c.id = cm.card_id LEFT JOIN users u ON u.id = cm.author_id WHERE c.board_id = $1) exported_actions").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
@@ -2020,17 +2020,15 @@ async fn create_list(State(state): State<AppState>, current: CurrentUser, Path(b
 
 async fn create_label(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateLabelRequest>) -> ApiResult<LabelResponse> {
     ensure_board_permission(database(&state)?, board_id, current.id, "create_labels").await?;
-    let actor_id = current.id;
     let name = valid_text(&request.name, "name", 60)?;
     let color = valid_label_color(&request.color)?;
     let label = sqlx::query_as::<_, LabelResponse>(
-        "INSERT INTO labels (id, workspace_id, name, color) SELECT $1, b.workspace_id, $2, $3 FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE b.id = $4 AND m.user_id = $5 ON CONFLICT (workspace_id, name) DO UPDATE SET color = EXCLUDED.color RETURNING id, name, color",
+        "INSERT INTO labels (id, workspace_id, board_id, name, color) SELECT $1, b.workspace_id, b.id, $2, $3 FROM boards b WHERE b.id = $4 AND b.archived_at IS NULL ON CONFLICT (board_id, name) DO UPDATE SET color = EXCLUDED.color RETURNING id, name, color",
     )
     .bind(Uuid::new_v4())
     .bind(name)
     .bind(color)
     .bind(board_id)
-    .bind(actor_id)
     .fetch_optional(database(&state)?)
     .await
     .map_err(ApiError::internal)?
@@ -2760,28 +2758,26 @@ async fn update_card_completion(State(state): State<AppState>, current: CurrentU
 
 async fn replace_card_labels(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<ReplaceCardLabelsRequest>) -> ApiResult<Vec<LabelResponse> > {
     ensure_card_permission(database(&state)?, card_id, current.id, "edit_cards").await?;
-    let actor_id = current.id;
     if request.label_ids.len() > 20 { return Err(ApiError::bad_request("A card can have at most 20 labels.")); }
     let label_ids: Vec<Uuid> = request.label_ids.into_iter().collect::<HashSet<_>>().into_iter().collect();
     let pool = database(&state)?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
-    let workspace_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT b.workspace_id FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $1 AND c.archived_at IS NULL AND m.user_id = $2 FOR UPDATE",
+    let board_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT b.id FROM cards c INNER JOIN boards b ON b.id = c.board_id WHERE c.id = $1 AND c.archived_at IS NULL FOR UPDATE",
     )
     .bind(card_id)
-    .bind(actor_id)
     .fetch_optional(&mut *transaction)
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
-    let matching_labels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM labels WHERE workspace_id = $1 AND id = ANY($2)")
-        .bind(workspace_id)
+    let matching_labels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM labels WHERE board_id = $1 AND id = ANY($2)")
+        .bind(board_id)
         .bind(&label_ids)
         .fetch_one(&mut *transaction)
         .await
         .map_err(ApiError::internal)?;
     if matching_labels != label_ids.len() as i64 {
-        return Err(ApiError::bad_request("Every label must belong to the card workspace."));
+        return Err(ApiError::bad_request("Every label must belong to this board."));
     }
     sqlx::query("DELETE FROM card_labels WHERE card_id = $1")
         .bind(card_id)
