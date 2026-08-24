@@ -51,6 +51,16 @@ POST /v1/integrations/discord/cards/{card-id}/move
 
 `list_id` and the optional `before_card_id` must belong to the token's board. Omit `before_card_id` to append the card to the end of the target list. Moving a card keeps its Discord integration and conversation intact.
 
+## Close a suggestion (archive a card)
+
+```http
+DELETE /v1/integrations/discord/cards/{card-id}
+```
+
+This archives the active card instead of physically deleting it, so the conversation, screenshots and reason remain available in Flowboard's archive. The request is idempotent: closing an already archived card returns `204 No Content`. A card from another board returns `404`.
+
+For `/close Причина` automation: first read comments, let the bot validate that the command author is one of your developers, post the reason into Discord, then call this endpoint with the matching Flowboard card ID.
+
 ## Create (or safely repeat) a suggestion card
 
 `source_id` is the original Discord message ID. Sending the same ID again returns the same card instead of making a duplicate.

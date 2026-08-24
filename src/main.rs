@@ -8,7 +8,7 @@ use axum::{
     extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, State},
     http::{header, request::Parts, HeaderName, HeaderValue, Method, StatusCode},
     response::{sse::{Event, Sse}, IntoResponse, Response},
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -867,6 +867,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/comments", post(create_comment))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
         .route("/v1/integrations/discord/cards", get(list_discord_board_cards).post(create_discord_card))
+        .route("/v1/integrations/discord/cards/{card_id}", delete(archive_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/move", post(move_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/cover", post(set_discord_card_cover))
         .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
@@ -2547,6 +2548,21 @@ async fn set_discord_card_cover(State(state): State<AppState>, integration: Disc
     record_external_card_activity(pool, card_id, "Discord: установлена обложка", if request.mode == "full" { "фон" } else { "сверху" }).await;
     let _ = state.events.send(());
     Ok(Json(json!({ "attachment_id": attachment_id, "mode": request.mode })))
+}
+
+async fn archive_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    let archived = sqlx::query_scalar::<_, Uuid>("UPDATE cards SET archived_at = now(), updated_at = now() WHERE id = $1 AND board_id = $2 AND archived_at IS NULL RETURNING id")
+        .bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?;
+    if archived.is_some() {
+        record_external_card_activity(pool, card_id, "Discord: предложка архивирована", "").await;
+        let _ = state.events.send(());
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards WHERE id = $1 AND board_id = $2)")
+        .bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if exists { Ok(StatusCode::NO_CONTENT) }
+    else { Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())) }
 }
 
 async fn create_discord_comment(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<CreateDiscordCommentRequest>) -> ApiResult<CommentResponse> {
