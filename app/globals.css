@@ -91,9 +91,19 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 
 /* Board depth and card affordances. */
 .column { background: #161a1d; border-color: #31363a; box-shadow: 0 12px 28px rgb(9 13 17 / 28%); }
-.column.column-drop-target { border-color: var(--primary); box-shadow: inset 4px 0 0 var(--primary), 0 12px 28px rgb(9 13 17 / 28%); }
-.column-drag-handle { cursor: grab; user-select: none; }
+.column-drag-handle { position: relative; cursor: grab; user-select: none; transition: transform .16s ease, opacity .16s ease; }
+.column-drag-handle { justify-content: flex-start; }
+.column-drag-handle > div:first-of-type { flex: 1 1 auto; min-width: 0; }
+.column-drag-handle .column-actions { margin-left: auto; }
 .column-drag-handle:active { cursor: grabbing; }
+.column-drag-icon { display: grid; place-items: center; width: 19px; height: 27px; flex: 0 0 19px; margin: -4px 5px -4px -7px; border-radius: 6px; color: #8b929a; font-size: 16px; letter-spacing: -4px; transition: color .16s ease, background .16s ease; }
+.column-drag-handle:hover .column-drag-icon { color: #d7dbe0; background: #2c3136; }
+.column.column-dragging { opacity: .32; transform: scale(.982); filter: saturate(.55); }
+.column.column-drop-before, .column.column-drop-after { position: relative; }
+.column.column-drop-before::before, .column.column-drop-after::after { position: absolute; z-index: 6; top: 14px; bottom: 14px; width: 4px; border-radius: 999px; content: ''; background: var(--primary); box-shadow: 0 0 16px color-mix(in srgb, var(--primary) 82%, transparent); animation: column-drop-pulse .8s ease-in-out infinite alternate; }
+.column.column-drop-before::before { left: -11px; }
+.column.column-drop-after::after { right: -11px; }
+@keyframes column-drop-pulse { from { opacity: .55; transform: scaleY(.9); } to { opacity: 1; transform: scaleY(1); } }
 .comment-text { border-color: #3f4448; background: #1d2125; }
 .card-avatars .avatar { width: 27px; height: 27px; font-size: 8px; }
 .card-members-row .avatar { width: 33px; height: 33px; flex-basis: 33px; font-size: 9px; }

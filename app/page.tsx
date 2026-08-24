@@ -674,6 +674,38 @@ export default function Home() {
     dragScrollTargetRef.current = { element: list, direction };
     startCardListAutoScroll();
   }
+  function stopBoardAutoScroll() {
+    boardDragScrollDirectionRef.current = null;
+    if (boardDragScrollFrameRef.current !== null) { window.cancelAnimationFrame(boardDragScrollFrameRef.current); boardDragScrollFrameRef.current = null; }
+  }
+  function startBoardAutoScroll() {
+    if (boardDragScrollFrameRef.current !== null) return;
+    const scroll = () => {
+      const board = boardRef.current;
+      const direction = boardDragScrollDirectionRef.current;
+      if (!board || !direction) { boardDragScrollFrameRef.current = null; return; }
+      const previous = board.scrollLeft;
+      board.scrollLeft += direction * 18;
+      if (board.scrollLeft === previous) { boardDragScrollFrameRef.current = null; return; }
+      boardDragScrollFrameRef.current = window.requestAnimationFrame(scroll);
+    };
+    boardDragScrollFrameRef.current = window.requestAnimationFrame(scroll);
+  }
+  function updateBoardAutoScroll(event: ReactDragEvent<HTMLElement>) {
+    const board = boardRef.current;
+    if (!board) return;
+    const bounds = board.getBoundingClientRect();
+    const edge = Math.min(100, Math.max(52, bounds.width * .12));
+    const direction: -1 | 1 | null = event.clientX < bounds.left + edge ? -1 : event.clientX > bounds.right - edge ? 1 : null;
+    if (!direction) { stopBoardAutoScroll(); return; }
+    boardDragScrollDirectionRef.current = direction;
+    startBoardAutoScroll();
+  }
+  function clearColumnDragState() {
+    stopBoardAutoScroll();
+    setDraggingColumnId(null);
+    setColumnDropTarget(null);
+  }
   function clearDragState() {
     stopCardListAutoScroll();
     setDragging(null);
@@ -683,6 +715,7 @@ export default function Home() {
   useEffect(() => () => {
     dragScrollTargetRef.current = null;
     if (dragScrollFrameRef.current !== null) window.cancelAnimationFrame(dragScrollFrameRef.current);
+    stopBoardAutoScroll();
   }, []);
   function addCard(event: FormEvent, columnId: EntityId) {
     event.preventDefault();
@@ -732,7 +765,7 @@ export default function Home() {
       next.splice(insertionIndex, 0, moving);
       return next;
     });
-    setDraggingColumnId(null); setColumnDropTargetId(null);
+    clearColumnDragState();
     if (persistence === 'connected' && typeof columnId === 'string') {
       void fetch(`${API_URL}/v1/lists/${columnId}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ before_list_id: typeof beforeColumnId === 'string' ? beforeColumnId : null }) })
         .then((response) => { if (!response.ok) throw new Error('list move failed'); })
@@ -1647,9 +1680,9 @@ export default function Home() {
         </div>}
       </div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
-      <section className="board" aria-label="Канбан-доска">
-        {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <>{visibleColumns.map((column) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${columnDropTargetId === column.id ? 'column-drop-target' : ''}`} key={column.id} aria-label={column.title} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId) { if (draggingColumnId !== column.id) setColumnDropTargetId(column.id); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { if (draggingColumnId) setColumnDropTargetId(null); else { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId) { moveColumn(draggingColumnId, column.id); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>
-          <div className="column-head column-drag-handle" draggable onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData('application/x-flowboard-column', String(column.id)); event.dataTransfer.effectAllowed = 'move'; setDraggingColumnId(column.id); setColumnDropTargetId(null); }} onDragEnd={() => { setDraggingColumnId(null); setColumnDropTargetId(null); }}><div>{editingColumnId === column.id ? <form className="column-rename" onSubmit={(event) => { event.preventDefault(); saveColumnTitle(column.id); }}><input autoFocus maxLength={200} value={columnTitleDraft} onChange={(event) => setColumnTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setEditingColumnId(null); }} aria-label="Название колонки" /><button type="submit" disabled={isSavingColumn}>✓</button></form> : <><h2>{column.title}</h2><span>{column.cards.length}</span></>}</div><div className="column-actions"><button className="column-menu" aria-label={`Меню колонки ${column.title}`} onClick={() => setColumnMenuId((current) => current === column.id ? null : column.id)}>•••</button>{columnMenuId === column.id && <div className="column-popover"><button onClick={() => beginColumnRename(column)}>Переименовать</button><button className="danger-action" onClick={() => deleteColumn(column)}>Удалить пустую</button></div>}</div></div>
+      <section className="board" ref={boardRef} aria-label="Канбан-доска">
+        {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <>{visibleColumns.map((column) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${draggingColumnId === column.id ? 'column-dragging' : ''} ${columnDropTarget?.visualColumnId === column.id ? `column-drop-${columnDropTarget.edge}` : ''}`} key={column.id} aria-label={column.title} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId) { const bounds = event.currentTarget.getBoundingClientRect(); const after = event.clientX > bounds.left + bounds.width / 2; const index = columns.findIndex((item) => item.id === column.id); const next = after ? columns[index + 1] : undefined; setColumnDropTarget({ beforeColumnId: after ? next?.id ?? null : column.id, visualColumnId: column.id, edge: after ? 'after' : 'before' }); updateBoardAutoScroll(event); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { if (draggingColumnId) { setColumnDropTarget(null); stopBoardAutoScroll(); } else { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId) { const target = columnDropTarget?.visualColumnId === column.id ? columnDropTarget.beforeColumnId ?? undefined : column.id; moveColumn(draggingColumnId, target); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>
+          <div className="column-head column-drag-handle" draggable={!isPublicViewer} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData('application/x-flowboard-column', String(column.id)); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setDragImage(event.currentTarget, 30, 22); setDraggingColumnId(column.id); setColumnDropTarget(null); }} onDragEnd={clearColumnDragState}><span className="column-drag-icon" aria-hidden="true">⠿</span><div>{editingColumnId === column.id ? <form className="column-rename" onSubmit={(event) => { event.preventDefault(); saveColumnTitle(column.id); }}><input autoFocus maxLength={200} value={columnTitleDraft} onChange={(event) => setColumnTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setEditingColumnId(null); }} aria-label="Название колонки" /><button type="submit" disabled={isSavingColumn}>✓</button></form> : <><h2>{column.title}</h2><span>{column.cards.length}</span></>}</div><div className="column-actions"><button className="column-menu" aria-label={`Меню колонки ${column.title}`} onClick={() => setColumnMenuId((current) => current === column.id ? null : column.id)}>•••</button>{columnMenuId === column.id && <div className="column-popover"><button onClick={() => beginColumnRename(column)}>Переименовать</button><button className="danger-action" onClick={() => deleteColumn(column)}>Удалить пустую</button></div>}</div></div>
           <div className={`card-list ${dragDropTarget?.listId === column.id && dragDropTarget.beforeCardId === null ? 'drop-at-end' : ''}`}>{column.cards.map((card) => <article className={`task-card ${card.completedAt ? 'completed' : ''} ${labelsCollapsed ? 'labels-collapsed' : ''} ${dragging?.cardId === card.id ? 'dragging' : ''} ${dragDropTarget?.listId === column.id && dragDropTarget.beforeCardId === card.id ? 'drop-before' : ''}`} key={card.id} draggable onDragStart={(event) => { didDragRef.current = false; event.dataTransfer.setData('application/x-flowboard-card', String(card.id)); event.dataTransfer.effectAllowed = 'move'; setDragging({ cardId: card.id, sourceListId: column.id }); setDragDropTarget(null); }} onDragEnd={() => { didDragRef.current = true; clearDragState(); window.setTimeout(() => { didDragRef.current = false; }, 0); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId || !dragging || dragging.cardId === card.id) return; const bounds = event.currentTarget.getBoundingClientRect(); const cardIndex = column.cards.findIndex((item) => item.id === card.id); const nextCard = event.clientY > bounds.top + bounds.height / 2 ? column.cards[cardIndex + 1] : card; setDragOverListId(column.id); setDragDropTarget({ listId: column.id, beforeCardId: nextCard?.id ?? null }); updateCardListAutoScroll(event); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); if (draggingColumnId) { moveColumn(draggingColumnId, column.id); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : card.id; if (!dragging || dragging.cardId === card.id || beforeCardId === dragging.cardId) { clearDragState(); return; } moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }} onClick={() => { if (!didDragRef.current) openCard(card); }}>
             {card.coverUrl && <div className={`card-cover ${card.coverMode ?? 'full'}`}><img src={`${API_URL}${card.coverUrl}`} alt="" /></div>}<div className="card-main">{card.labels.length > 0 && <div className="card-top"><div className="card-labels">{card.labels.map((label) => <button className="label custom-label" key={label.id} style={{ color: '#F7F8FC', backgroundColor: `${label.color}66` }} onClick={(event) => { event.stopPropagation(); setLabelsCollapsed((current) => !current); }}>{label.name}</button>)}</div></div>}<div className="card-title-row"><button className="card-complete" aria-label={card.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(card.completedAt)} onClick={(event) => toggleCardCompletion(card, event)}>{card.completedAt && '✓'}</button><h3>{card.title}</h3></div>{card.dueAt && <p className={`due ${new Date(card.dueAt).getTime() < Date.now() ? 'today' : ''}`}>◷ {formatDue(card.dueAt)}</p>}</div>
             {(card.checklist || card.comments || card.attachments || card.members.length > 0) && <footer className="card-footer"><div className="card-meta">{card.checklist && <span className={isChecklistComplete(card.checklist) ? 'checklist-complete' : ''}><i className="card-meta-icon">☑</i>{card.checklist}</span>}{card.comments && <span><i className="card-meta-icon">💬</i>{card.comments}</span>}{card.attachments && <span><i className="card-meta-icon">📎</i>{card.attachments}</span>}</div><div className="card-avatars">{card.members.map((member) => <Avatar key={member.id} member={member} />)}</div></footer>}
