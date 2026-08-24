@@ -34,6 +34,7 @@ type AdminAccount = { id: string; username: string; avatar_url?: string | null; 
 type AccountInvite = { id: string; expires_at: string; token?: string | null };
 type AdminWorkspace = { id: string; name: string; owner_username: string; member_count: number; archived_at: string | null };
 type AuthSession = { id: string; created_at: string; last_seen_at: string; expires_at: string; current: boolean };
+type DiscordIntegration = { id: string; name: string; target_list_id: string; created_at: string; last_used_at: string | null; token?: string };
 type DiagramPoint = { x: number; y: number };
 type DiagramStroke = { points: DiagramPoint[]; color?: string; width?: number };
 type DiagramRectangle = { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number };
@@ -178,7 +179,10 @@ function memberFromApi(member: ApiMember): Member {
 
 function Avatar({ member }: { member: Member }) {
   if (member.name === 'Deleted user') return <span className="avatar deleted-user" title="Deleted user">—</span>;
-  if (member.avatarUrl) return <img className="avatar profile-image" src={`${API_URL}${member.avatarUrl}`} alt={`Аватар @${member.name}`} title={`@${member.name}`} />;
+  if (member.avatarUrl) {
+    const src = /^https?:\/\//i.test(member.avatarUrl) ? member.avatarUrl : `${API_URL}${member.avatarUrl}`;
+    return <img className="avatar profile-image" src={src} alt={`Аватар @${member.name}`} title={`@${member.name}`} />;
+  }
   return <span className={`avatar ${member.color}`} title={member.name}>{member.initials}</span>;
 }
 
@@ -350,6 +354,13 @@ export default function Home() {
   const [backgroundDraft, setBackgroundDraft] = useState('');
   const [isUploadingBoardBackground, setUploadingBoardBackground] = useState(false);
   const [isBoardMenuOpen, setBoardMenuOpen] = useState(false);
+  const [isDiscordIntegrationOpen, setDiscordIntegrationOpen] = useState(false);
+  const [discordIntegrations, setDiscordIntegrations] = useState<DiscordIntegration[]>([]);
+  const [discordIntegrationName, setDiscordIntegrationName] = useState('Предложки Discord');
+  const [discordTargetListId, setDiscordTargetListId] = useState('');
+  const [createdDiscordToken, setCreatedDiscordToken] = useState('');
+  const [isDiscordIntegrationLoading, setDiscordIntegrationLoading] = useState(false);
+  const [isCreatingDiscordIntegration, setCreatingDiscordIntegration] = useState(false);
   const [cardContextMenu, setCardContextMenu] = useState<CardContextMenu | null>(null);
   const [isSavingBackground, setSavingBackground] = useState(false);
   const [boardId, setBoardId] = useState<string | null>(null);
@@ -781,10 +792,16 @@ export default function Home() {
       .finally(() => setArchiveLoading(false));
   }
   function restoreArchivedCard(card: ArchivedCard) {
-    setArchivedCards((current) => current.filter((item) => item.id !== card.id));
     if (persistence !== 'connected') return;
     void fetch(`${API_URL}/v1/cards/${card.id}/restore`, { method: 'POST' })
-      .then((response) => { if (!response.ok) throw new Error('restore failed'); showToast('Задача восстановлена'); })
+      .then(async (response) => { if (!response.ok) throw new Error('restore failed'); return response.json() as Promise<{ id: string; list_id: string; title: string; description: string }>; })
+      .then((restored) => {
+        setArchivedCards((current) => current.filter((item) => item.id !== card.id));
+        setColumns((current) => current.map((column) => column.id === restored.list_id
+          ? { ...column, cards: [...column.cards, { id: restored.id, title: restored.title, description: restored.description, labels: [], members: [] }] }
+          : column));
+        showToast('Задача восстановлена');
+      })
       .catch(() => showToast('Не удалось восстановить задачу'));
   }
   function openTeam() {
@@ -1321,8 +1338,8 @@ export default function Home() {
       .then((response) => { if (!response.ok) throw new Error('background clear failed'); showToast('Фон карточки снят'); })
       .catch(() => showToast('Не удалось снять фон карточки'));
   }
-  function toggleCardCompletion(card: Card, event: ReactMouseEvent<HTMLButtonElement>) {
-    event.stopPropagation();
+  function toggleCardCompletion(card: Card, event?: ReactMouseEvent<HTMLButtonElement>) {
+    event?.stopPropagation();
     const completedAt = card.completedAt ? undefined : new Date().toISOString();
     updateSelectedCard(card.id === selected?.id ? { completedAt } : {});
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((item) => item.id === card.id ? { ...item, completedAt } : item) })));
@@ -1454,6 +1471,34 @@ export default function Home() {
       .catch(() => showToast('Не удалось загрузить фон проекта'))
       .finally(() => setUploadingBoardBackground(false));
   }
+  function openDiscordIntegration() {
+    if (!boardId) return;
+    setDiscordIntegrationOpen(true);
+    setCreatedDiscordToken('');
+    setDiscordTargetListId((current) => current || String(columns[0]?.id ?? ''));
+    setDiscordIntegrationLoading(true);
+    void fetch(`${API_URL}/v1/boards/${boardId}/integrations/discord`)
+      .then(async (response) => { if (!response.ok) throw new Error('discord integration load failed'); return response.json() as Promise<DiscordIntegration[]>; })
+      .then(setDiscordIntegrations)
+      .catch(() => { setDiscordIntegrationOpen(false); showToast('Управлять Discord API может только владелец проекта'); })
+      .finally(() => setDiscordIntegrationLoading(false));
+  }
+  function createDiscordIntegration(event: FormEvent) {
+    event.preventDefault();
+    if (!boardId || !discordTargetListId || !discordIntegrationName.trim() || isCreatingDiscordIntegration) return;
+    setCreatingDiscordIntegration(true);
+    void fetch(`${API_URL}/v1/boards/${boardId}/integrations/discord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: discordIntegrationName.trim(), target_list_id: discordTargetListId }) })
+      .then(async (response) => { if (!response.ok) throw new Error('discord integration create failed'); return response.json() as Promise<DiscordIntegration>; })
+      .then((integration) => { setDiscordIntegrations((current) => [integration, ...current]); setCreatedDiscordToken(integration.token ?? ''); if (integration.token) void navigator.clipboard?.writeText(integration.token); showToast('Токен создан и скопирован — сохраните его сейчас'); })
+      .catch(() => showToast('Не удалось создать Discord API-токен'))
+      .finally(() => setCreatingDiscordIntegration(false));
+  }
+  function revokeDiscordIntegration(integration: DiscordIntegration) {
+    if (!boardId) return;
+    void fetch(`${API_URL}/v1/boards/${boardId}/integrations/discord/${integration.id}`, { method: 'DELETE' })
+      .then((response) => { if (!response.ok) throw new Error('discord integration revoke failed'); setDiscordIntegrations((current) => current.filter((item) => item.id !== integration.id)); showToast('Discord API-токен отозван'); })
+      .catch(() => showToast('Не удалось отозвать Discord API-токен'));
+  }
   function changeBoardVisibility(visibility: 'public' | 'private') {
     if (!boardId || visibility === boardVisibility) return;
     const previous = boardVisibility; setBoardVisibility(visibility);
@@ -1580,6 +1625,23 @@ export default function Home() {
         <div className="board-tools"><div className="avatars">{workspaceMembers.slice(0, 3).map((person) => <Avatar key={person.name} member={person} />)}{workspaceMembers.length > 3 && <span className="more-members">+{workspaceMembers.length - 3}</span>}</div><div className="filter-control"><button className={`secondary-button ${filterMode !== 'all' ? 'active-filter' : ''}`} onClick={() => setFilterOpen((current) => !current)}>⌘ Фильтры</button>{isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['due', 'С дедлайном'], ['overdue', 'Просроченные']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}</div>}</div><button className="secondary-button" onClick={openArchive}>Архив</button><button className="share-button" onClick={openTeam}>Команда</button><div className="board-menu-control"><button className="secondary-button more" onClick={() => setBoardMenuOpen((current) => !current)} aria-expanded={isBoardMenuOpen}>•••</button>{isBoardMenuOpen && <div className="board-menu"><button onClick={exportCurrentBoard}>⇩ Экспорт JSON</button><button onClick={() => importFileRef.current?.click()}>⇧ Импорт Trello / Flowboard JSON</button><button className="danger-action" onClick={deleteCurrentBoard}>Удалить проект</button><input ref={importFileRef} type="file" accept="application/json,.json" onChange={importBoardFile} /><section className="visibility-control"><b>Доступ к доске</b><p>{boardVisibility === 'public' ? 'Public: любой аккаунт может только смотреть.' : 'Private: видят только участники проекта.'}</p><div><button type="button" className={boardVisibility === 'public' ? 'selected' : ''} onClick={() => changeBoardVisibility('public')}>Public · просмотр всем</button><button type="button" className={boardVisibility === 'private' ? 'selected' : ''} onClick={() => changeBoardVisibility('private')}>Private</button></div>{boardVisibility === 'public' && <button className="copy-public-link" type="button" onClick={copyPublicBoardLink}>Скопировать публичную ссылку</button>}</section><form onSubmit={saveBoardBackground}><label>Фон проекта<input value={backgroundDraft} onChange={(event) => setBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" /></label><div><button type="submit" disabled={isSavingBackground}>{isSavingBackground ? 'Сохраняем…' : 'Сохранить фон'}</button><button type="button" onClick={() => { setBackgroundDraft(''); }}>Снять</button></div></form></div>}</div></div>
       </section>
       {!isPublicViewer && <div className="board-background-upload"><input ref={boardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardBackground} /><button className="secondary-button" type="button" onClick={() => boardBackgroundFileRef.current?.click()} disabled={isUploadingBoardBackground}>{isUploadingBoardBackground ? 'Загружаем фон…' : '▧ Загрузить фон проекта'}</button></div>}
+      {!isPublicViewer && <div className="board-integration-launch">
+        <button className="secondary-button" type="button" onClick={openDiscordIntegration}>⌁ Discord API</button>
+        {isDiscordIntegrationOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDiscordIntegrationOpen(false)}>
+          <section className="archive-modal discord-integration-modal" role="dialog" aria-modal="true" aria-label="Discord API" onMouseDown={(event) => event.stopPropagation()}>
+            <button className="modal-close" type="button" onClick={() => setDiscordIntegrationOpen(false)} aria-label="Закрыть">×</button>
+            <p className="eyebrow">ИНТЕГРАЦИЯ</p><h2>Discord API</h2>
+            <p className="archive-copy">Токен создаёт задачи только в выбранной колонке и комментарии только на этой доске. Его показываем один раз.</p>
+            {createdDiscordToken && <div className="discord-token"><b>Скопируйте токен</b><code>{createdDiscordToken}</code><button type="button" className="secondary-button" onClick={() => { void navigator.clipboard?.writeText(createdDiscordToken); showToast('Токен скопирован'); }}>Скопировать</button></div>}
+            <form className="profile-form discord-integration-form" onSubmit={createDiscordIntegration}>
+              <label>Название<input value={discordIntegrationName} maxLength={120} onChange={(event) => setDiscordIntegrationName(event.target.value)} /></label>
+              <label>Колонка для предложек<select value={discordTargetListId} onChange={(event) => setDiscordTargetListId(event.target.value)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select></label>
+              <button className="create-button" type="submit" disabled={isCreatingDiscordIntegration || !discordTargetListId}>{isCreatingDiscordIntegration ? 'Создаём…' : 'Создать токен'}</button>
+            </form>
+            <section className="discord-integration-list"><h3>Активные токены</h3>{isDiscordIntegrationLoading ? <p className="detail-loading">Загружаем…</p> : discordIntegrations.length ? discordIntegrations.map((integration) => <article key={integration.id}><div><b>{integration.name}</b><small>Колонка: {columns.find((column) => String(column.id) === integration.target_list_id)?.title ?? 'удалена'} · {integration.last_used_at ? `последнее использование ${new Date(integration.last_used_at).toLocaleString('ru-RU')}` : 'ещё не использовался'}</small></div><button className="danger-action" type="button" onClick={() => revokeDiscordIntegration(integration)}>Отозвать</button></article>) : <p className="empty-comments">Активных токенов нет.</p>}</section>
+          </section>
+        </div>}
+      </div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
       <section className="board" aria-label="Канбан-доска">
         {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <>{visibleColumns.map((column) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${columnDropTargetId === column.id ? 'column-drop-target' : ''}`} key={column.id} aria-label={column.title} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId) { if (draggingColumnId !== column.id) setColumnDropTargetId(column.id); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { if (draggingColumnId) setColumnDropTargetId(null); else { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId) { moveColumn(draggingColumnId, column.id); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>

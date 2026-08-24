@@ -45,6 +45,13 @@ struct CurrentUser {
 #[derive(Clone, Copy)]
 struct Viewer(Option<CurrentUser>);
 
+#[derive(Clone, Copy)]
+struct DiscordIntegration {
+    id: Uuid,
+    board_id: Uuid,
+    target_list_id: Uuid,
+}
+
 #[derive(Serialize)]
 struct Health {
     status: &'static str,
@@ -144,6 +151,28 @@ impl FromRequestParts<AppState> for Viewer {
             Err(error) if error.0 == StatusCode::UNAUTHORIZED => Ok(Self(None)),
             Err(error) => Err(error),
         }
+    }
+}
+
+impl FromRequestParts<AppState> for DiscordIntegration {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let value = parts.headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok())
+            .ok_or_else(ApiError::unauthorized)?;
+        let token = value.strip_prefix("Bearer ").filter(|token| (48..=200).contains(&token.len()))
+            .ok_or_else(ApiError::unauthorized)?;
+        let integration = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+            "SELECT id, board_id, target_list_id FROM discord_integrations WHERE token_hash = $1 AND revoked_at IS NULL",
+        )
+        .bind(token_hash(token))
+        .fetch_optional(database(state)?)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(ApiError::unauthorized)?;
+        let _ = sqlx::query("UPDATE discord_integrations SET last_used_at = now() WHERE id = $1")
+            .bind(integration.0).execute(database(state)?).await;
+        Ok(Self { id: integration.0, board_id: integration.1, target_list_id: integration.2 })
     }
 }
 
@@ -391,6 +420,41 @@ struct CreateCommentRequest {
 }
 
 #[derive(Deserialize)]
+struct CreateDiscordIntegrationRequest {
+    name: String,
+    target_list_id: Uuid,
+}
+
+#[derive(Deserialize)]
+struct CreateDiscordCardRequest {
+    source_id: String,
+    title: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct CreateDiscordCommentRequest {
+    message_id: String,
+    author_name: String,
+    #[serde(default)]
+    author_avatar_url: Option<String>,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    attachments: Vec<DiscordAttachmentRequest>,
+}
+
+#[derive(Deserialize)]
+struct DiscordAttachmentRequest {
+    url: String,
+    filename: String,
+    media_type: String,
+    #[serde(default)]
+    byte_size: i64,
+}
+
+#[derive(Deserialize)]
 struct UpdateCommentRequest {
     body: String,
 }
@@ -470,6 +534,17 @@ struct CardResponse {
     list_id: Uuid,
     title: String,
     description: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct DiscordIntegrationResponse {
+    id: Uuid,
+    name: String,
+    target_list_id: Uuid,
+    created_at: String,
+    last_used_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -743,6 +818,8 @@ async fn main() {
         .route("/v1/boards/{board_id}/background", put(update_board_background))
         .route("/v1/boards/{board_id}/background/file", get(download_board_background).post(upload_board_background))
         .route("/v1/boards/{board_id}/visibility", put(update_board_visibility))
+        .route("/v1/boards/{board_id}/integrations/discord", get(list_discord_integrations).post(create_discord_integration))
+        .route("/v1/boards/{board_id}/integrations/discord/{integration_id}", axum::routing::delete(revoke_discord_integration))
         .route("/v1/boards/{board_id}/export", get(export_board))
         .route("/v1/boards/{board_id}/archived-cards", get(list_archived_cards))
         .route("/v1/boards/{board_id}/events", get(board_events))
@@ -767,6 +844,8 @@ async fn main() {
         .route("/v1/checklists/{checklist_id}/items", post(create_checklist_item))
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
         .route("/v1/cards/{card_id}/comments", post(create_comment))
+        .route("/v1/integrations/discord/cards", post(create_discord_card))
+        .route("/v1/integrations/discord/cards/{card_id}/comments", post(create_discord_comment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
@@ -841,6 +920,19 @@ fn valid_password(value: &str) -> Result<&str, ApiError> {
         return Err(ApiError::bad_request("password must contain 10 to 256 characters."));
     }
     Ok(value)
+}
+
+fn valid_discord_asset_url(value: &str) -> Result<&str, ApiError> {
+    let value = value.trim();
+    let host = value.strip_prefix("https://").and_then(|rest| rest.split('/').next()).unwrap_or_default();
+    if value.len() > 2_000 || !matches!(host, "cdn.discordapp.com" | "media.discordapp.net" | "images-ext-1.discordapp.net" | "images-ext-2.discordapp.net") {
+        return Err(ApiError::bad_request("Discord media URLs must use Discord's HTTPS CDN."));
+    }
+    Ok(value)
+}
+
+fn discord_media_markdown(name: &str, media_type: &str, url: &str) -> String {
+    if media_type.starts_with("video/") { format!("![video:{name}]({url})") } else { format!("![{name}]({url})") }
 }
 
 fn token_hash(value: &str) -> Vec<u8> {
@@ -1343,6 +1435,12 @@ async fn ensure_card_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, pe
     if allowed { Ok(()) } else { Err(ApiError::forbidden("This action is not permitted in the workspace.")) }
 }
 
+async fn ensure_archived_card_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
+    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards c JOIN boards b ON b.id = c.board_id JOIN board_members bm ON bm.board_id = b.id WHERE c.id = $1 AND c.archived_at IS NOT NULL AND b.archived_at IS NULL AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission))")
+        .bind(card_id).bind(actor_id).bind(permission).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
+    if allowed { Ok(()) } else { Err(ApiError::forbidden("This action is not permitted in the workspace.")) }
+}
+
 async fn ensure_list_permission(pool: &PgPool, list_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
     let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lists l JOIN boards b ON b.id = l.board_id JOIN board_members bm ON bm.board_id = b.id WHERE l.id = $1 AND b.archived_at IS NULL AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission))")
         .bind(list_id).bind(actor_id).bind(permission).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
@@ -1763,6 +1861,41 @@ async fn update_board_visibility(State(state): State<AppState>, current: Current
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn list_discord_integrations(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<DiscordIntegrationResponse>> {
+    let pool = database(&state)?;
+    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    let integrations = sqlx::query_as::<_, DiscordIntegrationResponse>(
+        "SELECT id, name, target_list_id, created_at::text AS created_at, last_used_at::text AS last_used_at, NULL::text AS token FROM discord_integrations WHERE board_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC",
+    )
+    .bind(board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    Ok(Json(integrations))
+}
+
+async fn create_discord_integration(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateDiscordIntegrationRequest>) -> ApiResult<DiscordIntegrationResponse> {
+    let pool = database(&state)?;
+    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    let name = valid_text(&request.name, "name", 120)?;
+    let belongs_to_board: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)")
+        .bind(request.target_list_id).bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if !belongs_to_board { return Err(ApiError::bad_request("The target list must belong to this board.")); }
+    let token = format!("fb_discord_{}", new_token());
+    let integration = sqlx::query_as::<_, DiscordIntegrationResponse>(
+        "INSERT INTO discord_integrations (id, board_id, target_list_id, created_by, name, token_hash) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, target_list_id, created_at::text AS created_at, last_used_at::text AS last_used_at, NULL::text AS token",
+    )
+    .bind(Uuid::new_v4()).bind(board_id).bind(request.target_list_id).bind(current.id).bind(name).bind(token_hash(&token))
+    .fetch_one(pool).await.map_err(ApiError::internal)?;
+    Ok(Json(DiscordIntegrationResponse { token: Some(token), ..integration }))
+}
+
+async fn revoke_discord_integration(State(state): State<AppState>, current: CurrentUser, Path((board_id, integration_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    let result = sqlx::query("UPDATE discord_integrations SET revoked_at = now() WHERE id = $1 AND board_id = $2 AND revoked_at IS NULL")
+        .bind(integration_id).bind(board_id).execute(pool).await.map_err(ApiError::internal)?;
+    if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "discord_integration_not_found", "Discord integration was not found.".to_owned())); }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn import_string(value: &Value, key: &str, max_len: usize) -> Option<String> {
     value.get(key)?.as_str().map(|text| text.trim().chars().take(max_len).collect::<String>()).filter(|text| !text.is_empty())
 }
@@ -2012,9 +2145,22 @@ async fn record_card_activity(pool: &PgPool, card_id: Uuid, actor_id: Uuid, acti
     }
 }
 
+async fn record_external_card_activity(pool: &PgPool, card_id: Uuid, action: &str, detail: &str) {
+    if let Err(error) = sqlx::query("INSERT INTO card_activity (id, card_id, actor_id, action, detail) VALUES ($1, $2, NULL, $3, $4)")
+        .bind(Uuid::new_v4())
+        .bind(card_id)
+        .bind(action)
+        .bind(detail)
+        .execute(pool)
+        .await
+    {
+        tracing::error!(?error, card_id = %card_id, "external card activity insert failed");
+    }
+}
+
 async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Option<Uuid>) -> Result<Vec<CommentResponse>, ApiError> {
     let rows = sqlx::query_as::<_, CommentRow>(
-        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, 'Deleted user') AS author_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id WHERE c.card_id = $1 ORDER BY c.created_at DESC, c.id DESC",
+        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id WHERE c.card_id = $1 ORDER BY c.created_at DESC, c.id DESC",
     )
     .bind(card_id)
     .fetch_all(pool)
@@ -2266,6 +2412,78 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     let comment = load_card_comments(pool, card_id, Some(actor_id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     record_card_activity(pool, card_id, actor_id, if comment.parent_comment_id.is_some() { "Добавлен ответ" } else { "Добавлен комментарий" }, "").await;
+    let _ = state.events.send(());
+    Ok(Json(comment))
+}
+
+async fn create_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Json(request): Json<CreateDiscordCardRequest>) -> ApiResult<CardResponse> {
+    let pool = database(&state)?;
+    let source_id = valid_text(&request.source_id, "source_id", 128)?.to_owned();
+    if let Some(card) = sqlx::query_as::<_, CardResponse>("SELECT id, list_id, title, description FROM cards WHERE discord_integration_id = $1 AND discord_source_id = $2")
+        .bind(integration.id).bind(&source_id).fetch_optional(pool).await.map_err(ApiError::internal)? {
+        return Ok(Json(card));
+    }
+    let title = valid_text(&request.title, "title", 500)?;
+    let description = request.description.trim();
+    if description.chars().count() > 20_000 { return Err(ApiError::bad_request("description must not exceed 20000 characters.")); }
+    let card = sqlx::query_as::<_, CardResponse>(
+        "INSERT INTO cards (id, board_id, list_id, title, description, position, created_by, discord_integration_id, discord_source_id) SELECT $1, l.board_id, l.id, $2, $3, COALESCE((SELECT MAX(position) FROM cards WHERE list_id = l.id), 0) + 1000, NULL, $4, $5 FROM lists l INNER JOIN boards b ON b.id = l.board_id WHERE l.id = $6 AND l.board_id = $7 AND b.archived_at IS NULL RETURNING id, list_id, title, description",
+    )
+    .bind(Uuid::new_v4()).bind(title).bind(description).bind(integration.id).bind(&source_id).bind(integration.target_list_id).bind(integration.board_id)
+    .fetch_optional(pool).await.map_err(ApiError::internal)?;
+    let card = match card {
+        Some(card) => card,
+        None => sqlx::query_as::<_, CardResponse>("SELECT id, list_id, title, description FROM cards WHERE discord_integration_id = $1 AND discord_source_id = $2")
+            .bind(integration.id).bind(&source_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "discord_target_not_found", "Discord target list is no longer available.".to_owned()))?,
+    };
+    record_external_card_activity(pool, card.id, "Discord: создана задача", &card.title).await;
+    let _ = state.events.send(());
+    Ok(Json(card))
+}
+
+async fn create_discord_comment(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<CreateDiscordCommentRequest>) -> ApiResult<CommentResponse> {
+    let pool = database(&state)?;
+    let message_id = valid_text(&request.message_id, "message_id", 128)?.to_owned();
+    if let Some(comment_id) = sqlx::query_scalar::<_, Uuid>("SELECT id FROM comments WHERE discord_integration_id = $1 AND discord_message_id = $2")
+        .bind(integration.id).bind(&message_id).fetch_optional(pool).await.map_err(ApiError::internal)? {
+        let comment = load_card_comments(pool, card_id, None).await?.into_iter().find(|comment| comment.id == comment_id)
+            .ok_or_else(|| ApiError::bad_request("Discord comment belongs to another card."))?;
+        return Ok(Json(comment));
+    }
+    let card_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL)")
+        .bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
+    let author_name = valid_text(&request.author_name, "author_name", 120)?.to_owned();
+    let author_avatar_url = request.author_avatar_url.as_deref().map(valid_discord_asset_url).transpose()?.map(ToOwned::to_owned);
+    let mut attachment_rows = Vec::new();
+    let mut parts = Vec::new();
+    if !request.body.trim().is_empty() { parts.push(request.body.trim().to_owned()); }
+    for attachment in &request.attachments {
+        let url = valid_discord_asset_url(&attachment.url)?.to_owned();
+        let filename = valid_text(&attachment.filename, "attachment filename", 255)?.to_owned();
+        if !matches!(attachment.media_type.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "video/mp4" | "video/webm" | "video/quicktime") {
+            return Err(ApiError::bad_request("Discord attachments must be JPEG, PNG, GIF, WebP, MP4, WebM, or MOV."));
+        }
+        if !(0..=50 * 1024 * 1024).contains(&attachment.byte_size) { return Err(ApiError::bad_request("Discord attachment size must be between 0 and 50 MiB.")); }
+        parts.push(discord_media_markdown(&filename, &attachment.media_type, &url));
+        attachment_rows.push((url, filename, attachment.media_type.clone(), attachment.byte_size));
+    }
+    let body = valid_text(&parts.join("\n"), "body", 10_000)?.to_owned();
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    let comment_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO comments (id, card_id, author_id, body, external_author_name, external_author_avatar_url, discord_integration_id, discord_message_id) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)")
+        .bind(comment_id).bind(card_id).bind(&body).bind(&author_name).bind(&author_avatar_url).bind(integration.id).bind(&message_id)
+        .execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    for (url, filename, media_type, byte_size) in attachment_rows {
+        sqlx::query("INSERT INTO attachments (id, card_id, uploaded_by, object_key, original_name, media_type, byte_size, external_url) VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6)")
+            .bind(Uuid::new_v4()).bind(card_id).bind(filename).bind(media_type).bind(byte_size).bind(url)
+            .execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    }
+    transaction.commit().await.map_err(ApiError::internal)?;
+    let comment = load_card_comments(pool, card_id, None).await?.into_iter().find(|comment| comment.id == comment_id)
+        .ok_or_else(|| ApiError::bad_request("Discord comment could not be loaded."))?;
+    record_external_card_activity(pool, card_id, "Discord: добавлен комментарий", &author_name).await;
     let _ = state.events.send(());
     Ok(Json(comment))
 }
@@ -2648,7 +2866,7 @@ async fn archive_card(State(state): State<AppState>, current: CurrentUser, Path(
 }
 
 async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<CardResponse> {
-    ensure_card_permission(database(&state)?, card_id, current.id, "delete_cards").await?;
+    ensure_archived_card_permission(database(&state)?, card_id, current.id, "delete_cards").await?;
     let card = sqlx::query_as::<_, CardResponse>(
         "UPDATE cards c SET archived_at = NULL, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $1 AND c.board_id = b.id AND c.archived_at IS NOT NULL AND m.user_id = $2 RETURNING c.id, c.list_id, c.title, c.description",
     )
