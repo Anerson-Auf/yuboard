@@ -416,7 +416,10 @@ struct CreateChecklistRequest {
 
 #[derive(Deserialize)]
 struct UpdateChecklistItemRequest {
-    is_completed: bool,
+    #[serde(default)]
+    is_completed: Option<bool>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -740,6 +743,8 @@ struct ChecklistItemResponse {
     id: Uuid,
     title: String,
     is_completed: bool,
+    description: String,
+    attachments: Vec<AttachmentResponse>,
 }
 
 #[derive(Clone, Serialize)]
@@ -761,6 +766,17 @@ struct ChecklistItemRow {
     id: Uuid,
     title: String,
     is_completed: bool,
+    description: String,
+}
+
+#[derive(FromRow)]
+struct ChecklistItemAttachmentRow {
+    checklist_item_id: Uuid,
+    id: Uuid,
+    original_name: String,
+    media_type: String,
+    byte_size: i64,
+    url: String,
 }
 
 #[derive(FromRow)]
@@ -775,6 +791,7 @@ struct ChecklistItemActivityRow {
     card_id: Uuid,
     title: String,
     is_completed: bool,
+    description: String,
     checklist_title: String,
 }
 
@@ -958,6 +975,7 @@ async fn main() {
         .route("/v1/checklists/{checklist_id}", axum::routing::delete(delete_checklist))
         .route("/v1/checklists/{checklist_id}/items", post(create_checklist_item))
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
+        .route("/v1/checklist-items/{item_id}/attachments", post(upload_checklist_item_attachment))
         .route("/v1/cards/{card_id}/comments", post(create_comment))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
         .route("/v1/discord-media/{token}/cards/{card_id}/avatars/{user_id}", get(download_discord_comment_avatar))
@@ -1846,7 +1864,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id) AS attachment_count FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -2395,7 +2413,14 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
     .await
     .map_err(ApiError::internal)?;
     let checklist_items = sqlx::query_as::<_, ChecklistItemRow>(
-        "SELECT checklist_id, id, title, is_completed FROM checklist_items WHERE card_id = $1 ORDER BY position, id",
+        "SELECT checklist_id, id, title, is_completed, description FROM checklist_items WHERE card_id = $1 ORDER BY position, id",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let checklist_item_attachments = sqlx::query_as::<_, ChecklistItemAttachmentRow>(
+        "SELECT checklist_item_id, id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE card_id = $1 AND checklist_item_id IS NOT NULL ORDER BY created_at DESC",
     )
     .bind(card_id)
     .fetch_all(pool)
@@ -2404,7 +2429,19 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
     let checklists = checklist_rows.into_iter().map(|checklist| ChecklistResponse {
         id: checklist.id,
         title: checklist.title,
-        items: checklist_items.iter().filter(|item| item.checklist_id == checklist.id).map(|item| ChecklistItemResponse { id: item.id, title: item.title.clone(), is_completed: item.is_completed }).collect(),
+        items: checklist_items.iter().filter(|item| item.checklist_id == checklist.id).map(|item| ChecklistItemResponse {
+            id: item.id,
+            title: item.title.clone(),
+            is_completed: item.is_completed,
+            description: item.description.clone(),
+            attachments: checklist_item_attachments.iter().filter(|attachment| attachment.checklist_item_id == item.id).map(|attachment| AttachmentResponse {
+                id: attachment.id,
+                original_name: attachment.original_name.clone(),
+                media_type: attachment.media_type.clone(),
+                byte_size: attachment.byte_size,
+                url: attachment.url.clone(),
+            }).collect(),
+        }).collect(),
     }).collect();
     let public_board_id = if actor_id.is_none() {
         Some(sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM cards WHERE id = $1")
@@ -2427,7 +2464,7 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
         }
     }
     let attachments = sqlx::query_as::<_, AttachmentResponse>(
-        "SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE card_id = $1 ORDER BY created_at DESC",
+        "SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE card_id = $1 AND checklist_item_id IS NULL ORDER BY created_at DESC",
     )
     .bind(card_id)
     .fetch_all(pool)
@@ -2554,10 +2591,13 @@ async fn create_checklist(State(state): State<AppState>, current: CurrentUser, P
 
 async fn delete_checklist(State(state): State<AppState>, current: CurrentUser, Path(checklist_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
+    let attachment_keys = sqlx::query_scalar::<_, Option<String>>("SELECT a.object_key FROM attachments a INNER JOIN checklist_items i ON i.id = a.checklist_item_id WHERE i.checklist_id = $1")
+        .bind(checklist_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let checklist = sqlx::query_as::<_, ChecklistActivityRow>("DELETE FROM checklists cl USING cards c, boards b, board_members bm WHERE cl.id = $1 AND cl.card_id = c.id AND c.board_id = b.id AND bm.board_id = b.id AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING cl.card_id, cl.title")
         .bind(checklist_id).bind(current.id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_not_found", "Checklist was not found.".to_owned()))?;
     record_card_activity(pool, checklist.card_id, current.id, "Удалён чек-лист", &checklist.title).await;
+    for key in attachment_keys.into_iter().flatten() { let _ = tokio::fs::remove_file(state.upload_dir.join(key)).await; }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2567,39 +2607,50 @@ async fn create_checklist_item(State(state): State<AppState>, current: CurrentUs
     let title = valid_text(&request.title, "title", 500)?;
     let pool = database(&state)?;
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
-        "INSERT INTO checklist_items (id, checklist_id, card_id, title, position) SELECT $1, cl.id, cl.card_id, $2, COALESCE((SELECT MAX(position) FROM checklist_items WHERE checklist_id = cl.id), 0) + 1000 FROM checklists cl JOIN cards c ON c.id = cl.card_id JOIN boards b ON b.id = c.board_id JOIN board_members bm ON bm.board_id = b.id WHERE cl.id = $3 AND c.archived_at IS NULL AND bm.user_id = $4 AND flowboard_has_permission(b.workspace_id, $4, 'edit_cards'::workspace_permission) RETURNING id, card_id, title, is_completed, (SELECT title FROM checklists WHERE id = checklist_id) AS checklist_title",
+        "INSERT INTO checklist_items (id, checklist_id, card_id, title, position) SELECT $1, cl.id, cl.card_id, $2, COALESCE((SELECT MAX(position) FROM checklist_items WHERE checklist_id = cl.id), 0) + 1000 FROM checklists cl JOIN cards c ON c.id = cl.card_id JOIN boards b ON b.id = c.board_id JOIN board_members bm ON bm.board_id = b.id WHERE cl.id = $3 AND c.archived_at IS NULL AND bm.user_id = $4 AND flowboard_has_permission(b.workspace_id, $4, 'edit_cards'::workspace_permission) RETURNING id, card_id, title, is_completed, description, (SELECT title FROM checklists WHERE id = checklist_id) AS checklist_title",
     )
     .bind(Uuid::new_v4()).bind(title).bind(checklist_id).bind(actor_id)
     .fetch_optional(pool).await.map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_not_found", "Checklist was not found.".to_owned()))?;
     record_card_activity(pool, item.card_id, actor_id, "Добавлен пункт в чек-лист", &format!("{}: {}", item.checklist_title, item.title)).await;
     let _ = state.events.send(());
-    Ok(Json(ChecklistItemResponse { id: item.id, title: item.title, is_completed: item.is_completed }))
+    Ok(Json(ChecklistItemResponse { id: item.id, title: item.title, is_completed: item.is_completed, description: item.description, attachments: vec![] }))
 }
 
 async fn update_checklist_item(State(state): State<AppState>, current: CurrentUser, Path(item_id): Path<Uuid>, Json(request): Json<UpdateChecklistItemRequest>) -> ApiResult<ChecklistItemResponse> {
     let actor_id = current.id;
     let pool = database(&state)?;
+    let description = request.description.as_deref().map(|value| {
+        if value.chars().count() > 4_000 { Err(ApiError::bad_request("Checklist item description must be at most 4000 characters.")) }
+        else { Ok(value.to_owned()) }
+    }).transpose()?;
+    if request.is_completed.is_none() && description.is_none() { return Err(ApiError::bad_request("Provide a checklist item change.")); }
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
-        "UPDATE checklist_items i SET is_completed = $1, completed_at = CASE WHEN $1 THEN now() ELSE NULL END, completed_by = CASE WHEN $1 THEN $2 ELSE NULL END FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE i.id = $3 AND i.card_id = c.id AND c.archived_at IS NULL AND m.user_id = $2 RETURNING i.id, i.card_id, i.title, i.is_completed, (SELECT title FROM checklists WHERE id = i.checklist_id) AS checklist_title",
+        "UPDATE checklist_items i SET is_completed = COALESCE($1, i.is_completed), completed_at = CASE WHEN COALESCE($1, i.is_completed) THEN COALESCE(i.completed_at, now()) ELSE NULL END, completed_by = CASE WHEN COALESCE($1, i.is_completed) THEN COALESCE(i.completed_by, $2) ELSE NULL END, description = COALESCE($3, i.description) FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE i.id = $4 AND i.card_id = c.id AND c.archived_at IS NULL AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING i.id, i.card_id, i.title, i.is_completed, i.description, (SELECT title FROM checklists WHERE id = i.checklist_id) AS checklist_title",
     )
     .bind(request.is_completed)
     .bind(actor_id)
+    .bind(description)
     .bind(item_id)
     .fetch_optional(pool)
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
-    record_card_activity(pool, item.card_id, actor_id, if item.is_completed { "Отмечен пункт чек-листа" } else { "Снята отметка с пункта" }, &format!("{}: {}", item.checklist_title, item.title)).await;
+    let action = if request.description.is_some() { "Изменено описание пункта чек-листа" } else if item.is_completed { "Отмечен пункт чек-листа" } else { "Снята отметка с пункта" };
+    record_card_activity(pool, item.card_id, actor_id, action, &format!("{}: {}", item.checklist_title, item.title)).await;
     let _ = state.events.send(());
-    Ok(Json(ChecklistItemResponse { id: item.id, title: item.title, is_completed: item.is_completed }))
+    let attachments = sqlx::query_as::<_, AttachmentResponse>("SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE checklist_item_id = $1 ORDER BY created_at DESC")
+        .bind(item.id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    Ok(Json(ChecklistItemResponse { id: item.id, title: item.title, is_completed: item.is_completed, description: item.description, attachments }))
 }
 
 async fn delete_checklist_item(State(state): State<AppState>, current: CurrentUser, Path(item_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let actor_id = current.id;
     let pool = database(&state)?;
+    let attachment_keys = sqlx::query_scalar::<_, Option<String>>("SELECT object_key FROM attachments WHERE checklist_item_id = $1")
+        .bind(item_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
-        "DELETE FROM checklist_items i USING cards c, boards b, board_members m WHERE i.id = $1 AND i.card_id = c.id AND c.board_id = b.id AND m.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $2 RETURNING i.id, i.card_id, i.title, i.is_completed, (SELECT title FROM checklists WHERE id = i.checklist_id) AS checklist_title",
+        "DELETE FROM checklist_items i USING cards c, boards b, board_members m WHERE i.id = $1 AND i.card_id = c.id AND c.board_id = b.id AND m.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING i.id, i.card_id, i.title, i.is_completed, i.description, (SELECT title FROM checklists WHERE id = i.checklist_id) AS checklist_title",
     )
     .bind(item_id)
     .bind(actor_id)
@@ -2608,6 +2659,7 @@ async fn delete_checklist_item(State(state): State<AppState>, current: CurrentUs
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
     record_card_activity(pool, item.card_id, actor_id, "Удалён пункт из чек-листа", &format!("{}: {}", item.checklist_title, item.title)).await;
+    for key in attachment_keys.into_iter().flatten() { let _ = tokio::fs::remove_file(state.upload_dir.join(key)).await; }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
@@ -3104,6 +3156,7 @@ async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, 
             if error.kind() != std::io::ErrorKind::NotFound { tracing::error!(?error, "attachment file removal failed"); }
         }
     }
+    let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -3131,6 +3184,44 @@ async fn download_attachment(State(state): State<AppState>, current: Viewer, Pat
     })?;
     let content_type = HeaderValue::from_str(&attachment.1).map_err(|_| ApiError::storage())?;
     Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
+}
+
+async fn upload_checklist_item_attachment(State(state): State<AppState>, current: CurrentUser, Path(item_id): Path<Uuid>, mut multipart: Multipart) -> ApiResult<AttachmentResponse> {
+    let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT i.card_id FROM checklist_items i INNER JOIN cards c ON c.id = i.card_id INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members bm ON bm.board_id = b.id WHERE i.id = $1 AND c.archived_at IS NULL AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission)",
+    )
+    .bind(item_id).bind(current.id).fetch_optional(pool).await.map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
+    let field = multipart.next_field().await.map_err(|_| ApiError::bad_request("Attachment form is invalid."))?
+        .ok_or_else(|| ApiError::bad_request("Attachment file is required."))?;
+    if field.name() != Some("file") { return Err(ApiError::bad_request("Attachment field must be named file.")); }
+    let original_name = field.file_name().unwrap_or("checklist-attachment").replace(['/', '\\'], "_");
+    if original_name.is_empty() || original_name.chars().count() > 255 { return Err(ApiError::bad_request("Attachment filename must contain 1 to 255 characters.")); }
+    let media_type = field.content_type().map(ToString::to_string).unwrap_or_else(|| "application/octet-stream".to_owned());
+    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Only JPEG, PNG, GIF, WebP, MP4, WebM, and MOV files are supported."))?;
+    let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Attachment upload could not be read."))?;
+    if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Attachment must be between 1 byte and 50 MiB.")); }
+    let attachment_id = Uuid::new_v4();
+    let object_key = format!("{attachment_id}.{extension}");
+    let path = state.upload_dir.join(&object_key);
+    tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "checklist attachment write failed"); ApiError::storage() })?;
+    let attachment = sqlx::query_as::<_, AttachmentResponse>(
+        "INSERT INTO attachments (id, card_id, checklist_item_id, uploaded_by, object_key, original_name, media_type, byte_size) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url",
+    )
+    .bind(attachment_id).bind(card_id).bind(item_id).bind(current.id).bind(&object_key).bind(&original_name).bind(&media_type).bind(bytes.len() as i64)
+    .fetch_one(pool).await;
+    match attachment {
+        Ok(attachment) => {
+            record_card_activity(pool, card_id, current.id, "Добавлено вложение к пункту чек-листа", &original_name).await;
+            let _ = state.events.send(());
+            Ok(Json(attachment))
+        }
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&path).await;
+            Err(ApiError::internal(error))
+        }
+    }
 }
 
 // Discord CDN URLs may expire or be blocked for one viewer. Keep them behind

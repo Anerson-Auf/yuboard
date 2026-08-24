@@ -15,7 +15,7 @@ type ApiMember = { id: string; username: string; avatar_url?: string | null };
 type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; visibility: 'public' | 'private' | 'workspace'; labels: Label[]; members: ApiMember[]; lists: { id: string; title: string; cards: { id: string; title: string; description: string; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; labels: Label[]; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
-type ChecklistItem = { id: EntityId; title: string; is_completed: boolean };
+type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
 type Checklist = { id: string; title: string; items: ChecklistItem[] };
 type Comment = { id: EntityId; body: string; author_id?: string | null; author_name: string; author_avatar_url?: string | null; parent_comment_id?: string | null; created_at?: string; edited_at?: string | null };
 type Attachment = { id: string; original_name: string; media_type: string; byte_size: number; url: string };
@@ -300,6 +300,9 @@ export default function Home() {
   const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [checklistNameDraft, setChecklistNameDraft] = useState('');
   const [checklistItemDrafts, setChecklistItemDrafts] = useState<Record<string, string>>({});
+  const [expandedChecklistItemId, setExpandedChecklistItemId] = useState<EntityId | null>(null);
+  const [checklistItemDescriptionDrafts, setChecklistItemDescriptionDrafts] = useState<Record<string, string>>({});
+  const [isUploadingChecklistItemAttachment, setUploadingChecklistItemAttachment] = useState(false);
   const [comments, setComments] = useState<Comment[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
@@ -822,6 +825,8 @@ export default function Home() {
     setChecklists([]);
     setChecklistNameDraft('');
     setChecklistItemDrafts({});
+    setExpandedChecklistItemId(null);
+    setChecklistItemDescriptionDrafts({});
     setComments([]);
     setReplyToCommentId(null);
     setEditingCommentId(null);
@@ -1231,7 +1236,7 @@ export default function Home() {
     const title = (checklistItemDrafts[checklistId] ?? '').trim();
     if (!title || isSavingChecklist) return;
     if (persistence !== 'connected' || checklistId.startsWith('local-')) {
-      applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: [...checklist.items, { id: `local-check-${Date.now()}`, title, is_completed: false }] } : checklist));
+      applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: [...checklist.items, { id: `local-check-${Date.now()}`, title, is_completed: false, description: '', attachments: [] }] } : checklist));
       setChecklistItemDrafts((current) => ({ ...current, [checklistId]: '' }));
       return;
     }
@@ -1393,6 +1398,44 @@ export default function Home() {
     void fetch(`${API_URL}/v1/cards/${selected.id}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url: null }) })
       .then((response) => { if (!response.ok) throw new Error('background clear failed'); showToast('Фон карточки снят'); })
       .catch(() => showToast('Не удалось снять фон карточки'));
+  }
+  function updateChecklistItem(checklistId: string, itemId: EntityId, patch: Partial<ChecklistItem>) {
+    applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: checklist.items.map((item) => item.id === itemId ? { ...item, ...patch } : item) } : checklist));
+  }
+  function saveChecklistItemDescription(checklistId: string, item: ChecklistItem) {
+    const description = checklistItemDescriptionDrafts[String(item.id)] ?? item.description;
+    if (description === item.description) return;
+    updateChecklistItem(checklistId, item.id, { description });
+    if (persistence !== 'connected' || typeof item.id !== 'string') return;
+    void fetch(`${API_URL}/v1/checklist-items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description }) })
+      .then(async (response) => { if (!response.ok) throw new Error('description save failed'); return response.json() as Promise<ChecklistItem>; })
+      .then((saved) => updateChecklistItem(checklistId, item.id, saved))
+      .catch(() => showToast('Описание пункта не сохранено'));
+  }
+  async function uploadChecklistItemAttachments(checklistId: string, item: ChecklistItem, files: File[]) {
+    if (!files.length || isUploadingChecklistItemAttachment) return;
+    if (persistence !== 'connected' || typeof item.id !== 'string') { showToast('Для вложений нужно подключение к серверу'); return; }
+    const accepted = files.filter(isSupportedMedia);
+    if (accepted.length !== files.length) showToast('Можно добавить только JPEG, PNG, GIF, WebP, MP4, WebM или MOV');
+    if (!accepted.length) return;
+    setUploadingChecklistItemAttachment(true);
+    try {
+      const uploaded = await Promise.all(accepted.map(async (file) => {
+        const form = new FormData();
+        form.append('file', file);
+        const response = await fetch(`${API_URL}/v1/checklist-items/${item.id}/attachments`, { method: 'POST', body: form });
+        if (!response.ok) throw new Error('upload failed');
+        return response.json() as Promise<Attachment>;
+      }));
+      updateChecklistItem(checklistId, item.id, { attachments: [...item.attachments, ...uploaded] });
+    } catch { showToast('Не удалось загрузить вложение пункта'); }
+    finally { setUploadingChecklistItemAttachment(false); }
+  }
+  function deleteChecklistItemAttachment(checklistId: string, item: ChecklistItem, attachment: Attachment) {
+    updateChecklistItem(checklistId, item.id, { attachments: item.attachments.filter((value) => value.id !== attachment.id) });
+    void fetch(`${API_URL}/v1/attachments/${attachment.id}`, { method: 'DELETE' })
+      .then((response) => { if (!response.ok) throw new Error('attachment delete failed'); })
+      .catch(() => showToast('Вложение пункта не удалено'));
   }
   function uploadCardBackground(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -1795,7 +1838,7 @@ export default function Home() {
             <p className="modal-subtitle">Задача в проекте «{boardTitle}» · {cardSaveStatus === 'saving' ? 'Сохраняем…' : cardSaveStatus === 'error' ? 'Ошибка сохранения' : 'Сохранено'}</p>
             <section className="description-section"><div className="section-heading"><h3>Описание</h3><button className="text-action" onClick={() => setDescriptionEditing((current) => !current)}>{isDescriptionEditing ? 'Готово' : 'Изменить'}</button></div>{isDescriptionEditing ? <textarea className={`card-description-input media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={cardDescriptionDraft} onChange={(event) => setCardDescriptionDraft(event.target.value)} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'description')} onPaste={(event) => handleMediaPaste(event, 'description')} placeholder="Добавьте описание или перетащите изображение/видео…" aria-label="Описание задачи" /> : <MarkdownDescription value={cardDescriptionDraft} />}</section>
             </div>
-            <section className="checklists"><div className="section-heading"><h3>Чек-листы</h3><span>{checklists.length || '—'}</span></div>{isDetailsLoading ? <p className="detail-loading">Загружаем чек-листы…</p> : <>{checklists.map((checklist) => { const completed = checklist.items.filter((item) => item.is_completed).length; return <section className="checklist" key={checklist.id}><div className="section-heading"><h4>{checklist.title}</h4><span>{completed}/{checklist.items.length}</span><button className="text-action danger-text" onClick={() => deleteChecklist(checklist)}>Удалить</button></div><div className="progress"><i style={{ width: `${checklist.items.length ? completed / checklist.items.length * 100 : 0}%` }} /></div>{checklist.items.map((item) => <div className="check-row" key={item.id}><button className={`check-item ${item.is_completed ? 'done' : ''}`} onClick={() => toggleChecklistItem(checklist.id, item)} aria-pressed={item.is_completed}><span className="check-control">{item.is_completed && '✓'}</span>{item.title}</button><button className="remove-check" onClick={() => removeChecklistItem(checklist.id, item)} aria-label={`Удалить пункт ${item.title}`}>×</button></div>)}<form className="inline-composer" onSubmit={(event) => addChecklistItem(event, checklist.id)}><input value={checklistItemDrafts[checklist.id] ?? ''} onChange={(event) => setChecklistItemDrafts((current) => ({ ...current, [checklist.id]: event.target.value }))} maxLength={500} placeholder="Добавить пункт…" aria-label={`Новый пункт для ${checklist.title}`} /><button type="submit" disabled={isSavingChecklist || !(checklistItemDrafts[checklist.id] ?? '').trim()}>Добавить</button></form></section>; })}<form className="new-checklist-form" onSubmit={createChecklist}><input value={checklistNameDraft} onChange={(event) => setChecklistNameDraft(event.target.value)} maxLength={200} placeholder="Название нового чек-листа" aria-label="Название нового чек-листа" /><button type="submit" disabled={isSavingChecklist || !checklistNameDraft.trim()}>＋ Чек-лист</button></form></>}</section>
+            <section className="checklists"><div className="section-heading"><h3>Чек-листы</h3><span>{checklists.length || '—'}</span></div>{isDetailsLoading ? <p className="detail-loading">Загружаем чек-листы…</p> : <>{checklists.map((checklist) => { const completed = checklist.items.filter((item) => item.is_completed).length; return <section className="checklist" key={checklist.id}><div className="section-heading"><h4>{checklist.title}</h4><span>{completed}/{checklist.items.length}</span><button className="text-action danger-text" onClick={() => deleteChecklist(checklist)}>Удалить</button></div><div className="progress"><i style={{ width: `${checklist.items.length ? completed / checklist.items.length * 100 : 0}%` }} /></div>{checklist.items.map((item) => <div className="checklist-item" key={item.id}><div className="check-row"><button className={`check-item ${item.is_completed ? 'done' : ''}`} onClick={() => toggleChecklistItem(checklist.id, item)} aria-pressed={item.is_completed}><span className="check-control">{item.is_completed && '✓'}</span>{item.title}</button><button className="check-item-details" type="button" onClick={() => { setExpandedChecklistItemId((current) => current === item.id ? null : item.id); setChecklistItemDescriptionDrafts((current) => current[String(item.id)] === undefined ? { ...current, [String(item.id)]: item.description } : current); }} aria-expanded={expandedChecklistItemId === item.id}>{expandedChecklistItemId === item.id ? 'Свернуть' : item.description || item.attachments.length ? `Подробнее · ${item.attachments.length}` : 'Описание'}</button><button className="remove-check" onClick={() => removeChecklistItem(checklist.id, item)} aria-label={`Удалить пункт ${item.title}`}>×</button></div>{expandedChecklistItemId === item.id && <div className="check-item-detail"><textarea value={checklistItemDescriptionDrafts[String(item.id)] ?? item.description} onChange={(event) => setChecklistItemDescriptionDrafts((current) => ({ ...current, [String(item.id)]: event.target.value }))} onBlur={() => saveChecklistItemDescription(checklist.id, item)} maxLength={4000} placeholder="Описание пункта…" aria-label={`Описание пункта ${item.title}`} /><label className="check-item-upload">{isUploadingChecklistItemAttachment ? 'Загружаем…' : '＋ Картинка или видео'}<input type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple disabled={isUploadingChecklistItemAttachment} onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ''; void uploadChecklistItemAttachments(checklist.id, item, files); }} /></label>{item.attachments.length > 0 && <div className="check-item-attachments">{item.attachments.map((attachment) => <figure key={attachment.id}>{attachment.media_type.startsWith('image/') ? <img src={assetUrl(attachment.url)} alt={attachment.original_name} /> : attachment.media_type.startsWith('video/') ? <video controls preload="metadata" src={assetUrl(attachment.url)} /> : <a href={assetUrl(attachment.url)} target="_blank" rel="noreferrer">{attachment.original_name}</a>}<figcaption><span>{attachment.original_name}</span><button type="button" onClick={() => deleteChecklistItemAttachment(checklist.id, item, attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure>)}</div>}</div>}</div>)}<form className="inline-composer" onSubmit={(event) => addChecklistItem(event, checklist.id)}><input value={checklistItemDrafts[checklist.id] ?? ''} onChange={(event) => setChecklistItemDrafts((current) => ({ ...current, [checklist.id]: event.target.value }))} maxLength={500} placeholder="Добавить пункт…" aria-label={`Новый пункт для ${checklist.title}`} /><button type="submit" disabled={isSavingChecklist || !(checklistItemDrafts[checklist.id] ?? '').trim()}>Добавить</button></form></section>; })}<form className="new-checklist-form" onSubmit={createChecklist}><input value={checklistNameDraft} onChange={(event) => setChecklistNameDraft(event.target.value)} maxLength={200} placeholder="Название нового чек-листа" aria-label="Название нового чек-листа" /><button type="submit" disabled={isSavingChecklist || !checklistNameDraft.trim()}>＋ Чек-лист</button></form></>}</section>
             <div className="attachments"><div className="section-heading"><h3>Вложения</h3><span>{attachments.length}</span></div>{attachments.length ? <div className="attachment-grid">{attachments.map((attachment) => attachment.media_type.startsWith('image/') ? <figure className="attachment-preview" key={attachment.id}><img src={assetUrl(attachment.url)} alt={attachment.original_name} /><figcaption><span>{attachment.original_name}</span><div className="cover-controls"><select value={selected.coverAttachmentId === attachment.id ? selected.coverMode ?? 'full' : coverModeDraft} onChange={(event) => { const mode = event.target.value as 'full' | 'top'; setCoverModeDraft(mode); if (selected.coverAttachmentId === attachment.id) updateCardCover(attachment, mode); }} aria-label="Тип обложки"><option value="full">Фон</option><option value="top">Сверху</option></select><button className="cover-button" onClick={() => updateCardCover(selected.coverAttachmentId === attachment.id ? null : attachment)}>{selected.coverAttachmentId === attachment.id ? 'Снять' : 'Установить'}</button></div><button className="attachment-remove" onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure> : attachment.media_type.startsWith('video/') ? <figure className="attachment-preview" key={attachment.id}><video controls preload="metadata" src={assetUrl(attachment.url)} /><figcaption>{attachment.original_name}<button onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure> : <div className="attachment-file" key={attachment.id}><span>▶</span><a href={assetUrl(attachment.url)} target="_blank" rel="noreferrer">{attachment.original_name}</a><button onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></div>)}</div> : <p className="empty-attachments">Прикрепите изображение или видео до 50 МиБ.</p>}<label className="upload-button">{isUploadingAttachment ? 'Загружаем…' : '＋ Добавить файл'}<input type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple disabled={isUploadingAttachment} onChange={uploadAttachments} /></label></div>
             <footer className="modal-actions"><button className="archive-button" onClick={archiveSelectedCard}>Архивировать</button><span className={`autosave-status ${cardSaveStatus}`}>{cardSaveStatus === 'saving' ? 'Изменения сохраняются' : cardSaveStatus === 'error' ? 'Не удалось сохранить' : 'Все изменения сохранены'}</span></footer>
           </div>
