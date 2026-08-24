@@ -524,7 +524,7 @@ export default function Home() {
   }, [selectedCardId, persistence]);
 
   useEffect(() => {
-    if (persistence !== 'connected' || !boardId) return;
+    if (persistence !== 'connected' || !boardId || isPublicViewer) return;
     let refreshTimer: number | undefined;
     const stream = new EventSource(`${API_URL}/v1/boards/${boardId}/events`, { withCredentials: true });
     const refresh = () => {
@@ -539,7 +539,7 @@ export default function Home() {
     stream.addEventListener('refresh', refresh);
     stream.addEventListener('access-revoked', () => { stream.close(); setSelected(null); setView('home'); showToast('Доступ к пространству отозван'); });
     return () => { window.clearTimeout(refreshTimer); stream.close(); };
-  }, [boardId, persistence]);
+  }, [boardId, persistence, isPublicViewer]);
 
   useEffect(() => {
     const canvas = diagramCanvasRef.current;
@@ -813,7 +813,6 @@ export default function Home() {
     setDetailsLoading(persistence === 'connected' && typeof card.id === 'string');
     setCardTitleDraft(card.title);
     setCardDescriptionDraft(card.description ?? '');
-    setCardBackgroundDraft(card.backgroundImageUrl ?? '');
     setDescriptionEditing(false);
     const due = card.dueAt ? new Date(card.dueAt) : new Date();
     setDueCursor(due);
