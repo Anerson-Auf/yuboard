@@ -1,0 +1,11 @@
+.git
+.next
+.vinext
+.wrangler
+dist
+node_modules
+target
+uploads
+.env
+.env.*
+!/.env.example

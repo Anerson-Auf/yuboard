@@ -1,0 +1,17 @@
+FROM rust:1.88-bookworm AS build
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY migrations ./migrations
+COPY src ./src
+RUN cargo build --release --locked
+
+FROM debian:bookworm-slim
+RUN useradd --system --uid 10001 --create-home flowboard \
+    && mkdir -p /var/lib/flowboard/uploads \
+    && chown -R flowboard:flowboard /var/lib/flowboard
+COPY --from=build /app/target/release/flowboard-api /usr/local/bin/flowboard-api
+USER flowboard
+ENV FLOWBOARD_BIND_ADDR=0.0.0.0:8080
+ENV FLOWBOARD_UPLOAD_DIR=/var/lib/flowboard/uploads
+EXPOSE 8080
+CMD ["flowboard-api"]

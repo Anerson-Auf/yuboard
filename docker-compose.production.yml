@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flowboard}
+      POSTGRES_USER: ${POSTGRES_USER:-flowboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set-a-strong-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      FLOWBOARD_DATABASE_URL: postgres://${POSTGRES_USER:-flowboard}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-flowboard}
+      FLOWBOARD_BIND_ADDR: 0.0.0.0:8080
+      FLOWBOARD_UPLOAD_DIR: /var/lib/flowboard/uploads
+      FLOWBOARD_COOKIE_SECURE: "true"
+      FLOWBOARD_API_ORIGIN: ${FLOWBOARD_PUBLIC_ORIGIN:?set-https-public-origin}
+    volumes:
+      - uploads_data:/var/lib/flowboard/uploads
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_FLOWBOARD_API_URL: ""
+    restart: unless-stopped
+
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+      - web
+    ports:
+      # Caddy (recommended) forwards HTTPS traffic to this loopback-only port.
+      - "${FLOWBOARD_PROXY_BIND:-127.0.0.1:8081}:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres_data:
+  uploads_data:
