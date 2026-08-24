@@ -532,6 +532,16 @@ struct MoveCardRequest {
 }
 
 #[derive(Deserialize)]
+struct SetDiscordCardCoverRequest {
+    #[serde(default)]
+    attachment_id: Option<Uuid>,
+    #[serde(default)]
+    attachment_url: Option<String>,
+    #[serde(default = "default_cover_mode")]
+    mode: String,
+}
+
+#[derive(Deserialize)]
 struct MoveDiscordCardRequest {
     list_id: Uuid,
     #[serde(default)]
@@ -858,6 +868,7 @@ async fn main() {
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
         .route("/v1/integrations/discord/cards", get(list_discord_board_cards).post(create_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/move", post(move_discord_card))
+        .route("/v1/integrations/discord/cards/{card_id}/cover", post(set_discord_card_cover))
         .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
@@ -2511,6 +2522,31 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
         .bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
     Ok(Json(load_card_comments(pool, card_id, None).await?))
+}
+
+async fn set_discord_card_cover(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<SetDiscordCardCoverRequest>) -> ApiResult<Value> {
+    if request.mode != "full" && request.mode != "top" { return Err(ApiError::bad_request("Cover mode must be full or top.")); }
+    if request.attachment_id.is_some() == request.attachment_url.as_deref().map(str::trim).filter(|url| !url.is_empty()).is_some() {
+        return Err(ApiError::bad_request("Provide exactly one of attachment_id or attachment_url."));
+    }
+    let pool = database(&state)?;
+    let attachment_id = if let Some(attachment_id) = request.attachment_id {
+        let is_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE a.id = $1 AND a.card_id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND a.media_type LIKE 'image/%')")
+            .bind(attachment_id).bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+        if !is_valid { return Err(ApiError::bad_request("Attachment must be an image on this card in the token's board.")); }
+        attachment_id
+    } else {
+        let attachment_url = request.attachment_url.as_deref().unwrap().trim();
+        sqlx::query_scalar::<_, Uuid>("SELECT a.id FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE a.card_id = $1 AND c.board_id = $2 AND c.archived_at IS NULL AND a.external_url = $3 AND a.media_type LIKE 'image/%' ORDER BY a.created_at DESC LIMIT 1")
+            .bind(card_id).bind(integration.board_id).bind(attachment_url).fetch_optional(pool).await.map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::bad_request("Image attachment URL was not found on this card."))?
+    };
+    let updated = sqlx::query("UPDATE cards SET cover_attachment_id = $1, cover_mode = $2, updated_at = now() WHERE id = $3 AND board_id = $4 AND archived_at IS NULL")
+        .bind(attachment_id).bind(&request.mode).bind(card_id).bind(integration.board_id).execute(pool).await.map_err(ApiError::internal)?;
+    if updated.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
+    record_external_card_activity(pool, card_id, "Discord: установлена обложка", if request.mode == "full" { "фон" } else { "сверху" }).await;
+    let _ = state.events.send(());
+    Ok(Json(json!({ "attachment_id": attachment_id, "mode": request.mode })))
 }
 
 async fn create_discord_comment(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<CreateDiscordCommentRequest>) -> ApiResult<CommentResponse> {

@@ -114,6 +114,21 @@ POST /v1/integrations/discord/cards/{card-id}/comments
 
 The comment keeps the Discord display name and avatar without creating a Flowboard account. If a Flowboard account is deleted, its historical comments still render as `Deleted user`; Discord comments are separate external identities.
 
+## Set an image from a Discord comment as the card cover
+
+After forwarding a comment, pass the URL of its first image attachment. Flowboard finds that exact image on the card and makes it the cover. `mode: "full"` means **фон**; `mode: "top"` means **сверху**.
+
+```http
+POST /v1/integrations/discord/cards/{card-id}/cover
+
+{
+  "attachment_url": "https://cdn.discordapp.com/attachments/…/screenshot.png",
+  "mode": "full"
+}
+```
+
+The bot may use `attachment_id` instead of `attachment_url` if it already has Flowboard's ID. Exactly one of them is required. Only images already attached to that card within the token's board are accepted; videos cannot be card covers.
+
 ## Minimal Node example
 
 ```js
