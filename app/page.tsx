@@ -1411,7 +1411,10 @@ export default function Home() {
     setBoardTitle(data.title);
     setBoardBackgroundUrl(data.background_image_url);
     setBoardVisibility(data.visibility === 'public' ? 'public' : 'private');
-    setBackgroundDraft(data.background_image_url ?? '');
+    // Uploaded board backgrounds are returned with a revision query parameter.
+    // Keep the settings input on the canonical path so saving it later cannot
+    // persist an obsolete cache-buster into the database.
+    setBackgroundDraft((data.background_image_url ?? '').replace(/^(\/v1\/boards\/[^/]+\/background\/file)\?v=[^&]+$/, '$1'));
     setBoardId(data.id);
   }
 
@@ -1502,7 +1505,7 @@ export default function Home() {
     setUploadingBoardBackground(true);
     void fetch(`${API_URL}/v1/boards/${boardId}/background/file`, { method: 'POST', body: form })
       .then(async (response) => { if (!response.ok) throw new Error('upload failed'); return response.json() as Promise<{ url: string }>; })
-      .then(({ url }) => { setBoardBackgroundUrl(url); setBackgroundDraft(url); showToast('Фон проекта загружен'); })
+      .then(({ url }) => { setBoardBackgroundUrl(url); setBackgroundDraft(`/v1/boards/${boardId}/background/file`); showToast('Фон проекта загружен'); })
       .catch(() => showToast('Не удалось загрузить фон проекта'))
       .finally(() => setUploadingBoardBackground(false));
   }

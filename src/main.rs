@@ -1669,7 +1669,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     let actor_id = current.0.map(|user| user.id);
     let pool = database(&state)?;
     let board = sqlx::query_as::<_, BoardAccess>(
-        "SELECT b.id, b.workspace_id, b.title, b.background_image_url, b.visibility::text AS visibility FROM boards b LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
+        "SELECT b.id, b.workspace_id, b.title, CASE WHEN b.background_image_url = '/v1/boards/' || b.id::text || '/background/file' THEN b.background_image_url || '?v=' || (floor(EXTRACT(EPOCH FROM b.updated_at) * 1000)::bigint)::text ELSE b.background_image_url END AS background_image_url, b.visibility::text AS visibility FROM boards b LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
     )
     .bind(board_id)
     .bind(actor_id)
@@ -1828,6 +1828,8 @@ async fn upload_board_background(State(state): State<AppState>, current: Current
     tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "board background write failed"); ApiError::storage() })?;
     let previous_key = sqlx::query_scalar::<_, Option<String>>("SELECT object_key FROM board_backgrounds WHERE board_id = $1")
         .bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?.flatten();
+    // Keep the canonical file path in the database.  The response gets a unique
+    // cache-buster so the uploader immediately sees the newly selected file.
     let url = format!("/v1/boards/{board_id}/background/file");
     let result = sqlx::query("INSERT INTO board_backgrounds (board_id, uploaded_by, object_key, original_name, media_type, byte_size) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (board_id) DO UPDATE SET uploaded_by = EXCLUDED.uploaded_by, object_key = EXCLUDED.object_key, original_name = EXCLUDED.original_name, media_type = EXCLUDED.media_type, byte_size = EXCLUDED.byte_size, created_at = now()")
         .bind(board_id).bind(current.id).bind(&object_key).bind(&original_name).bind(&media_type).bind(bytes.len() as i64).execute(pool).await;
@@ -1836,7 +1838,7 @@ async fn upload_board_background(State(state): State<AppState>, current: Current
         .bind(&url).bind(board_id).execute(pool).await.map_err(ApiError::internal)?;
     if let Some(previous_key) = previous_key { let _ = tokio::fs::remove_file(state.upload_dir.join(previous_key)).await; }
     let _ = state.events.send(());
-    Ok(Json(BoardBackgroundUploadResponse { url }))
+    Ok(Json(BoardBackgroundUploadResponse { url: format!("{url}?v={}", Uuid::new_v4()) }))
 }
 
 async fn download_board_background(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>) -> Result<Response, ApiError> {
@@ -1848,7 +1850,7 @@ async fn download_board_background(State(state): State<AppState>, current: Viewe
         if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "background_not_found", "Board background file was not found.".to_owned()) }
         else { tracing::error!(?error, "board background read failed"); ApiError::storage() }
     })?;
-    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"))], bytes).into_response())
 }
 
 async fn update_board_visibility(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardVisibilityRequest>) -> Result<StatusCode, ApiError> {
