@@ -8,7 +8,7 @@ use axum::{
     extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, State},
     http::{header, request::Parts, HeaderName, HeaderValue, Method, StatusCode},
     response::{sse::{Event, Sse}, IntoResponse, Response},
-    routing::{delete, get, patch, post, put},
+    routing::{get, patch, post, put},
     Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -557,6 +557,16 @@ struct CardResponse {
 }
 
 #[derive(Serialize, FromRow)]
+struct DiscordCardStatusResponse {
+    id: Uuid,
+    list_id: Uuid,
+    title: String,
+    description: String,
+    is_completed: bool,
+    completed_at: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
 struct DiscordIntegrationResponse {
     id: Uuid,
     name: String,
@@ -867,9 +877,10 @@ async fn main() {
         .route("/v1/cards/{card_id}/comments", post(create_comment))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
         .route("/v1/integrations/discord/cards", get(list_discord_board_cards).post(create_discord_card))
-        .route("/v1/integrations/discord/cards/{card_id}", delete(archive_discord_card))
+        .route("/v1/integrations/discord/cards/{card_id}", get(get_discord_card).delete(archive_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/move", post(move_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/cover", post(set_discord_card_cover))
+        .route("/v1/integrations/discord/cards/{card_id}/completion", patch(set_discord_card_completion))
         .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
@@ -2495,6 +2506,23 @@ async fn list_discord_board_cards(State(state): State<AppState>, integration: Di
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(cards))
+}
+
+async fn get_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<DiscordCardStatusResponse> {
+    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("SELECT id, list_id, title, description, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL")
+        .bind(card_id).bind(integration.board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
+    Ok(Json(card))
+}
+
+async fn set_discord_card_completion(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardCompletionRequest>) -> ApiResult<DiscordCardStatusResponse> {
+    let pool = database(&state)?;
+    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = $2 AND board_id = $3 AND archived_at IS NULL RETURNING id, list_id, title, description, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at")
+        .bind(request.is_completed).bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
+    record_external_card_activity(pool, card_id, if request.is_completed { "Discord: задача выполнена" } else { "Discord: задача возвращена в работу" }, "").await;
+    let _ = state.events.send(());
+    Ok(Json(card))
 }
 
 async fn move_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<MoveDiscordCardRequest>) -> ApiResult<CardResponse> {

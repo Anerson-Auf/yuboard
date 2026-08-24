@@ -38,6 +38,35 @@ GET /v1/integrations/discord/cards
 
 Returns active cards from this token's board only. Each entry contains `id`, `list_id`, `title`, and `description`. Use the card `id` to retrieve or append its conversation.
 
+## Read or change completion status
+
+```http
+GET /v1/integrations/discord/cards/{card-id}
+```
+
+Returns the current card data plus an explicit completion state:
+
+```json
+{
+  "id": "card-uuid",
+  "list_id": "list-uuid",
+  "title": "Добавить ночной режим",
+  "description": "…",
+  "is_completed": true,
+  "completed_at": "2026-08-25T12:34:56Z"
+}
+```
+
+To set or remove the green **Выполнено** mark:
+
+```http
+PATCH /v1/integrations/discord/cards/{card-id}/completion
+
+{ "is_completed": true }
+```
+
+Pass `false` to return the card to work. Both endpoints are restricted to the board that owns the Discord token.
+
 ## Move a card
 
 ```http
