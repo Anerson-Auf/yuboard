@@ -847,6 +847,7 @@ async fn main() {
         .route("/v1/checklists/{checklist_id}/items", post(create_checklist_item))
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
         .route("/v1/cards/{card_id}/comments", post(create_comment))
+        .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
         .route("/v1/integrations/discord/cards", post(create_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
@@ -2449,6 +2450,15 @@ async fn create_discord_card(State(state): State<AppState>, integration: Discord
     record_external_card_activity(pool, card.id, "Discord: создана задача", &card.title).await;
     let _ = state.events.send(());
     Ok(Json(card))
+}
+
+async fn list_discord_board_lists(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<ListResponse>> {
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title FROM lists WHERE board_id = $1 ORDER BY position")
+        .bind(integration.board_id)
+        .fetch_all(database(&state)?)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(lists))
 }
 
 async fn list_discord_card_comments(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CommentResponse>> {

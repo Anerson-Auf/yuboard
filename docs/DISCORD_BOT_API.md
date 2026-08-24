@@ -13,6 +13,23 @@ Authorization: Bearer fb_discord_…
 Content-Type: application/json
 ```
 
+## List available columns
+
+```http
+GET /v1/integrations/discord/lists
+```
+
+The token returns only the columns of its own board:
+
+```json
+[
+  { "id": "list-uuid", "title": "Предложения" },
+  { "id": "another-list-uuid", "title": "В работе" }
+]
+```
+
+Use one of these values as `list_id` when creating a card.
+
 ## Create (or safely repeat) a suggestion card
 
 `source_id` is the original Discord message ID. Sending the same ID again returns the same card instead of making a duplicate.
