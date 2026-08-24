@@ -34,7 +34,7 @@ type AdminAccount = { id: string; username: string; avatar_url?: string | null; 
 type AccountInvite = { id: string; expires_at: string; token?: string | null };
 type AdminWorkspace = { id: string; name: string; owner_username: string; member_count: number; archived_at: string | null };
 type AuthSession = { id: string; created_at: string; last_seen_at: string; expires_at: string; current: boolean };
-type DiscordIntegration = { id: string; name: string; target_list_id: string; created_at: string; last_used_at: string | null; token?: string };
+type DiscordIntegration = { id: string; name: string; default_list_id: string | null; created_at: string; last_used_at: string | null; token?: string };
 type DiagramPoint = { x: number; y: number };
 type DiagramStroke = { points: DiagramPoint[]; color?: string; width?: number };
 type DiagramRectangle = { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number };
@@ -1507,9 +1507,9 @@ export default function Home() {
   }
   function createDiscordIntegration(event: FormEvent) {
     event.preventDefault();
-    if (!boardId || !discordTargetListId || !discordIntegrationName.trim() || isCreatingDiscordIntegration) return;
+    if (!boardId || !discordIntegrationName.trim() || isCreatingDiscordIntegration) return;
     setCreatingDiscordIntegration(true);
-    void fetch(`${API_URL}/v1/boards/${boardId}/integrations/discord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: discordIntegrationName.trim(), target_list_id: discordTargetListId }) })
+    void fetch(`${API_URL}/v1/boards/${boardId}/integrations/discord`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: discordIntegrationName.trim(), default_list_id: discordTargetListId || null }) })
       .then(async (response) => { if (!response.ok) throw new Error('discord integration create failed'); return response.json() as Promise<DiscordIntegration>; })
       .then((integration) => { setDiscordIntegrations((current) => [integration, ...current]); setCreatedDiscordToken(integration.token ?? ''); if (integration.token) void navigator.clipboard?.writeText(integration.token); showToast('Токен создан и скопирован — сохраните его сейчас'); })
       .catch(() => showToast('Не удалось создать Discord API-токен'))
@@ -1653,14 +1653,14 @@ export default function Home() {
           <section className="archive-modal discord-integration-modal" role="dialog" aria-modal="true" aria-label="Discord API" onMouseDown={(event) => event.stopPropagation()}>
             <button className="modal-close" type="button" onClick={() => setDiscordIntegrationOpen(false)} aria-label="Закрыть">×</button>
             <p className="eyebrow">ИНТЕГРАЦИЯ</p><h2>Discord API</h2>
-            <p className="archive-copy">Токен создаёт задачи только в выбранной колонке и комментарии только на этой доске. Его показываем один раз.</p>
+            <p className="archive-copy">Токен принадлежит всей этой доске: перенос карточек не ломает связь. Колонка ниже — только место для новых предложек по умолчанию.</p>
             {createdDiscordToken && <div className="discord-token"><b>Скопируйте токен</b><code>{createdDiscordToken}</code><button type="button" className="secondary-button" onClick={() => { void navigator.clipboard?.writeText(createdDiscordToken); showToast('Токен скопирован'); }}>Скопировать</button></div>}
             <form className="profile-form discord-integration-form" onSubmit={createDiscordIntegration}>
               <label>Название<input value={discordIntegrationName} maxLength={120} onChange={(event) => setDiscordIntegrationName(event.target.value)} /></label>
-              <label>Колонка для предложек<select value={discordTargetListId} onChange={(event) => setDiscordTargetListId(event.target.value)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select></label>
-              <button className="create-button" type="submit" disabled={isCreatingDiscordIntegration || !discordTargetListId}>{isCreatingDiscordIntegration ? 'Создаём…' : 'Создать токен'}</button>
+              <label>Колонка по умолчанию<select value={discordTargetListId} onChange={(event) => setDiscordTargetListId(event.target.value)}><option value="">Не выбирать — list_id обязателен в API</option>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select></label>
+              <button className="create-button" type="submit" disabled={isCreatingDiscordIntegration}>{isCreatingDiscordIntegration ? 'Создаём…' : 'Создать токен'}</button>
             </form>
-            <section className="discord-integration-list"><h3>Активные токены</h3>{isDiscordIntegrationLoading ? <p className="detail-loading">Загружаем…</p> : discordIntegrations.length ? discordIntegrations.map((integration) => <article key={integration.id}><div><b>{integration.name}</b><small>Колонка: {columns.find((column) => String(column.id) === integration.target_list_id)?.title ?? 'удалена'} · {integration.last_used_at ? `последнее использование ${new Date(integration.last_used_at).toLocaleString('ru-RU')}` : 'ещё не использовался'}</small></div><button className="danger-action" type="button" onClick={() => revokeDiscordIntegration(integration)}>Отозвать</button></article>) : <p className="empty-comments">Активных токенов нет.</p>}</section>
+            <section className="discord-integration-list"><h3>Активные токены</h3>{isDiscordIntegrationLoading ? <p className="detail-loading">Загружаем…</p> : discordIntegrations.length ? discordIntegrations.map((integration) => <article key={integration.id}><div><b>{integration.name}</b><small>Вся доска · по умолчанию: {columns.find((column) => String(column.id) === integration.default_list_id)?.title ?? 'не выбрана'} · {integration.last_used_at ? `последнее использование ${new Date(integration.last_used_at).toLocaleString('ru-RU')}` : 'ещё не использовался'}</small></div><button className="danger-action" type="button" onClick={() => revokeDiscordIntegration(integration)}>Отозвать</button></article>) : <p className="empty-comments">Активных токенов нет.</p>}</section>
           </section>
         </div>}
       </div>}

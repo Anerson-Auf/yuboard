@@ -49,7 +49,7 @@ struct Viewer(Option<CurrentUser>);
 struct DiscordIntegration {
     id: Uuid,
     board_id: Uuid,
-    target_list_id: Uuid,
+    default_list_id: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -162,8 +162,8 @@ impl FromRequestParts<AppState> for DiscordIntegration {
             .ok_or_else(ApiError::unauthorized)?;
         let token = value.strip_prefix("Bearer ").filter(|token| (48..=200).contains(&token.len()))
             .ok_or_else(ApiError::unauthorized)?;
-        let integration = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
-            "SELECT id, board_id, target_list_id FROM discord_integrations WHERE token_hash = $1 AND revoked_at IS NULL",
+        let integration = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>)>(
+            "SELECT id, board_id, default_list_id FROM discord_integrations WHERE token_hash = $1 AND revoked_at IS NULL",
         )
         .bind(token_hash(token))
         .fetch_optional(database(state)?)
@@ -172,7 +172,7 @@ impl FromRequestParts<AppState> for DiscordIntegration {
         .ok_or_else(ApiError::unauthorized)?;
         let _ = sqlx::query("UPDATE discord_integrations SET last_used_at = now() WHERE id = $1")
             .bind(integration.0).execute(database(state)?).await;
-        Ok(Self { id: integration.0, board_id: integration.1, target_list_id: integration.2 })
+        Ok(Self { id: integration.0, board_id: integration.1, default_list_id: integration.2 })
     }
 }
 
@@ -422,7 +422,8 @@ struct CreateCommentRequest {
 #[derive(Deserialize)]
 struct CreateDiscordIntegrationRequest {
     name: String,
-    target_list_id: Uuid,
+    #[serde(default)]
+    default_list_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -431,6 +432,8 @@ struct CreateDiscordCardRequest {
     title: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    list_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -540,7 +543,7 @@ struct CardResponse {
 struct DiscordIntegrationResponse {
     id: Uuid,
     name: String,
-    target_list_id: Uuid,
+    default_list_id: Option<Uuid>,
     created_at: String,
     last_used_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -845,7 +848,7 @@ async fn main() {
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
         .route("/v1/cards/{card_id}/comments", post(create_comment))
         .route("/v1/integrations/discord/cards", post(create_discord_card))
-        .route("/v1/integrations/discord/cards/{card_id}/comments", post(create_discord_comment))
+        .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
@@ -1869,7 +1872,7 @@ async fn list_discord_integrations(State(state): State<AppState>, current: Curre
     let pool = database(&state)?;
     ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
     let integrations = sqlx::query_as::<_, DiscordIntegrationResponse>(
-        "SELECT id, name, target_list_id, created_at::text AS created_at, last_used_at::text AS last_used_at, NULL::text AS token FROM discord_integrations WHERE board_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC",
+        "SELECT id, name, default_list_id, created_at::text AS created_at, last_used_at::text AS last_used_at, NULL::text AS token FROM discord_integrations WHERE board_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC",
     )
     .bind(board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     Ok(Json(integrations))
@@ -1879,14 +1882,16 @@ async fn create_discord_integration(State(state): State<AppState>, current: Curr
     let pool = database(&state)?;
     ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
     let name = valid_text(&request.name, "name", 120)?;
-    let belongs_to_board: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)")
-        .bind(request.target_list_id).bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
-    if !belongs_to_board { return Err(ApiError::bad_request("The target list must belong to this board.")); }
+    if let Some(default_list_id) = request.default_list_id {
+        let belongs_to_board: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)")
+            .bind(default_list_id).bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+        if !belongs_to_board { return Err(ApiError::bad_request("The default list must belong to this board.")); }
+    }
     let token = format!("fb_discord_{}", new_token());
     let integration = sqlx::query_as::<_, DiscordIntegrationResponse>(
-        "INSERT INTO discord_integrations (id, board_id, target_list_id, created_by, name, token_hash) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, target_list_id, created_at::text AS created_at, last_used_at::text AS last_used_at, NULL::text AS token",
+        "INSERT INTO discord_integrations (id, board_id, default_list_id, created_by, name, token_hash) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, default_list_id, created_at::text AS created_at, last_used_at::text AS last_used_at, NULL::text AS token",
     )
-    .bind(Uuid::new_v4()).bind(board_id).bind(request.target_list_id).bind(current.id).bind(name).bind(token_hash(&token))
+    .bind(Uuid::new_v4()).bind(board_id).bind(request.default_list_id).bind(current.id).bind(name).bind(token_hash(&token))
     .fetch_one(pool).await.map_err(ApiError::internal)?;
     Ok(Json(DiscordIntegrationResponse { token: Some(token), ..integration }))
 }
@@ -2428,10 +2433,12 @@ async fn create_discord_card(State(state): State<AppState>, integration: Discord
     let title = valid_text(&request.title, "title", 500)?;
     let description = request.description.trim();
     if description.chars().count() > 20_000 { return Err(ApiError::bad_request("description must not exceed 20000 characters.")); }
+    let target_list_id = request.list_id.or(integration.default_list_id)
+        .ok_or_else(|| ApiError::bad_request("list_id is required because this token has no default list."))?;
     let card = sqlx::query_as::<_, CardResponse>(
         "INSERT INTO cards (id, board_id, list_id, title, description, position, created_by, discord_integration_id, discord_source_id) SELECT $1, l.board_id, l.id, $2, $3, COALESCE((SELECT MAX(position) FROM cards WHERE list_id = l.id), 0) + 1000, NULL, $4, $5 FROM lists l INNER JOIN boards b ON b.id = l.board_id WHERE l.id = $6 AND l.board_id = $7 AND b.archived_at IS NULL RETURNING id, list_id, title, description",
     )
-    .bind(Uuid::new_v4()).bind(title).bind(description).bind(integration.id).bind(&source_id).bind(integration.target_list_id).bind(integration.board_id)
+    .bind(Uuid::new_v4()).bind(title).bind(description).bind(integration.id).bind(&source_id).bind(target_list_id).bind(integration.board_id)
     .fetch_optional(pool).await.map_err(ApiError::internal)?;
     let card = match card {
         Some(card) => card,
@@ -2442,6 +2449,14 @@ async fn create_discord_card(State(state): State<AppState>, integration: Discord
     record_external_card_activity(pool, card.id, "Discord: создана задача", &card.title).await;
     let _ = state.events.send(());
     Ok(Json(card))
+}
+
+async fn list_discord_card_comments(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CommentResponse>> {
+    let pool = database(&state)?;
+    let card_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards WHERE id = $1 AND board_id = $2)")
+        .bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
+    Ok(Json(load_card_comments(pool, card_id, None).await?))
 }
 
 async fn create_discord_comment(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<CreateDiscordCommentRequest>) -> ApiResult<CommentResponse> {
