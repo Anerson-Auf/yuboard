@@ -155,6 +155,9 @@ function formatDue(value: string) {
 }
 
 function activityLabel(action: string) {
+  // Old checklist activity records used this vague status. Keep history useful:
+  // it represents an unchecked item, not an unfinished card.
+  if (action.trim().toLocaleLowerCase('ru-RU') === 'не доделано') return 'снял(а) отметку с пункта чек-листа';
   const labels: Record<string, string> = {
     updateCard: 'изменил(а) карточку',
     createCard: 'создал(а) карточку',
