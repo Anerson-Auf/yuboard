@@ -686,18 +686,29 @@ export default function Home() {
     if (!selected || !cardTitleDraft.trim() || (selected.title === cardTitleDraft.trim() && (selected.description ?? '') === cardDescriptionDraft)) return;
     const timer = window.setTimeout(() => {
       const updated = { title: cardTitleDraft.trim(), description: cardDescriptionDraft };
-      setCardSaveStatus('saving');
-      setSelected((current) => current ? { ...current, ...updated } : current);
-      setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, ...updated } : card) })));
-      if (persistence !== 'connected' || typeof selected.id !== 'string') { setCardSaveStatus('saved'); return; }
-      void fetch(`${API_URL}/v1/cards/${selected.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updated) })
-        .then((response) => { if (!response.ok) throw new Error('auto save failed'); setCardSaveStatus('saved'); })
-        .catch(() => { setCardSaveStatus('error'); showToast('Изменения не сохранились'); });
+      persistCardDraft(selected, updated);
     }, 650);
     return () => window.clearTimeout(timer);
   }, [cardDescriptionDraft, cardTitleDraft, persistence, selected]);
 
   function showToast(message: string) { setToast(message); window.setTimeout(() => setToast(''), 2600); }
+  function persistCardDraft(card: Card, updated: { title: string; description: string }) {
+    setCardSaveStatus('saving');
+    setSelected((current) => current?.id === card.id ? { ...current, ...updated } : current);
+    setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((item) => item.id === card.id ? { ...item, ...updated } : item) })));
+    if (persistence !== 'connected' || typeof card.id !== 'string') { setCardSaveStatus('saved'); return; }
+    void fetch(`${API_URL}/v1/cards/${card.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updated) })
+      .then((response) => { if (!response.ok) throw new Error('auto save failed'); setCardSaveStatus('saved'); })
+      .catch(() => { setCardSaveStatus('error'); showToast('Изменения не сохранились'); });
+  }
+  function closeSelectedCard() {
+    const card = selected;
+    const title = cardTitleDraft.trim();
+    if (card && title && (card.title !== title || (card.description ?? '') !== cardDescriptionDraft)) {
+      persistCardDraft(card, { title, description: cardDescriptionDraft });
+    }
+    setSelected(null);
+  }
   function applyChecklists(nextChecklists: Checklist[]) {
     setChecklists(nextChecklists);
     if (!selectedCardId) return;
@@ -1882,9 +1893,9 @@ export default function Home() {
       </section>
     </div>}
 
-    {selected && <div className="modal-backdrop" role="presentation" onMouseDown={() => setSelected(null)}>
+    {selected && <div className="modal-backdrop" role="presentation" onMouseDown={closeSelectedCard}>
       <section className="task-modal" role="dialog" aria-modal="true" aria-label="Детали задачи" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" onClick={() => setSelected(null)} aria-label="Закрыть">×</button>
+        <button className="modal-close" onClick={closeSelectedCard} aria-label="Закрыть">×</button>
         <div className="task-layout">
           <div className="task-content">
             <div className={`card-detail-top ${selected.backgroundImageUrl ? 'has-card-background' : ''}`} style={selected.backgroundImageUrl ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
