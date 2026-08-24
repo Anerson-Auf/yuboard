@@ -90,6 +90,35 @@ This archives the active card instead of physically deleting it, so the conversa
 
 For `/close Причина` automation: first read comments, let the bot validate that the command author is one of your developers, post the reason into Discord, then call this endpoint with the matching Flowboard card ID.
 
+## Keep a Discord thread and card in sync
+
+After the bot creates a Discord thread for a suggestion, bind its Discord thread ID to the card once:
+
+```http
+PUT /v1/integrations/discord/cards/{card-id}/thread
+
+{ "thread_id": "123456789012345678" }
+```
+
+The operation is idempotent. One thread cannot be bound to two cards under the same token. It returns the card's `thread_id`, archive state and completion state.
+
+When Discord reports that this thread was opened or unarchived, look up the card and restore it:
+
+```http
+GET /v1/integrations/discord/threads/{thread-id}/card
+POST /v1/integrations/discord/cards/{card-id}/restore
+```
+
+`restore` is idempotent: an already active card returns `200` with its current state. It keeps comments, attachments, cover, completion mark and the linked thread.
+
+For the reverse direction, poll a durable cursor:
+
+```http
+GET /v1/integrations/discord/cards/sync?after=0&limit=100
+```
+
+Each item contains `event_id`, `event_kind` (`thread_linked`, `archived`, or `restored`), `thread_id`, and current card state. Store the highest `event_id` only after Discord accepted the corresponding archive/unarchive action, then request `after={that-id}`. Thus a restore in Flowboard makes the bot reopen its thread without relying on an in-memory webhook.
+
 ## Create (or safely repeat) a suggestion card
 
 `source_id` is the original Discord message ID. Sending the same ID again returns the same card instead of making a duplicate.

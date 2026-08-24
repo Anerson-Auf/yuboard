@@ -556,6 +556,19 @@ struct MoveDiscordCardRequest {
     before_card_id: Option<Uuid>,
 }
 
+#[derive(Deserialize)]
+struct BindDiscordThreadRequest {
+    thread_id: String,
+}
+
+#[derive(Deserialize)]
+struct DiscordCardSyncQuery {
+    #[serde(default)]
+    after: Option<i64>,
+    #[serde(default)]
+    limit: Option<u16>,
+}
+
 #[derive(Clone, Serialize, FromRow)]
 struct CardResponse {
     id: Uuid,
@@ -572,6 +585,35 @@ struct DiscordCardStatusResponse {
     description: String,
     is_completed: bool,
     completed_at: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct DiscordThreadCardResponse {
+    id: Uuid,
+    list_id: Uuid,
+    title: String,
+    description: String,
+    is_archived: bool,
+    archived_at: Option<String>,
+    is_completed: bool,
+    completed_at: Option<String>,
+    thread_id: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct DiscordCardSyncEventResponse {
+    event_id: i64,
+    event_kind: String,
+    created_at: String,
+    id: Uuid,
+    list_id: Uuid,
+    title: String,
+    description: String,
+    is_archived: bool,
+    archived_at: Option<String>,
+    is_completed: bool,
+    completed_at: Option<String>,
+    thread_id: String,
 }
 
 #[derive(Serialize, FromRow)]
@@ -886,8 +928,12 @@ async fn main() {
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
         .route("/v1/cards/{card_id}/comments", post(create_comment))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
+        .route("/v1/integrations/discord/cards/sync", get(list_discord_card_sync_events))
+        .route("/v1/integrations/discord/threads/{thread_id}/card", get(get_discord_thread_card))
         .route("/v1/integrations/discord/cards", get(list_discord_board_cards).post(create_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}", get(get_discord_card).delete(archive_discord_card))
+        .route("/v1/integrations/discord/cards/{card_id}/restore", post(restore_discord_card))
+        .route("/v1/integrations/discord/cards/{card_id}/thread", put(bind_discord_card_thread))
         .route("/v1/integrations/discord/cards/{card_id}/move", post(move_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/cover", post(set_discord_card_cover))
         .route("/v1/integrations/discord/cards/{card_id}/completion", patch(set_discord_card_completion))
@@ -2545,6 +2591,86 @@ async fn list_discord_board_cards(State(state): State<AppState>, integration: Di
     Ok(Json(cards))
 }
 
+async fn load_discord_thread_card(pool: &PgPool, integration: DiscordIntegration, card_id: Uuid) -> Result<DiscordThreadCardResponse, ApiError> {
+    sqlx::query_as::<_, DiscordThreadCardResponse>(
+        "SELECT c.id, c.list_id, c.title, c.description, c.archived_at IS NOT NULL AS is_archived, c.archived_at::text AS archived_at, c.completed_at IS NOT NULL AS is_completed, c.completed_at::text AS completed_at, dct.thread_id FROM cards c LEFT JOIN discord_card_threads dct ON dct.card_id = c.id AND dct.integration_id = $1 WHERE c.id = $2 AND c.board_id = $3",
+    )
+    .bind(integration.id)
+    .bind(card_id)
+    .bind(integration.board_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))
+}
+
+async fn record_discord_card_thread_event(pool: &PgPool, card_id: Uuid, event_kind: &str) {
+    if let Err(error) = sqlx::query("INSERT INTO discord_card_thread_events (integration_id, card_id, event_kind) SELECT integration_id, $1, $2 FROM discord_card_threads WHERE card_id = $1")
+        .bind(card_id)
+        .bind(event_kind)
+        .execute(pool)
+        .await
+    {
+        tracing::error!(?error, card_id = %card_id, event_kind, "discord thread sync event insert failed");
+    }
+}
+
+async fn bind_discord_card_thread(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<BindDiscordThreadRequest>) -> ApiResult<DiscordThreadCardResponse> {
+    let thread_id = valid_text(&request.thread_id, "thread_id", 128)?.to_owned();
+    let pool = database(&state)?;
+    if let Some(existing_card_id) = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM discord_card_threads WHERE integration_id = $1 AND thread_id = $2")
+        .bind(integration.id).bind(&thread_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+    {
+        if existing_card_id != card_id { return Err(ApiError::bad_request("This Discord thread is already linked to another card.")); }
+    }
+    let current_thread = sqlx::query_scalar::<_, String>("SELECT thread_id FROM discord_card_threads WHERE integration_id = $1 AND card_id = $2")
+        .bind(integration.id).bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?;
+    if current_thread.as_deref() == Some(thread_id.as_str()) {
+        return Ok(Json(load_discord_thread_card(pool, integration, card_id).await?));
+    }
+    let saved = sqlx::query("INSERT INTO discord_card_threads (integration_id, card_id, thread_id) SELECT $1, c.id, $2 FROM cards c WHERE c.id = $3 AND c.board_id = $4 ON CONFLICT (integration_id, card_id) DO UPDATE SET thread_id = EXCLUDED.thread_id, updated_at = now()")
+        .bind(integration.id).bind(&thread_id).bind(card_id).bind(integration.board_id).execute(pool).await.map_err(ApiError::internal)?;
+    if saved.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
+    record_discord_card_thread_event(pool, card_id, "thread_linked").await;
+    let _ = state.events.send(());
+    Ok(Json(load_discord_thread_card(pool, integration, card_id).await?))
+}
+
+async fn get_discord_thread_card(State(state): State<AppState>, integration: DiscordIntegration, Path(thread_id): Path<String>) -> ApiResult<DiscordThreadCardResponse> {
+    let thread_id = valid_text(&thread_id, "thread_id", 128)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM discord_card_threads WHERE integration_id = $1 AND thread_id = $2")
+        .bind(integration.id).bind(thread_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "discord_thread_not_found", "Discord thread is not linked to this integration.".to_owned()))?;
+    Ok(Json(load_discord_thread_card(database(&state)?, integration, card_id).await?))
+}
+
+async fn restore_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<DiscordThreadCardResponse> {
+    let pool = database(&state)?;
+    let restored = sqlx::query("UPDATE cards SET archived_at = NULL, updated_at = now() WHERE id = $1 AND board_id = $2 AND archived_at IS NOT NULL")
+        .bind(card_id).bind(integration.board_id).execute(pool).await.map_err(ApiError::internal)?;
+    let card = load_discord_thread_card(pool, integration, card_id).await?;
+    if restored.rows_affected() > 0 {
+        record_external_card_activity(pool, card_id, "Discord: карточка восстановлена", "").await;
+        let _ = state.events.send(());
+    }
+    Ok(Json(card))
+}
+
+async fn list_discord_card_sync_events(State(state): State<AppState>, integration: DiscordIntegration, Query(query): Query<DiscordCardSyncQuery>) -> ApiResult<Vec<DiscordCardSyncEventResponse>> {
+    let after = query.after.unwrap_or(0).max(0);
+    let limit = i64::from(query.limit.unwrap_or(100).clamp(1, 200));
+    let events = sqlx::query_as::<_, DiscordCardSyncEventResponse>(
+        "SELECT e.id AS event_id, e.event_kind, e.created_at::text AS created_at, c.id, c.list_id, c.title, c.description, c.archived_at IS NOT NULL AS is_archived, c.archived_at::text AS archived_at, c.completed_at IS NOT NULL AS is_completed, c.completed_at::text AS completed_at, dct.thread_id FROM discord_card_thread_events e INNER JOIN cards c ON c.id = e.card_id INNER JOIN discord_card_threads dct ON dct.integration_id = e.integration_id AND dct.card_id = e.card_id WHERE e.integration_id = $1 AND e.id > $2 ORDER BY e.id ASC LIMIT $3",
+    )
+    .bind(integration.id)
+    .bind(after)
+    .bind(limit)
+    .fetch_all(database(&state)?)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(events))
+}
+
 async fn get_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<DiscordCardStatusResponse> {
     let card = sqlx::query_as::<_, DiscordCardStatusResponse>("SELECT id, list_id, title, description, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL")
         .bind(card_id).bind(integration.board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
@@ -3129,6 +3255,7 @@ async fn archive_card(State(state): State<AppState>, current: CurrentUser, Path(
     .map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
     record_card_activity(database(&state)?, card_id, actor_id, "Задача архивирована", "").await;
+    record_discord_card_thread_event(database(&state)?, card_id, "archived").await;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
@@ -3144,6 +3271,7 @@ async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "archived_card_not_found", "Archived card was not found.".to_owned()))?;
     record_card_activity(database(&state)?, card.id, current.id, "Задача восстановлена", "").await;
+    record_discord_card_thread_event(database(&state)?, card.id, "restored").await;
     let _ = state.events.send(());
     Ok(Json(card))
 }
