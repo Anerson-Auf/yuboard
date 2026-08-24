@@ -1224,7 +1224,9 @@ async fn download_avatar(State(state): State<AppState>, current: CurrentUser) ->
     avatar_response(&state, current.id).await
 }
 
-async fn download_user_avatar(State(state): State<AppState>, _current: CurrentUser, Path(user_id): Path<Uuid>) -> Result<Response, ApiError> {
+// Avatars referenced by a public board must also be readable without a session;
+// otherwise the board JSON renders only fallback initials for anonymous viewers.
+async fn download_user_avatar(State(state): State<AppState>, _viewer: Viewer, Path(user_id): Path<Uuid>) -> Result<Response, ApiError> {
     avatar_response(&state, user_id).await
 }
 
