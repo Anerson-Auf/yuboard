@@ -411,6 +411,7 @@ export default function Home() {
   const [dragDropTarget, setDragDropTarget] = useState<DragDropTarget | null>(null);
   const [draggingColumnId, setDraggingColumnId] = useState<EntityId | null>(null);
   const [columnDropTarget, setColumnDropTarget] = useState<ColumnDropTarget | null>(null);
+  const [isBoardPanning, setBoardPanning] = useState(false);
   const [columnMenuId, setColumnMenuId] = useState<EntityId | null>(null);
   const [editingColumnId, setEditingColumnId] = useState<EntityId | null>(null);
   const [columnTitleDraft, setColumnTitleDraft] = useState('');
@@ -421,6 +422,7 @@ export default function Home() {
   const boardRef = useRef<HTMLElement | null>(null);
   const boardDragScrollFrameRef = useRef<number | null>(null);
   const boardDragScrollDirectionRef = useRef<-1 | 1 | null>(null);
+  const boardPanRef = useRef<{ pointerId: number; startX: number; startScrollLeft: number } | null>(null);
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
@@ -677,6 +679,28 @@ export default function Home() {
       boardDragScrollFrameRef.current = window.requestAnimationFrame(scroll);
     };
     boardDragScrollFrameRef.current = window.requestAnimationFrame(scroll);
+  }
+  function startBoardPan(event: ReactPointerEvent<HTMLElement>) {
+    if (event.button !== 0 || event.pointerType !== 'mouse' || dragging || draggingColumnId) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('.task-card, .column-head, button, input, textarea, select, a, .composer')) return;
+    const board = event.currentTarget;
+    boardPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startScrollLeft: board.scrollLeft };
+    board.setPointerCapture(event.pointerId);
+    setBoardPanning(true);
+    event.preventDefault();
+  }
+  function moveBoardPan(event: ReactPointerEvent<HTMLElement>) {
+    const pan = boardPanRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    event.currentTarget.scrollLeft = pan.startScrollLeft - (event.clientX - pan.startX);
+  }
+  function stopBoardPan(event: ReactPointerEvent<HTMLElement>) {
+    const pan = boardPanRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    boardPanRef.current = null;
+    setBoardPanning(false);
   }
   function updateBoardAutoScroll(event: ReactDragEvent<HTMLElement>) {
     const board = boardRef.current;
@@ -1672,7 +1696,7 @@ export default function Home() {
         </div>}
       </div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
-      <section className="board" ref={boardRef} aria-label="Канбан-доска">
+      <section className={`board ${isBoardPanning ? 'board-panning' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={moveBoardPan} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan}>
         {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <>{visibleColumns.map((column) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${draggingColumnId === column.id ? 'column-dragging' : ''} ${columnDropTarget?.visualColumnId === column.id ? `column-drop-${columnDropTarget.edge}` : ''}`} key={column.id} aria-label={column.title} onContextMenu={(event) => { if (isPublicViewer || (event.target instanceof Element && event.target.closest('.task-card'))) return; event.preventDefault(); event.stopPropagation(); setColumnContextMenu({ column, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 150) }); }} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId) { const bounds = event.currentTarget.getBoundingClientRect(); const after = event.clientX > bounds.left + bounds.width / 2; const index = columns.findIndex((item) => item.id === column.id); const next = after ? columns[index + 1] : undefined; setColumnDropTarget({ beforeColumnId: after ? next?.id ?? null : column.id, visualColumnId: column.id, edge: after ? 'after' : 'before' }); updateBoardAutoScroll(event); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { if (draggingColumnId) { setColumnDropTarget(null); stopBoardAutoScroll(); } else { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId) { const target = columnDropTarget?.visualColumnId === column.id ? columnDropTarget.beforeColumnId ?? undefined : column.id; moveColumn(draggingColumnId, target); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>
           <div className="column-head column-drag-handle" draggable={!isPublicViewer} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData('application/x-flowboard-column', String(column.id)); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setDragImage(event.currentTarget, 30, 22); setDraggingColumnId(column.id); setColumnDropTarget(null); }} onDragEnd={clearColumnDragState}><span className="column-drag-icon" aria-hidden="true">⠿</span><div>{editingColumnId === column.id ? <form className="column-rename" onSubmit={(event) => { event.preventDefault(); saveColumnTitle(column.id); }}><input autoFocus maxLength={200} value={columnTitleDraft} onChange={(event) => setColumnTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setEditingColumnId(null); }} aria-label="Название колонки" /><button type="submit" disabled={isSavingColumn}>✓</button></form> : <><h2>{column.title}</h2><span>{column.cards.length}</span></>}</div><div className="column-actions"><button className="column-menu" aria-label={`Меню колонки ${column.title}`} onClick={() => setColumnMenuId((current) => current === column.id ? null : column.id)}>•••</button>{columnMenuId === column.id && <div className="column-popover"><button onClick={() => beginColumnRename(column)}>Переименовать</button><button className="danger-action" onClick={() => deleteColumn(column)}>Удалить пустую</button></div>}</div></div>
           <div className={`card-list ${dragDropTarget?.listId === column.id && dragDropTarget.beforeCardId === null ? 'drop-at-end' : ''}`}>{column.cards.map((card) => <article className={`task-card ${card.completedAt ? 'completed' : ''} ${labelsCollapsed ? 'labels-collapsed' : ''} ${dragging?.cardId === card.id ? 'dragging' : ''} ${dragDropTarget?.listId === column.id && dragDropTarget.beforeCardId === card.id ? 'drop-before' : ''}`} key={card.id} draggable onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setCardContextMenu({ card, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 170) }); }} onDragStart={(event) => { didDragRef.current = false; event.dataTransfer.setData('application/x-flowboard-card', String(card.id)); event.dataTransfer.effectAllowed = 'move'; setDragging({ cardId: card.id, sourceListId: column.id }); setDragDropTarget(null); }} onDragEnd={() => { didDragRef.current = true; clearDragState(); window.setTimeout(() => { didDragRef.current = false; }, 0); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId || !dragging || dragging.cardId === card.id) return; const bounds = event.currentTarget.getBoundingClientRect(); const cardIndex = column.cards.findIndex((item) => item.id === card.id); const nextCard = event.clientY > bounds.top + bounds.height / 2 ? column.cards[cardIndex + 1] : card; setDragOverListId(column.id); setDragDropTarget({ listId: column.id, beforeCardId: nextCard?.id ?? null }); updateCardListAutoScroll(event); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); if (draggingColumnId) { moveColumn(draggingColumnId, column.id); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : card.id; if (!dragging || dragging.cardId === card.id || beforeCardId === dragging.cardId) { clearDragState(); return; } moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }} onClick={() => { if (!didDragRef.current) openCard(card); }}>
