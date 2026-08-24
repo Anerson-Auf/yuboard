@@ -201,6 +201,16 @@ GET /v1/integrations/discord/cards/{card-id}/comments?after={last-comment-id}&li
 
 With `after`, the API returns at most `limit` comments strictly newer than that ID, in chronological order. Store the ID of the last returned item and repeat while the response has `limit` items. `limit` defaults to 100 and is capped at 200. A cursor from another card is rejected. This makes `/close причина` processing incremental and prevents the bot from reprocessing old developer messages.
 
+Every comment response includes `author_name` and `author_avatar_url`. For a Discord author, the value is its original Discord CDN URL. For a Flowboard account, Flowboard returns an opaque, public URL scoped to this integration and card, so it is safe to pass to Discord webhook `avatar_url` after resolving it against the API base:
+
+```js
+const avatarUrl = comment.author_avatar_url
+  ? new URL(comment.author_avatar_url, api).href
+  : undefined;
+```
+
+The URL stops working as soon as the integration token is revoked; it does not expose the general Flowboard avatar endpoint.
+
 ## Add a player comment, screenshot, or video
 
 `message_id` makes the operation idempotent. Discord avatars and media must use Discord CDN HTTPS URLs. Supported attachments are JPEG, PNG, GIF, WebP, MP4, WebM, and MOV, up to 50 MiB each.

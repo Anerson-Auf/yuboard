@@ -941,6 +941,7 @@ async fn main() {
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
         .route("/v1/cards/{card_id}/comments", post(create_comment))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
+        .route("/v1/discord-media/{token}/cards/{card_id}/avatars/{user_id}", get(download_discord_comment_avatar))
         .route("/v1/integrations/discord/labels", get(list_discord_labels).post(create_discord_label))
         .route("/v1/integrations/discord/labels/{label_id}", patch(update_discord_label).delete(delete_discord_label))
         .route("/v1/integrations/discord/cards/sync", get(list_discord_card_sync_events))
@@ -2812,7 +2813,11 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
     let card_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards WHERE id = $1 AND board_id = $2)")
         .bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
-    let Some(after) = query.after else { return Ok(Json(load_card_comments(pool, card_id, None).await?)); };
+    let Some(after) = query.after else {
+        let mut comments = load_card_comments(pool, card_id, None).await?;
+        rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
+        return Ok(Json(comments));
+    };
     let cursor_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2)")
         .bind(after).bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if !cursor_exists { return Err(ApiError::bad_request("The comment cursor does not belong to this card.")); }
@@ -2822,7 +2827,9 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
     )
     .bind(card_id).bind(after).bind(limit)
     .fetch_all(pool).await.map_err(ApiError::internal)?;
-    Ok(Json(comment_responses(pool, rows, None).await?))
+    let mut comments = comment_responses(pool, rows, None).await?;
+    rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
+    Ok(Json(comments))
 }
 
 async fn set_discord_card_cover(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<SetDiscordCardCoverRequest>) -> ApiResult<Value> {
@@ -3235,6 +3242,41 @@ async fn download_public_board_background(State(state): State<AppState>, Path(bo
 async fn download_public_board_avatar(State(state): State<AppState>, Path((board_id, user_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
     let is_visible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM boards b WHERE b.id = $1 AND b.archived_at IS NULL AND b.visibility = 'public' AND (EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2) OR EXISTS(SELECT 1 FROM card_assignees ca INNER JOIN cards c ON c.id = ca.card_id WHERE c.board_id = b.id AND c.archived_at IS NULL AND ca.user_id = $2) OR EXISTS(SELECT 1 FROM comments cm INNER JOIN cards c ON c.id = cm.card_id WHERE c.board_id = b.id AND cm.author_id = $2)))")
         .bind(board_id).bind(user_id).fetch_one(database(&state)?).await.map_err(ApiError::internal)?;
+    if !is_visible { return Err(ApiError(StatusCode::NOT_FOUND, "avatar_not_found", "Avatar was not found.".to_owned())); }
+    avatar_response(&state, user_id).await
+}
+
+async fn discord_public_media_token(pool: &PgPool, integration_id: Uuid) -> Result<Uuid, ApiError> {
+    if let Some(token) = sqlx::query_scalar::<_, Uuid>("SELECT token FROM discord_public_media_tokens WHERE integration_id = $1")
+        .bind(integration_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+    {
+        return Ok(token);
+    }
+    let generated = Uuid::new_v4();
+    sqlx::query("INSERT INTO discord_public_media_tokens (integration_id, token) VALUES ($1, $2) ON CONFLICT (integration_id) DO NOTHING")
+        .bind(integration_id).bind(generated).execute(pool).await.map_err(ApiError::internal)?;
+    sqlx::query_scalar::<_, Uuid>("SELECT token FROM discord_public_media_tokens WHERE integration_id = $1")
+        .bind(integration_id).fetch_one(pool).await.map_err(ApiError::internal)
+}
+
+async fn rewrite_discord_comment_avatar_urls(pool: &PgPool, integration: DiscordIntegration, card_id: Uuid, comments: &mut [CommentResponse]) -> Result<(), ApiError> {
+    if !comments.iter().any(|comment| comment.author_id.is_some() && comment.author_avatar_url.as_deref().is_some_and(|url| url.starts_with("/v1/avatars/"))) {
+        return Ok(());
+    }
+    let token = discord_public_media_token(pool, integration.id).await?;
+    for comment in comments {
+        if let (Some(author_id), Some(url)) = (comment.author_id, comment.author_avatar_url.as_deref()) {
+            if url.starts_with("/v1/avatars/") {
+                comment.author_avatar_url = Some(format!("/v1/discord-media/{token}/cards/{card_id}/avatars/{author_id}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn download_discord_comment_avatar(State(state): State<AppState>, Path((token, card_id, user_id)): Path<(Uuid, Uuid, Uuid)>) -> Result<Response, ApiError> {
+    let is_visible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM discord_public_media_tokens mt INNER JOIN discord_integrations di ON di.id = mt.integration_id INNER JOIN boards b ON b.id = di.board_id INNER JOIN cards c ON c.id = $2 AND c.board_id = b.id WHERE mt.token = $1 AND di.revoked_at IS NULL AND b.archived_at IS NULL AND EXISTS(SELECT 1 FROM comments cm WHERE cm.card_id = c.id AND cm.author_id = $3))")
+        .bind(token).bind(card_id).bind(user_id).fetch_one(database(&state)?).await.map_err(ApiError::internal)?;
     if !is_visible { return Err(ApiError(StatusCode::NOT_FOUND, "avatar_not_found", "Avatar was not found.".to_owned())); }
     avatar_response(&state, user_id).await
 }
