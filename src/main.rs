@@ -498,6 +498,19 @@ struct CreateLabelRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateDiscordLabelRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReplaceDiscordCardLabelsRequest {
+    label_ids: Vec<Uuid>,
+}
+
+#[derive(Deserialize)]
 struct ReplaceCardLabelsRequest {
     label_ids: Vec<Uuid>,
 }
@@ -928,12 +941,16 @@ async fn main() {
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
         .route("/v1/cards/{card_id}/comments", post(create_comment))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
+        .route("/v1/integrations/discord/labels", get(list_discord_labels).post(create_discord_label))
+        .route("/v1/integrations/discord/labels/{label_id}", patch(update_discord_label).delete(delete_discord_label))
         .route("/v1/integrations/discord/cards/sync", get(list_discord_card_sync_events))
         .route("/v1/integrations/discord/threads/{thread_id}/card", get(get_discord_thread_card))
         .route("/v1/integrations/discord/cards", get(list_discord_board_cards).post(create_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}", get(get_discord_card).delete(archive_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/restore", post(restore_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/thread", put(bind_discord_card_thread))
+        .route("/v1/integrations/discord/cards/{card_id}/labels", put(replace_discord_card_labels))
+        .route("/v1/integrations/discord/cards/{card_id}/labels/{label_id}", post(add_discord_card_label).delete(remove_discord_card_label))
         .route("/v1/integrations/discord/cards/{card_id}/move", post(move_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/cover", post(set_discord_card_cover))
         .route("/v1/integrations/discord/cards/{card_id}/completion", patch(set_discord_card_completion))
@@ -2580,6 +2597,88 @@ async fn list_discord_board_lists(State(state): State<AppState>, integration: Di
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(lists))
+}
+
+async fn list_discord_labels(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<LabelResponse>> {
+    let labels = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color FROM labels WHERE board_id = $1 ORDER BY name")
+        .bind(integration.board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
+    Ok(Json(labels))
+}
+
+async fn create_discord_label(State(state): State<AppState>, integration: DiscordIntegration, Json(request): Json<CreateLabelRequest>) -> ApiResult<LabelResponse> {
+    let name = valid_text(&request.name, "name", 60)?;
+    let color = valid_label_color(&request.color)?;
+    let label = sqlx::query_as::<_, LabelResponse>(
+        "INSERT INTO labels (id, workspace_id, board_id, name, color) SELECT $1, b.workspace_id, b.id, $2, $3 FROM boards b WHERE b.id = $4 AND b.archived_at IS NULL ON CONFLICT (board_id, name) DO UPDATE SET color = EXCLUDED.color RETURNING id, name, color",
+    )
+    .bind(Uuid::new_v4()).bind(name).bind(color).bind(integration.board_id)
+    .fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Discord integration board was not found.".to_owned()))?;
+    let _ = state.events.send(());
+    Ok(Json(label))
+}
+
+async fn update_discord_label(State(state): State<AppState>, integration: DiscordIntegration, Path(label_id): Path<Uuid>, Json(request): Json<UpdateDiscordLabelRequest>) -> ApiResult<LabelResponse> {
+    let pool = database(&state)?;
+    let current = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color FROM labels WHERE id = $1 AND board_id = $2")
+        .bind(label_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "label_not_found", "Label was not found on this Discord integration board.".to_owned()))?;
+    let name = match request.name { Some(value) => valid_text(&value, "name", 60)?.to_owned(), None => current.name };
+    let color = match request.color { Some(value) => valid_label_color(&value)?, None => current.color };
+    let duplicate_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM labels WHERE board_id = $1 AND name = $2 AND id <> $3)")
+        .bind(integration.board_id).bind(&name).bind(label_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if duplicate_exists { return Err(ApiError::bad_request("A label with this name already exists on the board.")); }
+    let label = sqlx::query_as::<_, LabelResponse>("UPDATE labels SET name = $1, color = $2 WHERE id = $3 AND board_id = $4 RETURNING id, name, color")
+        .bind(name).bind(color).bind(label_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    let _ = state.events.send(());
+    Ok(Json(label))
+}
+
+async fn delete_discord_label(State(state): State<AppState>, integration: DiscordIntegration, Path(label_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let deleted = sqlx::query("DELETE FROM labels WHERE id = $1 AND board_id = $2")
+        .bind(label_id).bind(integration.board_id).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    if deleted.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "label_not_found", "Label was not found on this Discord integration board.".to_owned())); }
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn replace_discord_card_labels(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<ReplaceDiscordCardLabelsRequest>) -> ApiResult<Vec<LabelResponse>> {
+    if request.label_ids.len() > 20 { return Err(ApiError::bad_request("A card can have at most 20 labels.")); }
+    let label_ids: Vec<Uuid> = request.label_ids.into_iter().collect::<HashSet<_>>().into_iter().collect();
+    let pool = database(&state)?;
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    let card_board_id = sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM cards WHERE id = $1 AND archived_at IS NULL FOR UPDATE")
+        .bind(card_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?;
+    if card_board_id != Some(integration.board_id) { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
+    let matching_labels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM labels WHERE board_id = $1 AND id = ANY($2)")
+        .bind(integration.board_id).bind(&label_ids).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
+    if matching_labels != label_ids.len() as i64 { return Err(ApiError::bad_request("Every label must belong to this Discord integration board.")); }
+    sqlx::query("DELETE FROM card_labels WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    if !label_ids.is_empty() {
+        sqlx::query("INSERT INTO card_labels (card_id, label_id) SELECT $1, label_id FROM UNNEST($2::uuid[]) AS selected_labels(label_id) ON CONFLICT DO NOTHING")
+            .bind(card_id).bind(&label_ids).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    }
+    let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name")
+        .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
+    transaction.commit().await.map_err(ApiError::internal)?;
+    record_external_card_activity(pool, card_id, "Discord: обновлены метки", "").await;
+    let _ = state.events.send(());
+    Ok(Json(labels))
+}
+
+async fn add_discord_card_label(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, label_id)): Path<(Uuid, Uuid)>) -> ApiResult<Vec<LabelResponse>> {
+    let current = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id INNER JOIN cards c ON c.id = cl.card_id WHERE cl.card_id = $1 AND c.board_id = $2 ORDER BY l.name")
+        .bind(card_id).bind(integration.board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
+    let mut label_ids: Vec<Uuid> = current.iter().map(|label| label.id).collect();
+    if !label_ids.contains(&label_id) { label_ids.push(label_id); }
+    replace_discord_card_labels(State(state), integration, Path(card_id), Json(ReplaceDiscordCardLabelsRequest { label_ids })).await
+}
+
+async fn remove_discord_card_label(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, label_id)): Path<(Uuid, Uuid)>) -> ApiResult<Vec<LabelResponse>> {
+    let current = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id INNER JOIN cards c ON c.id = cl.card_id WHERE cl.card_id = $1 AND c.board_id = $2 ORDER BY l.name")
+        .bind(card_id).bind(integration.board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
+    let label_ids: Vec<Uuid> = current.into_iter().filter_map(|label| (label.id != label_id).then_some(label.id)).collect();
+    replace_discord_card_labels(State(state), integration, Path(card_id), Json(ReplaceDiscordCardLabelsRequest { label_ids })).await
 }
 
 async fn list_discord_board_cards(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<CardResponse>> {

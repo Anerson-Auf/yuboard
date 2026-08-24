@@ -38,6 +38,40 @@ GET /v1/integrations/discord/cards
 
 Returns active cards from this token's board only. Each entry contains `id`, `list_id`, `title`, and `description`. Use the card `id` to retrieve or append its conversation.
 
+## Manage labels
+
+Labels are scoped to the token's board. Their color must be a six-digit hex value such as `#579DFF`.
+
+```http
+GET /v1/integrations/discord/labels
+
+POST /v1/integrations/discord/labels
+{ "name": "Баг", "color": "#E34935" }
+
+PATCH /v1/integrations/discord/labels/{label-id}
+{ "name": "Критичный баг", "color": "#E34935" }
+
+DELETE /v1/integrations/discord/labels/{label-id}
+```
+
+Creating a label with an existing name updates its color and returns that existing label. Deleting a label removes it from every card on this board.
+
+To replace the full label set of one active card, including clearing it with an empty array:
+
+```http
+PUT /v1/integrations/discord/cards/{card-id}/labels
+{ "label_ids": ["label-uuid-1", "label-uuid-2"] }
+```
+
+For a single idempotent add/remove operation:
+
+```http
+POST /v1/integrations/discord/cards/{card-id}/labels/{label-id}
+DELETE /v1/integrations/discord/cards/{card-id}/labels/{label-id}
+```
+
+All variants return the resulting array of card labels, except deleting a shared label, which returns `204 No Content`.
+
 ## Read or change completion status
 
 ```http
