@@ -5,6 +5,7 @@ use argon2::{
     Argon2,
 };
 use axum::{
+    body::Body,
     extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, State},
     http::{header, request::Parts, HeaderName, HeaderValue, Method, StatusCode},
     response::{sse::{Event, Sse}, IntoResponse, Response},
@@ -27,6 +28,7 @@ struct AppState {
     database: Option<PgPool>,
     upload_dir: PathBuf,
     cookie_secure: bool,
+    external_http: reqwest::Client,
     events: broadcast::Sender<()>,
     auth_rate_limiter: RateLimiter,
 }
@@ -871,6 +873,11 @@ async fn main() {
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, HeaderName::from_static("x-flowboard-csrf")])
         .allow_credentials(true);
     let (events, _) = broadcast::channel(128);
+    let external_http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .expect("could not initialize external media client");
 
     let app = Router::new()
         .route("/health", get(health))
@@ -888,6 +895,7 @@ async fn main() {
         .route("/v1/auth/sessions/{session_id}", axum::routing::delete(revoke_session))
         .route("/v1/auth/avatar", get(download_avatar).post(upload_avatar))
         .route("/v1/avatars/{user_id}", get(download_user_avatar))
+        .route("/v1/comments/{comment_id}/avatar", get(download_comment_avatar))
         .route("/v1/public/boards/{board_id}/background", get(download_public_board_background))
         .route("/v1/public/boards/{board_id}/avatars/{user_id}", get(download_public_board_avatar))
         .route("/v1/workspaces", get(list_workspaces).post(create_workspace))
@@ -964,7 +972,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, events, auth_rate_limiter: RateLimiter { attempts: Arc::new(Mutex::new(HashMap::new())) } })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, auth_rate_limiter: RateLimiter { attempts: Arc::new(Mutex::new(HashMap::new())) } })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -1286,6 +1294,16 @@ async fn current_account(
     Ok(Json(auth_response(account)))
 }
 
+fn is_discord_cdn_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && matches!(
+        url.host_str(),
+        Some("cdn.discordapp.com")
+            | Some("media.discordapp.net")
+            | Some("images-ext-1.discordapp.net")
+            | Some("images-ext-2.discordapp.net")
+    )
+}
+
 async fn auth_state(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -1351,6 +1369,19 @@ async fn download_avatar(State(state): State<AppState>, current: CurrentUser) ->
 
 async fn download_user_avatar(State(state): State<AppState>, _current: CurrentUser, Path(user_id): Path<Uuid>) -> Result<Response, ApiError> {
     avatar_response(&state, user_id).await
+}
+
+async fn download_comment_avatar(State(state): State<AppState>, current: Viewer, Path(comment_id): Path<Uuid>) -> Result<Response, ApiError> {
+    let avatar_url = sqlx::query_scalar::<_, String>(
+        "SELECT c.external_author_avatar_url FROM comments c INNER JOIN cards card ON card.id = c.card_id INNER JOIN boards b ON b.id = card.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.external_author_avatar_url IS NOT NULL AND card.archived_at IS NULL AND (b.visibility = 'public' OR m.user_id IS NOT NULL)",
+    )
+    .bind(comment_id)
+    .bind(current.0.map(|user| user.id))
+    .fetch_optional(database(&state)?)
+    .await
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "avatar_not_found", "Avatar was not found.".to_owned()))?;
+    proxy_discord_attachment(&state.external_http, &avatar_url, "image/webp").await
 }
 
 async fn logout(
@@ -1807,7 +1838,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE COALESCE(a.external_url, '/v1/attachments/' || a.id::text || '/content') END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id) AS attachment_count FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id) AS attachment_count FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL ORDER BY c.position")
         .bind(board_id)
         .fetch_all(pool)
         .await
@@ -2374,16 +2405,37 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
         for comment in &mut comments {
             if let Some(author_id) = comment.author_id {
                 comment.author_avatar_url = Some(format!("/v1/public/boards/{board_id}/avatars/{author_id}"));
+            } else if comment.author_avatar_url.is_some() {
+                comment.author_avatar_url = Some(format!("/v1/comments/{}/avatar", comment.id));
+            }
+        }
+    } else {
+        for comment in &mut comments {
+            if comment.author_id.is_none() && comment.author_avatar_url.is_some() {
+                comment.author_avatar_url = Some(format!("/v1/comments/{}/avatar", comment.id));
             }
         }
     }
     let attachments = sqlx::query_as::<_, AttachmentResponse>(
-        "SELECT id, original_name, media_type, byte_size, COALESCE(external_url, '/v1/attachments/' || id::text || '/content') AS url FROM attachments WHERE card_id = $1 ORDER BY created_at DESC",
+        "SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE card_id = $1 ORDER BY created_at DESC",
     )
     .bind(card_id)
     .fetch_all(pool)
     .await
     .map_err(ApiError::internal)?;
+    let external_urls = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, external_url FROM attachments WHERE card_id = $1 AND external_url IS NOT NULL",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    for comment in &mut comments {
+        for (attachment_id, external_url) in &external_urls {
+            let local_url = format!("/v1/attachments/{attachment_id}/content");
+            comment.body = comment.body.replace(external_url, &local_url);
+        }
+    }
     let activity = sqlx::query_as::<_, CardActivityResponse>(
         "SELECT a.id, a.action, a.detail, COALESCE(u.username, 'Deleted user') AS actor_name, a.created_at::text AS created_at FROM card_activity a LEFT JOIN users u ON u.id = a.actor_id WHERE a.card_id = $1 ORDER BY a.created_at DESC LIMIT 100",
     )
@@ -2911,8 +2963,9 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
             return Err(ApiError::bad_request("Discord attachments must be JPEG, PNG, GIF, WebP, MP4, WebM, or MOV."));
         }
         if !(0..=50 * 1024 * 1024).contains(&attachment.byte_size) { return Err(ApiError::bad_request("Discord attachment size must be between 0 and 50 MiB.")); }
-        parts.push(discord_media_markdown(&filename, &attachment.media_type, &url));
-        attachment_rows.push((url, filename, attachment.media_type.clone(), attachment.byte_size));
+        let attachment_id = Uuid::new_v4();
+        parts.push(discord_media_markdown(&filename, &attachment.media_type, &format!("/v1/attachments/{attachment_id}/content")));
+        attachment_rows.push((attachment_id, url, filename, attachment.media_type.clone(), attachment.byte_size));
     }
     let body = valid_text(&parts.join("\n"), "body", 10_000)?.to_owned();
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
@@ -2920,9 +2973,9 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
     sqlx::query("INSERT INTO comments (id, card_id, author_id, body, external_author_name, external_author_avatar_url, discord_integration_id, discord_message_id) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)")
         .bind(comment_id).bind(card_id).bind(&body).bind(&author_name).bind(&author_avatar_url).bind(integration.id).bind(&message_id)
         .execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    for (url, filename, media_type, byte_size) in attachment_rows {
+    for (attachment_id, url, filename, media_type, byte_size) in attachment_rows {
         sqlx::query("INSERT INTO attachments (id, card_id, uploaded_by, object_key, original_name, media_type, byte_size, external_url) VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6)")
-            .bind(Uuid::new_v4()).bind(card_id).bind(filename).bind(media_type).bind(byte_size).bind(url)
+            .bind(attachment_id).bind(card_id).bind(filename).bind(media_type).bind(byte_size).bind(url)
             .execute(&mut *transaction).await.map_err(ApiError::internal)?;
     }
     transaction.commit().await.map_err(ApiError::internal)?;
@@ -3054,7 +3107,9 @@ async fn download_attachment(State(state): State<AppState>, current: Viewer, Pat
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment was not found.".to_owned()))?;
-    if let Some(url) = attachment.2 { return Ok((StatusCode::FOUND, [(header::LOCATION, HeaderValue::from_str(&url).map_err(|_| ApiError::storage())?)]).into_response()); }
+    if let Some(url) = attachment.2 {
+        return proxy_discord_attachment(&state.external_http, &url, &attachment.1).await;
+    }
     let object_key = attachment.0.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()))?;
     let bytes = tokio::fs::read(state.upload_dir.join(object_key)).await.map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -3066,6 +3121,39 @@ async fn download_attachment(State(state): State<AppState>, current: Viewer, Pat
     })?;
     let content_type = HeaderValue::from_str(&attachment.1).map_err(|_| ApiError::storage())?;
     Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
+}
+
+// Discord CDN URLs may expire or be blocked for one viewer. Keep them behind
+// Flowboard's authorised attachment endpoint; the host allow-list prevents this
+// from becoming a generic server-side request proxy.
+async fn proxy_discord_attachment(client: &reqwest::Client, url: &str, media_type: &str) -> Result<Response, ApiError> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| ApiError::storage())?;
+    if !is_discord_cdn_url(&parsed) {
+        return Err(ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "External attachment was not found.".to_owned()));
+    }
+    let response = client.get(parsed).send().await.map_err(|error| {
+        tracing::warn!(?error, "external Discord attachment request failed");
+        ApiError(StatusCode::BAD_GATEWAY, "attachment_unavailable", "External attachment is temporarily unavailable.".to_owned())
+    })?;
+    if !response.status().is_success() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "External attachment was not found.".to_owned()));
+    }
+    if response.content_length().is_some_and(|size| size > 50 * 1024 * 1024) {
+        return Err(ApiError::bad_request("External attachment exceeds the 50 MiB limit."));
+    }
+    let content_type = HeaderValue::from_str(media_type).map_err(|_| ApiError::storage())?;
+    let mut received = 0usize;
+    let stream = response.bytes_stream().map(move |chunk| {
+        chunk.map_err(std::io::Error::other).and_then(|bytes| {
+            received += bytes.len();
+            if received > 50 * 1024 * 1024 {
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "External attachment exceeds the 50 MiB limit."))
+            } else {
+                Ok(bytes)
+            }
+        })
+    });
+    Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=300"))], Body::from_stream(stream)).into_response())
 }
 
 async fn create_card(State(state): State<AppState>, current: CurrentUser, Path(list_id): Path<Uuid>, Json(request): Json<CreateCardRequest>) -> ApiResult<CardResponse> {
