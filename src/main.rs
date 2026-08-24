@@ -792,6 +792,7 @@ struct ChecklistItemActivityRow {
     title: String,
     is_completed: bool,
     description: String,
+    checklist_title: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -2606,12 +2607,12 @@ async fn create_checklist_item(State(state): State<AppState>, current: CurrentUs
     let title = valid_text(&request.title, "title", 500)?;
     let pool = database(&state)?;
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
-        "INSERT INTO checklist_items (id, checklist_id, card_id, title, position) SELECT $1, cl.id, cl.card_id, $2, COALESCE((SELECT MAX(position) FROM checklist_items WHERE checklist_id = cl.id), 0) + 1000 FROM checklists cl JOIN cards c ON c.id = cl.card_id JOIN boards b ON b.id = c.board_id JOIN board_members bm ON bm.board_id = b.id WHERE cl.id = $3 AND c.archived_at IS NULL AND bm.user_id = $4 AND flowboard_has_permission(b.workspace_id, $4, 'edit_cards'::workspace_permission) RETURNING id, card_id, title, is_completed, description",
+        "INSERT INTO checklist_items (id, checklist_id, card_id, title, position) SELECT $1, cl.id, cl.card_id, $2, COALESCE((SELECT MAX(position) FROM checklist_items WHERE checklist_id = cl.id), 0) + 1000 FROM checklists cl JOIN cards c ON c.id = cl.card_id JOIN boards b ON b.id = c.board_id JOIN board_members bm ON bm.board_id = b.id WHERE cl.id = $3 AND c.archived_at IS NULL AND bm.user_id = $4 AND flowboard_has_permission(b.workspace_id, $4, 'edit_cards'::workspace_permission) RETURNING id, card_id, title, is_completed, description, (SELECT title FROM checklists WHERE id = checklist_id) AS checklist_title",
     )
     .bind(Uuid::new_v4()).bind(title).bind(checklist_id).bind(actor_id)
     .fetch_optional(pool).await.map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_not_found", "Checklist was not found.".to_owned()))?;
-    record_card_activity(pool, item.card_id, actor_id, "Добавлен пункт в чек-лист", &item.title).await;
+    record_card_activity(pool, item.card_id, actor_id, "Добавлен пункт в чек-лист", &format!("{}: {}", item.checklist_title, item.title)).await;
     let _ = state.events.send(());
     Ok(Json(ChecklistItemResponse { id: item.id, title: item.title, is_completed: item.is_completed, description: item.description, attachments: vec![] }))
 }
@@ -2625,7 +2626,7 @@ async fn update_checklist_item(State(state): State<AppState>, current: CurrentUs
     }).transpose()?;
     if request.is_completed.is_none() && description.is_none() { return Err(ApiError::bad_request("Provide a checklist item change.")); }
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
-        "UPDATE checklist_items i SET is_completed = COALESCE($1, i.is_completed), completed_at = CASE WHEN COALESCE($1, i.is_completed) THEN COALESCE(i.completed_at, now()) ELSE NULL END, completed_by = CASE WHEN COALESCE($1, i.is_completed) THEN COALESCE(i.completed_by, $2) ELSE NULL END, description = COALESCE($3, i.description) FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE i.id = $4 AND i.card_id = c.id AND c.archived_at IS NULL AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING i.id, i.card_id, i.title, i.is_completed, i.description",
+        "UPDATE checklist_items i SET is_completed = COALESCE($1, i.is_completed), completed_at = CASE WHEN COALESCE($1, i.is_completed) THEN COALESCE(i.completed_at, now()) ELSE NULL END, completed_by = CASE WHEN COALESCE($1, i.is_completed) THEN COALESCE(i.completed_by, $2) ELSE NULL END, description = COALESCE($3, i.description) FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE i.id = $4 AND i.card_id = c.id AND c.archived_at IS NULL AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING i.id, i.card_id, i.title, i.is_completed, i.description, (SELECT title FROM checklists WHERE id = i.checklist_id) AS checklist_title",
     )
     .bind(request.is_completed)
     .bind(actor_id)
@@ -2636,7 +2637,7 @@ async fn update_checklist_item(State(state): State<AppState>, current: CurrentUs
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
     let action = if request.description.is_some() { "Изменено описание пункта чек-листа" } else if item.is_completed { "Отмечен пункт чек-листа" } else { "Снята отметка с пункта" };
-    record_card_activity(pool, item.card_id, actor_id, action, &item.title).await;
+    record_card_activity(pool, item.card_id, actor_id, action, &format!("{}: {}", item.checklist_title, item.title)).await;
     let _ = state.events.send(());
     let attachments = sqlx::query_as::<_, AttachmentResponse>("SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE checklist_item_id = $1 ORDER BY created_at DESC")
         .bind(item.id).fetch_all(pool).await.map_err(ApiError::internal)?;
@@ -2649,7 +2650,7 @@ async fn delete_checklist_item(State(state): State<AppState>, current: CurrentUs
     let attachment_keys = sqlx::query_scalar::<_, Option<String>>("SELECT object_key FROM attachments WHERE checklist_item_id = $1")
         .bind(item_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
-        "DELETE FROM checklist_items i USING cards c, boards b, board_members m WHERE i.id = $1 AND i.card_id = c.id AND c.board_id = b.id AND m.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING i.id, i.card_id, i.title, i.is_completed, i.description",
+        "DELETE FROM checklist_items i USING cards c, boards b, board_members m WHERE i.id = $1 AND i.card_id = c.id AND c.board_id = b.id AND m.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING i.id, i.card_id, i.title, i.is_completed, i.description, (SELECT title FROM checklists WHERE id = i.checklist_id) AS checklist_title",
     )
     .bind(item_id)
     .bind(actor_id)
@@ -2657,7 +2658,7 @@ async fn delete_checklist_item(State(state): State<AppState>, current: CurrentUs
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
-    record_card_activity(pool, item.card_id, actor_id, "Удалён пункт из чек-листа", &item.title).await;
+    record_card_activity(pool, item.card_id, actor_id, "Удалён пункт из чек-листа", &format!("{}: {}", item.checklist_title, item.title)).await;
     for key in attachment_keys.into_iter().flatten() { let _ = tokio::fs::remove_file(state.upload_dir.join(key)).await; }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
