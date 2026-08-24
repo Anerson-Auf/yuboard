@@ -5,7 +5,7 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, State},
+    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, State},
     http::{header, request::Parts, HeaderName, HeaderValue, Method, StatusCode},
     response::{sse::{Event, Sse}, IntoResponse, Response},
     routing::{get, patch, post, put},
@@ -529,6 +529,14 @@ struct MoveCardRequest {
     target_list_id: Uuid,
     #[serde(default)]
     before_card_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+struct DiscordCommentQuery {
+    #[serde(default)]
+    after: Option<Uuid>,
+    #[serde(default)]
+    limit: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -2212,6 +2220,10 @@ async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Optio
     .fetch_all(pool)
     .await
     .map_err(ApiError::internal)?;
+    comment_responses(pool, rows, current_user_id).await
+}
+
+async fn comment_responses(pool: &PgPool, rows: Vec<CommentRow>, current_user_id: Option<Uuid>) -> Result<Vec<CommentResponse>, ApiError> {
     let mut comments: Vec<CommentResponse> = rows.into_iter().map(|row| CommentResponse {
         id: row.id, body: row.body, author_id: row.author_id, author_name: row.author_name, author_avatar_url: row.author_avatar_url, parent_comment_id: row.parent_comment_id,
         created_at: row.created_at, edited_at: row.edited_at, reactions: vec![],
@@ -2545,12 +2557,22 @@ async fn move_discord_card(State(state): State<AppState>, integration: DiscordIn
     Ok(Json(card))
 }
 
-async fn list_discord_card_comments(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CommentResponse>> {
+async fn list_discord_card_comments(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Query(query): Query<DiscordCommentQuery>) -> ApiResult<Vec<CommentResponse>> {
     let pool = database(&state)?;
     let card_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards WHERE id = $1 AND board_id = $2)")
         .bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
-    Ok(Json(load_card_comments(pool, card_id, None).await?))
+    let Some(after) = query.after else { return Ok(Json(load_card_comments(pool, card_id, None).await?)); };
+    let cursor_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2)")
+        .bind(after).bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if !cursor_exists { return Err(ApiError::bad_request("The comment cursor does not belong to this card.")); }
+    let limit = i64::from(query.limit.unwrap_or(100).clamp(1, 200));
+    let rows = sqlx::query_as::<_, CommentRow>(
+        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id CROSS JOIN (SELECT created_at, id FROM comments WHERE id = $2 AND card_id = $1) anchor WHERE c.card_id = $1 AND (c.created_at, c.id) > (anchor.created_at, anchor.id) ORDER BY c.created_at ASC, c.id ASC LIMIT $3",
+    )
+    .bind(card_id).bind(after).bind(limit)
+    .fetch_all(pool).await.map_err(ApiError::internal)?;
+    Ok(Json(comment_responses(pool, rows, None).await?))
 }
 
 async fn set_discord_card_cover(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<SetDiscordCardCoverRequest>) -> ApiResult<Value> {

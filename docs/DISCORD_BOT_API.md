@@ -128,6 +128,16 @@ GET /v1/integrations/discord/cards/{card-id}/comments
 
 The response is the ordered card conversation, including Flowboard and Discord-originated comments. The card may be in any list of this token's board.
 
+### Poll only new comments
+
+Do one full request when the bot first starts, store the newest returned comment ID, then poll with that cursor instead of downloading the whole history:
+
+```http
+GET /v1/integrations/discord/cards/{card-id}/comments?after={last-comment-id}&limit=100
+```
+
+With `after`, the API returns at most `limit` comments strictly newer than that ID, in chronological order. Store the ID of the last returned item and repeat while the response has `limit` items. `limit` defaults to 100 and is capped at 200. A cursor from another card is rejected. This makes `/close причина` processing incremental and prevents the bot from reprocessing old developer messages.
+
 ## Add a player comment, screenshot, or video
 
 `message_id` makes the operation idempotent. Discord avatars and media must use Discord CDN HTTPS URLs. Supported attachments are JPEG, PNG, GIF, WebP, MP4, WebM, and MOV, up to 50 MiB each.
