@@ -421,6 +421,7 @@ export default function Home() {
   const [editingColumnId, setEditingColumnId] = useState<EntityId | null>(null);
   const [columnTitleDraft, setColumnTitleDraft] = useState('');
   const [isSavingColumn, setSavingColumn] = useState(false);
+  const [cardDetailRevision, setCardDetailRevision] = useState(0);
   const didDragRef = useRef(false);
   const dragScrollFrameRef = useRef<number | null>(null);
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1 } | null>(null);
@@ -530,7 +531,7 @@ export default function Home() {
       .catch(() => { if (!cancelled) showToast('Не удалось загрузить детали карточки'); })
       .finally(() => { if (!cancelled) setDetailsLoading(false); });
     return () => { cancelled = true; };
-  }, [selectedCardId, persistence]);
+  }, [selectedCardId, persistence, cardDetailRevision]);
 
   useEffect(() => {
     if (persistence !== 'connected' || !boardId) return;
@@ -542,13 +543,16 @@ export default function Home() {
         void fetch(`${API_URL}/v1/boards/${boardId}`).then(async (response) => {
           if (!response.ok) throw new Error('realtime refresh failed');
           applyBoard(await response.json() as ApiBoard);
+          // The board payload only has comment counters. Reload an open card as
+          // well, so Discord/API comments appear without closing the modal.
+          if (typeof selectedCardId === 'string') setCardDetailRevision((current) => current + 1);
         }).catch(() => undefined);
       }, 180);
     };
     stream.addEventListener('refresh', refresh);
     stream.addEventListener('access-revoked', () => { stream.close(); setSelected(null); setView('home'); showToast('Доступ к пространству отозван'); });
     return () => { window.clearTimeout(refreshTimer); stream.close(); };
-  }, [boardId, persistence, isPublicViewer]);
+  }, [boardId, persistence, isPublicViewer, selectedCardId]);
 
   useEffect(() => {
     const canvas = diagramCanvasRef.current;
