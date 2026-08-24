@@ -806,13 +806,11 @@ export default function Home() {
     setCommentDraft('');
   }
   function archiveCard(card: Card) {
-    setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) })));
-    setSelected((current) => current?.id === card.id ? null : current);
     if (persistence === 'connected' && typeof card.id === 'string') {
       void fetch(`${API_URL}/v1/cards/${card.id}`, { method: 'DELETE' })
-        .then((response) => { if (!response.ok) throw new Error('archive failed'); showToast('Задача перемещена в архив'); })
-        .catch(() => showToast('Не удалось сохранить архивирование'));
-    } else showToast('Задача удалена');
+        .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось архивировать задачу'); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); showToast('Задача перемещена в архив'); })
+        .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось сохранить архивирование'));
+    } else { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); showToast('Задача удалена'); }
   }
   function archiveSelectedCard() {
     if (!selected) return;
@@ -831,7 +829,7 @@ export default function Home() {
   function restoreArchivedCard(card: ArchivedCard) {
     if (persistence !== 'connected') return;
     void fetch(`${API_URL}/v1/cards/${card.id}/restore`, { method: 'POST' })
-      .then(async (response) => { if (!response.ok) throw new Error('restore failed'); return response.json() as Promise<{ id: string; list_id: string; title: string; description: string }>; })
+      .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось восстановить задачу'); return response.json() as Promise<{ id: string; list_id: string; title: string; description: string }>; })
       .then((restored) => {
         setArchivedCards((current) => current.filter((item) => item.id !== card.id));
         setColumns((current) => current.map((column) => column.id === restored.list_id
@@ -839,7 +837,7 @@ export default function Home() {
           : column));
         showToast('Задача восстановлена');
       })
-      .catch(() => showToast('Не удалось восстановить задачу'));
+      .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось восстановить задачу'));
   }
   function openTeam() {
     if (!boardId) return;
@@ -1382,8 +1380,8 @@ export default function Home() {
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((item) => item.id === card.id ? { ...item, completedAt } : item) })));
     if (persistence !== 'connected' || typeof card.id !== 'string') return;
     void fetch(`${API_URL}/v1/cards/${card.id}/completion`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_completed: !card.completedAt }) })
-      .then((response) => { if (!response.ok) throw new Error('completion save failed'); })
-      .catch(() => showToast('Не удалось сохранить статус задачи'));
+      .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось сохранить статус задачи'); })
+      .catch((error) => { updateSelectedCard(card.id === selected?.id ? { completedAt: card.completedAt } : {}); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((item) => item.id === card.id ? { ...item, completedAt: card.completedAt } : item) }))); showToast(error instanceof Error ? error.message : 'Не удалось сохранить статус задачи'); });
   }
   function beginColumnRename(column: Column) { setColumnMenuId(null); setEditingColumnId(column.id); setColumnTitleDraft(column.title); }
   function saveColumnTitle(columnId: EntityId) {

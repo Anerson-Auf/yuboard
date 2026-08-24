@@ -1424,19 +1424,19 @@ async fn ensure_workspace_owner(pool: &PgPool, workspace_id: Uuid, actor_id: Uui
 }
 
 async fn ensure_board_permission(pool: &PgPool, board_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
-    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM boards b JOIN board_members bm ON bm.board_id = b.id WHERE b.id = $1 AND b.archived_at IS NULL AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission))")
+    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM boards b LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission) AND (bm.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))))")
         .bind(board_id).bind(actor_id).bind(permission).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
     if allowed { Ok(()) } else { Err(ApiError::forbidden("This action is not permitted in the workspace.")) }
 }
 
 async fn ensure_card_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
-    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards c JOIN boards b ON b.id = c.board_id JOIN board_members bm ON bm.board_id = b.id WHERE c.id = $1 AND c.archived_at IS NULL AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission))")
+    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards c JOIN boards b ON b.id = c.board_id LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NULL AND b.archived_at IS NULL AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission) AND (bm.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))))")
         .bind(card_id).bind(actor_id).bind(permission).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
     if allowed { Ok(()) } else { Err(ApiError::forbidden("This action is not permitted in the workspace.")) }
 }
 
 async fn ensure_archived_card_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
-    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards c JOIN boards b ON b.id = c.board_id JOIN board_members bm ON bm.board_id = b.id WHERE c.id = $1 AND c.archived_at IS NOT NULL AND b.archived_at IS NULL AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission))")
+    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards c JOIN boards b ON b.id = c.board_id LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NOT NULL AND b.archived_at IS NULL AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission) AND (bm.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))))")
         .bind(card_id).bind(actor_id).bind(permission).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
     if allowed { Ok(()) } else { Err(ApiError::forbidden("This action is not permitted in the workspace.")) }
 }
@@ -2852,10 +2852,9 @@ async fn archive_card(State(state): State<AppState>, current: CurrentUser, Path(
     ensure_card_permission(database(&state)?, card_id, current.id, "delete_cards").await?;
     let actor_id = current.id;
     let result = sqlx::query(
-        "UPDATE cards c SET archived_at = now(), updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $1 AND c.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $2",
+        "UPDATE cards c SET archived_at = now(), updated_at = now() FROM boards b WHERE c.id = $1 AND c.board_id = b.id AND c.archived_at IS NULL AND b.archived_at IS NULL",
     )
     .bind(card_id)
-    .bind(actor_id)
     .execute(database(&state)?)
     .await
     .map_err(ApiError::internal)?;
@@ -2868,10 +2867,9 @@ async fn archive_card(State(state): State<AppState>, current: CurrentUser, Path(
 async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<CardResponse> {
     ensure_archived_card_permission(database(&state)?, card_id, current.id, "delete_cards").await?;
     let card = sqlx::query_as::<_, CardResponse>(
-        "UPDATE cards c SET archived_at = NULL, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $1 AND c.board_id = b.id AND c.archived_at IS NOT NULL AND m.user_id = $2 RETURNING c.id, c.list_id, c.title, c.description",
+        "UPDATE cards c SET archived_at = NULL, updated_at = now() FROM boards b WHERE c.id = $1 AND c.board_id = b.id AND c.archived_at IS NOT NULL AND b.archived_at IS NULL RETURNING c.id, c.list_id, c.title, c.description",
     )
     .bind(card_id)
-    .bind(current.id)
     .fetch_optional(database(&state)?)
     .await
     .map_err(ApiError::internal)?
@@ -2883,7 +2881,7 @@ async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(
 
 async fn list_archived_cards(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<ArchivedCardResponse>> {
     let cards = sqlx::query_as::<_, ArchivedCardResponse>(
-        "SELECT c.id, c.list_id, c.title, c.description, c.archived_at::text AS archived_at FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND m.user_id = $2 ORDER BY c.archived_at DESC",
+        "SELECT c.id, c.list_id, c.title, c.description, c.archived_at::text AS archived_at FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))) ORDER BY c.archived_at DESC",
     )
     .bind(board_id)
     .bind(current.id)
