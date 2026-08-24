@@ -456,20 +456,29 @@ export default function Home() {
   useEffect(() => {
     async function connectToApi() {
       try {
-        const [me, setup] = await Promise.all([fetch(`${API_URL}/v1/auth/me`), fetch(`${API_URL}/v1/auth/setup`)]);
-        if (!setup.ok) throw new Error('identity setup is unavailable');
-        const { registration_open } = await setup.json() as { registration_open: boolean };
-        setRegistrationOpen(registration_open);
+        const setupRequest = fetch(`${API_URL}/v1/auth/setup`);
         if (sharedBoardId) {
-          const sharedResponse = await fetch(`${API_URL}/v1/boards/${sharedBoardId}`);
+          const [sharedResponse, setup, identity] = await Promise.all([
+            fetch(`${API_URL}/v1/boards/${sharedBoardId}`),
+            setupRequest,
+            fetch(`${API_URL}/v1/auth/state`),
+          ]);
+          if (!setup.ok) throw new Error('identity setup is unavailable');
+          const { registration_open } = await setup.json() as { registration_open: boolean };
+          setRegistrationOpen(registration_open);
           if (!sharedResponse.ok) throw new Error('shared board could not be loaded');
           applyBoard(await sharedResponse.json() as ApiBoard);
           setWorkspaceName('Публичный доступ');
-          if (me.ok) { setAccount(await me.json() as AuthAccount); setAuthState('signed-in'); }
-          else if (me.status === 401) { setAccount(null); setAuthState('public'); }
-          else throw new Error('identity service is unavailable');
+          if (!identity.ok) throw new Error('identity service is unavailable');
+          const account = await identity.json() as AuthAccount | null;
+          setAccount(account);
+          setAuthState(account ? 'signed-in' : 'public');
           setView('board'); setPersistence('connected'); return;
         }
+        const [me, setup] = await Promise.all([fetch(`${API_URL}/v1/auth/me`), setupRequest]);
+        if (!setup.ok) throw new Error('identity setup is unavailable');
+        const { registration_open } = await setup.json() as { registration_open: boolean };
+        setRegistrationOpen(registration_open);
         if (me.status === 401) { setAuthMode(inviteToken || registration_open ? 'register' : 'login'); setAuthState('signed-out'); return; }
         if (!me.ok) throw new Error('identity service is unavailable');
         setAccount(await me.json() as AuthAccount);
@@ -1753,7 +1762,7 @@ export default function Home() {
         <button className="modal-close" onClick={() => setSelected(null)} aria-label="Закрыть">×</button>
         <div className="task-layout">
           <div className="task-content">
-            <div className={`card-detail-top ${selected.backgroundImageUrl ? 'has-card-background' : ''}`} style={selected.backgroundImageUrl ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${selected.backgroundImageUrl}")` } : undefined}>
+            <div className={`card-detail-top ${selected.backgroundImageUrl ? 'has-card-background' : ''}`} style={selected.backgroundImageUrl ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
             <div className="card-property-area" ref={cardPropertiesRef}>
               <div className="card-quick-actions"><button className="quick-action" onClick={openDiagram}>⌁ Схема</button><button className={`quick-action ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(false); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }}>🏷 Метки</button><button className={`quick-action ${sidebarPanel === 'due' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'due' ? null : 'due')}>◷ {selected.dueAt ? formatDue(selected.dueAt) : 'Дедлайн'}</button><button className={`quick-action ${sidebarPanel === 'background' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'background' ? null : 'background')}>▧ Фон</button></div>
               {sidebarPanel && sidebarPanel !== 'assignees' && <div className="property-popover quick-property-popover" role="dialog" aria-label="Настройки карточки">

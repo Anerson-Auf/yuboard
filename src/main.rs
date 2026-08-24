@@ -879,6 +879,9 @@ async fn main() {
         .route("/v1/auth/accept-invitation", post(accept_account_invitation))
         .route("/v1/auth/logout", post(logout))
         .route("/v1/auth/setup", get(auth_setup))
+        // Unlike /me this endpoint is intentionally anonymous-safe. Public board links
+        // use it to discover an optional signed-in account without generating a 401.
+        .route("/v1/auth/state", get(auth_state))
         .route("/v1/auth/me", get(current_account).patch(update_profile))
         .route("/v1/auth/password", post(change_password))
         .route("/v1/auth/sessions", get(list_sessions).delete(revoke_other_sessions))
@@ -1281,6 +1284,18 @@ async fn current_account(
     .map_err(ApiError::internal)?
     .ok_or_else(ApiError::unauthorized)?;
     Ok(Json(auth_response(account)))
+}
+
+async fn auth_state(
+    State(state): State<AppState>,
+    viewer: Viewer,
+) -> ApiResult<Option<AuthResponse>> {
+    let Some(current) = viewer.0 else {
+        return Ok(Json(None));
+    };
+
+    let Json(account) = current_account(State(state), current).await?;
+    Ok(Json(Some(account)))
 }
 
 async fn update_profile(State(state): State<AppState>, current: CurrentUser, Json(request): Json<UpdateProfileRequest>) -> ApiResult<AuthResponse> {
