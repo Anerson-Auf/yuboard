@@ -1914,18 +1914,18 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, visibility: board.visibility, labels, members, lists }))
 }
 
-async fn board_events(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+async fn board_events(State(state): State<AppState>, viewer: Viewer, Path(board_id): Path<Uuid>) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let actor_id = viewer.0.map(|user| user.id);
     let can_view: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM boards b LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public'))",
     )
     .bind(board_id)
-    .bind(current.id)
+    .bind(actor_id)
     .fetch_one(database(&state)?)
     .await
     .map_err(ApiError::internal)?;
     if !can_view { return Err(ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned())); }
     let pool = database(&state)?.clone();
-    let actor_id = current.id;
     let stream = BroadcastStream::new(state.events.subscribe()).then(move |message| {
         let pool = pool.clone();
         async move {

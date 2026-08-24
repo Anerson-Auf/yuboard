@@ -533,7 +533,7 @@ export default function Home() {
   }, [selectedCardId, persistence]);
 
   useEffect(() => {
-    if (persistence !== 'connected' || !boardId || isPublicViewer) return;
+    if (persistence !== 'connected' || !boardId) return;
     let refreshTimer: number | undefined;
     const stream = new EventSource(`${API_URL}/v1/boards/${boardId}/events`, { withCredentials: true });
     const refresh = () => {
