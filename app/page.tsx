@@ -316,7 +316,7 @@ export default function Home() {
   const [isSavingDueAt, setSavingDueAt] = useState(false);
   const [sidebarPanel, setSidebarPanel] = useState<'labels' | 'due' | 'assignees' | 'background' | null>(null);
   const [existingLabelsOnly, setExistingLabelsOnly] = useState(false);
-  const [cardBackgroundDraft, setCardBackgroundDraft] = useState('');
+  const [isUploadingCardBackground, setUploadingCardBackground] = useState(false);
   const [boardLabels, setBoardLabels] = useState<Label[]>([]);
   const [workspaceMembers, setWorkspaceMembers] = useState<Member[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -424,6 +424,7 @@ export default function Home() {
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
+  const cardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const isDrawingRef = useRef(false);
   const diagramStartRef = useRef<DiagramPoint | null>(null);
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
@@ -1338,26 +1339,31 @@ export default function Home() {
       .then((response) => { if (!response.ok) throw new Error('cover save failed'); showToast(attachment ? 'Обложка установлена' : 'Обложка снята'); })
       .catch(() => showToast('Не удалось сохранить обложку'));
   }
-  function saveCardBackground(event: FormEvent) {
-    event.preventDefault();
-    if (!selected) return;
-    const backgroundImageUrl = cardBackgroundDraft.trim() || undefined;
-    updateSelectedCard({ backgroundImageUrl });
-    setSidebarPanel(null);
-    if (persistence !== 'connected' || typeof selected.id !== 'string') return;
-    void fetch(`${API_URL}/v1/cards/${selected.id}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url: backgroundImageUrl ?? null }) })
-      .then((response) => { if (!response.ok) throw new Error('background save failed'); showToast(backgroundImageUrl ? 'Фон карточки установлен' : 'Фон карточки снят'); })
-      .catch(() => showToast('Не удалось сохранить фон карточки'));
-  }
   function clearCardBackground() {
     if (!selected) return;
-    setCardBackgroundDraft('');
     updateSelectedCard({ backgroundImageUrl: undefined });
     setSidebarPanel(null);
     if (persistence !== 'connected' || typeof selected.id !== 'string') return;
     void fetch(`${API_URL}/v1/cards/${selected.id}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url: null }) })
       .then((response) => { if (!response.ok) throw new Error('background clear failed'); showToast('Фон карточки снят'); })
       .catch(() => showToast('Не удалось снять фон карточки'));
+  }
+  function uploadCardBackground(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !selected || isUploadingCardBackground) return;
+    if (persistence !== 'connected' || typeof selected.id !== 'string') { showToast('Для загрузки фона нужно подключение к серверу'); return; }
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 50 * 1024 * 1024) {
+      showToast('Выберите JPEG, PNG, GIF или WebP до 50 МиБ'); return;
+    }
+    const form = new FormData();
+    form.append('file', file);
+    setUploadingCardBackground(true);
+    void fetch(`${API_URL}/v1/cards/${selected.id}/background/file`, { method: 'POST', body: form })
+      .then(async (response) => { if (!response.ok) throw new Error('upload failed'); return response.json() as Promise<{ url: string }>; })
+      .then(({ url }) => { updateSelectedCard({ backgroundImageUrl: url }); showToast('Фон карточки загружен'); })
+      .catch(() => showToast('Не удалось загрузить фон карточки'))
+      .finally(() => setUploadingCardBackground(false));
   }
   function toggleCardCompletion(card: Card, event?: ReactMouseEvent<HTMLButtonElement>) {
     event?.stopPropagation();
@@ -1725,7 +1731,7 @@ export default function Home() {
               {sidebarPanel && sidebarPanel !== 'assignees' && <div className="property-popover quick-property-popover" role="dialog" aria-label="Настройки карточки">
                 {sidebarPanel === 'labels' && <><div className="popover-heading"><b>Метки</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="label-options">{boardLabels.map((label) => <button key={label.id} className={`label-option ${selected.labels.some((current) => current.id === label.id) ? 'selected' : ''}`} style={{ borderColor: label.color, backgroundColor: `${label.color}22` }} onClick={() => toggleSelectedLabel(label)}><i style={{ backgroundColor: label.color }} /><span>{label.name}</span>{selected.labels.some((current) => current.id === label.id) && <b>✓</b>}</button>)}</div>{!existingLabelsOnly && <form className="new-label-form" onSubmit={createLabel}><input value={newLabelName} onChange={(event) => setNewLabelName(event.target.value)} maxLength={60} placeholder="Новая метка" aria-label="Название новой метки" /><input type="color" value={newLabelColor} onChange={(event) => setNewLabelColor(event.target.value)} aria-label="Цвет метки" /><button type="submit" disabled={!newLabelName.trim() || isSavingLabel}>{isSavingLabel ? 'Создаём…' : 'Создать метку'}</button></form>}</>}
                 {sidebarPanel === 'due' && <div className="date-panel"><div className="popover-heading"><b>Дедлайн</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="calendar-head"><button onClick={() => setDueCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} aria-label="Предыдущий месяц">‹</button><strong>{monthNames[dueCursor.getMonth()]} {dueCursor.getFullYear()}</strong><button onClick={() => setDueCursor((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))} aria-label="Следующий месяц">›</button></div><div className="calendar-weekdays">{weekdayNames.map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{dueDays.map((day) => <button key={day.toISOString()} className={`${day.getMonth() !== dueCursor.getMonth() ? 'outside' : ''} ${selected.dueAt && isSameDay(day, new Date(selected.dueAt)) ? 'chosen' : ''} ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => saveDueDate(day, dueTime)}>{day.getDate()}</button>)}</div><div className="time-options">{dueTimeOptions.map((time) => <button key={time} className={dueTime === time ? 'selected' : ''} onClick={() => { setDueTime(time); if (selected.dueAt) saveDueDate(new Date(selected.dueAt), time); }}>{time}</button>)}</div>{selected.dueAt && <button className="clear-deadline" onClick={clearDueDate}>Снять дедлайн</button>}</div>}
-                {sidebarPanel === 'background' && <form className="card-background-form" onSubmit={saveCardBackground}><div className="popover-heading"><b>Фон карточки</b><button type="button" onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><label>Ссылка на фоновое изображение<input autoFocus value={cardBackgroundDraft} onChange={(event) => setCardBackgroundDraft(event.target.value)} placeholder="https://…/image.jpg" /></label><div><button className="secondary-button" type="button" onClick={clearCardBackground}>Снять</button><button className="create-button" type="submit">Сохранить</button></div></form>}
+                {sidebarPanel === 'background' && <div className="card-background-form"><div className="popover-heading"><b>Фон карточки</b><button type="button" onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><p>Загрузите изображение с компьютера — оно сохранится в Flowboard.</p><input ref={cardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadCardBackground} /><div><button className="secondary-button" type="button" onClick={clearCardBackground}>Снять</button><button className="create-button" type="button" onClick={() => cardBackgroundFileRef.current?.click()} disabled={isUploadingCardBackground}>{isUploadingCardBackground ? 'Загружаем…' : 'Выбрать файл'}</button></div></div>}
               </div>}
               <div className="detail-title-row"><button className={`detail-card-complete ${selected.completedAt ? 'done' : ''}`} aria-label={selected.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(selected.completedAt)} onClick={(event) => toggleCardCompletion(selected, event)}>{selected.completedAt && '✓'}</button><input className="card-title-input" value={cardTitleDraft} onChange={(event) => setCardTitleDraft(event.target.value)} aria-label="Название задачи" /></div>
               <div className="card-members-labels-row"><div className="card-members-row"><span>Исполнители</span><div className="card-member-control">{selected.members.map((member) => <Avatar member={member} key={member.id} />)}<button className={`member-plus ${sidebarPanel === 'assignees' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'assignees' ? null : 'assignees')} aria-label="Назначить исполнителя">＋</button>{sidebarPanel === 'assignees' && <div className="property-popover assignees-popover" role="dialog" aria-label="Выбор исполнителей"><div className="popover-heading"><b>Исполнители</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="member-options">{workspaceMembers.map((member) => <button key={member.id} className={`member-option ${selected.members.some((current) => current.id === member.id) ? 'selected' : ''}`} onClick={() => toggleSelectedMember(member)}><Avatar member={member} /><span>{member.name}</span>{selected.members.some((current) => current.id === member.id) && <b>✓</b>}</button>)}</div><p className="empty-comments">Состав пространства меняется в разделе «Команда».</p></div>}</div></div><div className="detail-card-labels"><span>Метки</span><div className="card-labels">{selected.labels.map((label) => <span className="label custom-label" key={label.id} style={{ color: '#F7F8FC', backgroundColor: `${label.color}66` }}>{label.name}</span>)}<button className={`label-plus ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(true); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }} aria-label="Добавить существующую метку">＋</button></div></div></div>

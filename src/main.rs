@@ -846,6 +846,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/assignees", put(replace_card_assignees))
         .route("/v1/cards/{card_id}/cover", put(update_card_cover))
         .route("/v1/cards/{card_id}/background", put(update_card_background))
+        .route("/v1/cards/{card_id}/background/file", get(download_card_background).post(upload_card_background))
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
         .route("/v1/cards/{card_id}/details", get(get_card_detail))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
@@ -1392,7 +1393,7 @@ async fn archive_workspace(State(state): State<AppState>, current: CurrentUser, 
 async fn delete_workspace(State(state): State<AppState>, current: CurrentUser, Path(workspace_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_workspace_owner(pool, workspace_id, current.id).await?;
-    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 AND a.object_key IS NOT NULL")
+    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1")
         .bind(workspace_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let deleted = sqlx::query("DELETE FROM workspaces WHERE id = $1").bind(workspace_id).execute(pool).await.map_err(ApiError::internal)?;
     if deleted.rows_affected() == 0 { return Err(ApiError::bad_request("Workspace is unavailable.")); }
@@ -1796,7 +1797,7 @@ async fn update_board(State(state): State<AppState>, current: CurrentUser, Path(
 async fn delete_board(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
-    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id WHERE c.board_id = $1 AND a.object_key IS NOT NULL")
+    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id WHERE c.board_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id WHERE c.board_id = $1")
         .bind(board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let result = sqlx::query("DELETE FROM boards WHERE id = $1 AND archived_at IS NULL")
         .bind(board_id).execute(pool).await.map_err(ApiError::internal)?;
@@ -2113,7 +2114,7 @@ async fn delete_list(State(state): State<AppState>, current: CurrentUser, Path(l
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "list_not_found", "List was not found.".to_owned()))?;
-    let archived_attachment_keys = sqlx::query_scalar::<_, Option<String>>("SELECT a.object_key FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE c.list_id = $1 AND c.archived_at IS NOT NULL")
+    let archived_attachment_keys = sqlx::query_scalar::<_, Option<String>>("SELECT a.object_key FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE c.list_id = $1 AND c.archived_at IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb INNER JOIN cards c ON c.id = cb.card_id WHERE c.list_id = $1 AND c.archived_at IS NOT NULL")
         .bind(list.0).fetch_all(pool).await.map_err(ApiError::internal)?;
     let result = sqlx::query("DELETE FROM lists l WHERE l.id = $1 AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.list_id = l.id AND c.archived_at IS NULL)")
         .bind(list.0)
@@ -2805,12 +2806,65 @@ async fn update_card_background(State(state): State<AppState>, current: CurrentU
         }
         _ => None,
     };
+    let uploaded_file_url = format!("/v1/cards/{card_id}/background/file");
     let result = sqlx::query("UPDATE cards SET background_image_url = $1, updated_at = now() WHERE id = $2 AND archived_at IS NULL")
-        .bind(url).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
+        .bind(url.clone()).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
+    if url.as_deref() != Some(uploaded_file_url.as_str()) {
+        if let Some(object_key) = sqlx::query_scalar::<_, String>("DELETE FROM card_backgrounds WHERE card_id = $1 RETURNING object_key")
+            .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)? {
+            let _ = tokio::fs::remove_file(state.upload_dir.join(object_key)).await;
+        }
+    }
     record_card_activity(pool, card_id, current.id, "Изменён фон карточки", "").await;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn upload_card_background(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, mut multipart: Multipart) -> ApiResult<BoardBackgroundUploadResponse> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let field = multipart.next_field().await.map_err(|_| ApiError::bad_request("Card background upload form is invalid."))?
+        .ok_or_else(|| ApiError::bad_request("Card background image file is required."))?;
+    if field.name() != Some("file") { return Err(ApiError::bad_request("Card background image field must be named file.")); }
+    let original_name = field.file_name().unwrap_or("card-background").replace(['/', '\\'], "_");
+    let media_type = field.content_type().map(ToString::to_string).unwrap_or_default();
+    if !matches!(media_type.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
+        return Err(ApiError::bad_request("Card background must be a JPEG, PNG, GIF, or WebP image."));
+    }
+    let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Card background image could not be read."))?;
+    if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Card background must be between 1 byte and 50 MiB.")); }
+    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Card background image type is unsupported."))?;
+    let object_key = format!("card-background-{}.{}", Uuid::new_v4(), extension);
+    let path = state.upload_dir.join(&object_key);
+    tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "card background write failed"); ApiError::storage() })?;
+
+    let url = format!("/v1/cards/{card_id}/background/file");
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    let previous_key = sqlx::query_scalar::<_, Option<String>>("SELECT object_key FROM card_backgrounds WHERE card_id = $1 FOR UPDATE")
+        .bind(card_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?.flatten();
+    let saved = sqlx::query("INSERT INTO card_backgrounds (card_id, uploaded_by, object_key, original_name, media_type, byte_size) SELECT c.id, $2, $3, $4, $5, $6 FROM cards c WHERE c.id = $1 AND c.archived_at IS NULL ON CONFLICT (card_id) DO UPDATE SET uploaded_by = EXCLUDED.uploaded_by, object_key = EXCLUDED.object_key, original_name = EXCLUDED.original_name, media_type = EXCLUDED.media_type, byte_size = EXCLUDED.byte_size, created_at = now()")
+        .bind(card_id).bind(current.id).bind(&object_key).bind(&original_name).bind(&media_type).bind(bytes.len() as i64)
+        .execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    if saved.rows_affected() == 0 { let _ = tokio::fs::remove_file(&path).await; return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
+    sqlx::query("UPDATE cards SET background_image_url = $1, updated_at = now() WHERE id = $2")
+        .bind(&url).bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    transaction.commit().await.map_err(ApiError::internal)?;
+    if let Some(previous_key) = previous_key { let _ = tokio::fs::remove_file(state.upload_dir.join(previous_key)).await; }
+    record_card_activity(pool, card_id, current.id, "Изменён фон карточки", "Загружен файл").await;
+    let _ = state.events.send(());
+    Ok(Json(BoardBackgroundUploadResponse { url: format!("{url}?v={}", Uuid::new_v4()) }))
+}
+
+async fn download_card_background(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> Result<Response, ApiError> {
+    let background = sqlx::query_as::<_, (String, String)>("SELECT cb.object_key, cb.media_type FROM card_backgrounds cb INNER JOIN cards c ON c.id = cb.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE cb.card_id = $1 AND c.archived_at IS NULL AND (b.visibility = 'public' OR m.user_id IS NOT NULL)")
+        .bind(card_id).bind(current.0.map(|user| user.id)).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "background_not_found", "Card background was not found.".to_owned()))?;
+    let bytes = tokio::fs::read(state.upload_dir.join(background.0)).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "background_not_found", "Card background file was not found.".to_owned()) }
+        else { tracing::error!(?error, "card background read failed"); ApiError::storage() }
+    })?;
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"))], bytes).into_response())
 }
 
 async fn update_card_completion(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardCompletionRequest>) -> Result<StatusCode, ApiError> {
