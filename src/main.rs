@@ -2085,6 +2085,12 @@ async fn move_list(State(state): State<AppState>, current: CurrentUser, Path(lis
         None => list_ids.len(),
     };
     list_ids.insert(insertion_index, list_id);
+    // `lists` has a UNIQUE(board_id, position) constraint. Assigning the final
+    // positions one at a time can collide with a neighbour's still-current
+    // position, which rolls the entire transaction back. Move every list out
+    // of the positive ordering range first, then write the canonical order.
+    sqlx::query("UPDATE lists SET position = -position - 1, updated_at = now() WHERE board_id = $1")
+        .bind(board_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     for (index, id) in list_ids.into_iter().enumerate() {
         sqlx::query("UPDATE lists SET position = $1, updated_at = now() WHERE id = $2")
             .bind(((index + 1) as i32) * 1000).bind(id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
