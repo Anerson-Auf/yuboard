@@ -541,6 +541,15 @@ export default function Home() {
   }, [selectedCardId, persistence, cardDetailRevision]);
 
   useEffect(() => {
+    const items = checklists.flatMap((checklist) => checklist.items);
+    document.querySelectorAll<HTMLButtonElement>('.check-item').forEach((button, index) => {
+      const hasDescription = Boolean(items[index]?.description.trim());
+      button.dataset.hasDescription = String(hasDescription);
+      button.title = hasDescription ? 'У пункта есть описание' : '';
+    });
+  }, [checklists]);
+
+  useEffect(() => {
     if (persistence !== 'connected' || !boardId) return;
     let refreshTimer: number | undefined;
     const stream = new EventSource(`${API_URL}/v1/boards/${boardId}/events`, { withCredentials: true });
