@@ -395,6 +395,11 @@ struct UpdateCardRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateCardPublicVisibilityRequest {
+    is_public: bool,
+}
+
+#[derive(Deserialize)]
 struct UpdateListRequest {
     title: String,
 }
@@ -657,6 +662,7 @@ struct BoardCardRow {
     list_id: Uuid,
     title: String,
     description: String,
+    is_public: bool,
     background_image_url: Option<String>,
     due_at: Option<String>,
     cover_attachment_id: Option<Uuid>,
@@ -714,6 +720,7 @@ struct BoardCard {
     list_id: Uuid,
     title: String,
     description: String,
+    is_public: bool,
     background_image_url: Option<String>,
     due_at: Option<String>,
     cover_attachment_id: Option<Uuid>,
@@ -944,6 +951,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/background", put(update_card_background))
         .route("/v1/cards/{card_id}/background/file", get(download_card_background).post(upload_card_background))
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
+        .route("/v1/cards/{card_id}/public-visibility", patch(update_card_public_visibility))
         .route("/v1/cards/{card_id}/details", get(get_card_detail))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
@@ -1373,7 +1381,7 @@ async fn download_user_avatar(State(state): State<AppState>, _current: CurrentUs
 
 async fn download_comment_avatar(State(state): State<AppState>, current: Viewer, Path(comment_id): Path<Uuid>) -> Result<Response, ApiError> {
     let avatar_url = sqlx::query_scalar::<_, String>(
-        "SELECT c.external_author_avatar_url FROM comments c INNER JOIN cards card ON card.id = c.card_id INNER JOIN boards b ON b.id = card.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.external_author_avatar_url IS NOT NULL AND card.archived_at IS NULL AND (b.visibility = 'public' OR m.user_id IS NOT NULL)",
+        "SELECT c.external_author_avatar_url FROM comments c INNER JOIN cards card ON card.id = c.card_id INNER JOIN boards b ON b.id = card.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.external_author_avatar_url IS NOT NULL AND card.archived_at IS NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (card.is_public OR $2 IS NOT NULL)))",
     )
     .bind(comment_id)
     .bind(current.0.map(|user| user.id))
@@ -1838,8 +1846,9 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id) AS attachment_count FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL ORDER BY c.position")
-        .bind(board_id)
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id) AS attachment_count FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    .bind(board_id)
+    .bind(actor_id)
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
@@ -1869,6 +1878,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         list_id: card.list_id,
         title: card.title,
         description: card.description,
+        is_public: card.is_public,
         background_image_url: card.background_image_url,
         due_at: card.due_at,
         cover_attachment_id: card.cover_attachment_id,
@@ -2299,7 +2309,7 @@ async fn ensure_card_access(pool: &PgPool, card_id: Uuid, user_id: Uuid) -> Resu
 
 async fn ensure_card_public_read(pool: &PgPool, card_id: Uuid, user_id: Option<Uuid>) -> Result<(), ApiError> {
     let card = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT c.id FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
+        "SELECT c.id FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
     )
     .bind(card_id)
     .bind(user_id)
@@ -3099,7 +3109,7 @@ async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, 
 
 async fn download_attachment(State(state): State<AppState>, current: Viewer, Path(attachment_id): Path<Uuid>) -> Result<Response, ApiError> {
     let attachment = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
-        "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
+        "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
     )
     .bind(attachment_id)
     .bind(current.0.map(|user| user.id))
@@ -3319,7 +3329,7 @@ async fn upload_card_background(State(state): State<AppState>, current: CurrentU
 }
 
 async fn download_card_background(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> Result<Response, ApiError> {
-    let background = sqlx::query_as::<_, (String, String)>("SELECT cb.object_key, cb.media_type FROM card_backgrounds cb INNER JOIN cards c ON c.id = cb.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE cb.card_id = $1 AND c.archived_at IS NULL AND (b.visibility = 'public' OR m.user_id IS NOT NULL)")
+    let background = sqlx::query_as::<_, (String, String)>("SELECT cb.object_key, cb.media_type FROM card_backgrounds cb INNER JOIN cards c ON c.id = cb.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE cb.card_id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))")
         .bind(card_id).bind(current.0.map(|user| user.id)).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "background_not_found", "Card background was not found.".to_owned()))?;
     let bytes = tokio::fs::read(state.upload_dir.join(background.0)).await.map_err(|error| {
@@ -3391,6 +3401,23 @@ async fn update_card_completion(State(state): State<AppState>, current: CurrentU
         .bind(request.is_completed).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
     record_card_activity(pool, card_id, current.id, if request.is_completed { "Задача выполнена" } else { "Задача возвращена в работу" }, "").await;
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_card_public_visibility(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardPublicVisibilityRequest>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let updated = sqlx::query("UPDATE cards SET is_public = $1, updated_at = now() WHERE id = $2 AND archived_at IS NULL")
+        .bind(request.is_public)
+        .bind(card_id)
+        .execute(pool)
+        .await
+        .map_err(ApiError::internal)?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()));
+    }
+    record_card_activity(pool, card_id, current.id, if request.is_public { "Карточка открыта для гостей" } else { "Карточка скрыта от гостей" }, "").await;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
