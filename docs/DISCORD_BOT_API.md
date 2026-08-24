@@ -38,6 +38,19 @@ GET /v1/integrations/discord/cards
 
 Returns active cards from this token's board only. Each entry contains `id`, `list_id`, `title`, and `description`. Use the card `id` to retrieve or append its conversation.
 
+## Move a card
+
+```http
+POST /v1/integrations/discord/cards/{card-id}/move
+
+{
+  "list_id": "target-list-uuid",
+  "before_card_id": "optional-card-uuid-in-target-list"
+}
+```
+
+`list_id` and the optional `before_card_id` must belong to the token's board. Omit `before_card_id` to append the card to the end of the target list. Moving a card keeps its Discord integration and conversation intact.
+
 ## Create (or safely repeat) a suggestion card
 
 `source_id` is the original Discord message ID. Sending the same ID again returns the same card instead of making a duplicate.

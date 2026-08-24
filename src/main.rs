@@ -531,6 +531,13 @@ struct MoveCardRequest {
     before_card_id: Option<Uuid>,
 }
 
+#[derive(Deserialize)]
+struct MoveDiscordCardRequest {
+    list_id: Uuid,
+    #[serde(default)]
+    before_card_id: Option<Uuid>,
+}
+
 #[derive(Clone, Serialize, FromRow)]
 struct CardResponse {
     id: Uuid,
@@ -849,6 +856,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/comments", post(create_comment))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
         .route("/v1/integrations/discord/cards", get(list_discord_board_cards).post(create_discord_card))
+        .route("/v1/integrations/discord/cards/{card_id}/move", post(move_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
@@ -2468,6 +2476,26 @@ async fn list_discord_board_cards(State(state): State<AppState>, integration: Di
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(cards))
+}
+
+async fn move_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<MoveDiscordCardRequest>) -> ApiResult<CardResponse> {
+    let pool = database(&state)?;
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    let card = sqlx::query_as::<_, CardResponse>(
+        "WITH source AS (SELECT id, board_id FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL FOR UPDATE), target AS (SELECT id, board_id FROM lists WHERE id = $3 FOR UPDATE), anchor AS (SELECT c.position FROM cards c, target, source WHERE c.id = $4 AND c.list_id = target.id AND c.id <> source.id FOR UPDATE), previous AS (SELECT c.position FROM cards c, target, source WHERE c.list_id = target.id AND c.id <> source.id AND c.position < (SELECT position FROM anchor) ORDER BY c.position DESC LIMIT 1) UPDATE cards c SET list_id = target.id, position = CASE WHEN $4 IS NULL THEN (SELECT COALESCE(MAX(position), 0) + 1000 FROM cards WHERE list_id = target.id AND id <> c.id) WHEN (SELECT position FROM previous) IS NULL THEN (SELECT position - 1000 FROM anchor) ELSE ((SELECT position FROM previous) + (SELECT position FROM anchor)) / 2 END, updated_at = now() FROM source, target WHERE c.id = source.id AND source.board_id = target.board_id AND ($4 IS NULL OR EXISTS (SELECT 1 FROM anchor)) RETURNING c.id, c.list_id, c.title, c.description",
+    )
+    .bind(card_id)
+    .bind(integration.board_id)
+    .bind(request.list_id)
+    .bind(request.before_card_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_or_list_not_found", "Card, target list, or insertion anchor was not found on this Discord integration board.".to_owned()))?;
+    transaction.commit().await.map_err(ApiError::internal)?;
+    record_external_card_activity(pool, card.id, "Discord: карточка перемещена", "").await;
+    let _ = state.events.send(());
+    Ok(Json(card))
 }
 
 async fn list_discord_card_comments(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CommentResponse>> {
