@@ -57,6 +57,11 @@ type ColumnDropTarget = { beforeColumnId: EntityId | null; visualColumnId: Entit
 const API_URL = process.env.NEXT_PUBLIC_FLOWBOARD_API_URL ?? '';
 const browserFetch = globalThis.fetch.bind(globalThis);
 
+function assetUrl(url: string | null | undefined) {
+  if (!url) return '';
+  return /^https?:\/\//i.test(url) ? url : `${API_URL}${url}`;
+}
+
 function csrfCookie() {
   return document.cookie.split('; ').find((part) => part.startsWith('flowboard_csrf='))?.slice('flowboard_csrf='.length);
 }
@@ -182,7 +187,7 @@ function memberFromApi(member: ApiMember): Member {
 function Avatar({ member }: { member: Member }) {
   if (member.name === 'Deleted user') return <span className="avatar deleted-user" title="Deleted user">—</span>;
   if (member.avatarUrl) {
-    const src = /^https?:\/\//i.test(member.avatarUrl) ? member.avatarUrl : `${API_URL}${member.avatarUrl}`;
+    const src = assetUrl(member.avatarUrl);
     return <img className="avatar profile-image" src={src} alt={`Аватар @${member.name}`} title={`@${member.name}`} />;
   }
   return <span className={`avatar ${member.color}`} title={member.name}>{member.initials}</span>;
@@ -435,7 +440,7 @@ export default function Home() {
   const isPublicViewer = authState === 'public';
   const dueDays = useMemo(() => calendarDays(dueCursor), [dueCursor]);
   const currentMember = account ? memberFromApi({ id: account.user.id, username: account.user.username, avatar_url: account.user.avatar_url }) : { id: '', initials: '—', color: 'violet', name: 'Пользователь' };
-  const boardBackgroundStyle = view === 'board' && boardBackgroundUrl ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${boardBackgroundUrl}")` } : undefined;
+  const boardBackgroundStyle = view === 'board' && boardBackgroundUrl ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${assetUrl(boardBackgroundUrl)}")` } : undefined;
 
   const visibleColumns = useMemo(() => columns.map((column) => ({
     ...column,

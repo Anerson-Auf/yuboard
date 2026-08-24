@@ -830,6 +830,8 @@ async fn main() {
         .route("/v1/auth/sessions/{session_id}", axum::routing::delete(revoke_session))
         .route("/v1/auth/avatar", get(download_avatar).post(upload_avatar))
         .route("/v1/avatars/{user_id}", get(download_user_avatar))
+        .route("/v1/public/boards/{board_id}/background", get(download_public_board_background))
+        .route("/v1/public/boards/{board_id}/avatars/{user_id}", get(download_public_board_avatar))
         .route("/v1/workspaces", get(list_workspaces).post(create_workspace))
         .route("/v1/workspaces/{workspace_id}", axum::routing::delete(delete_workspace))
         .route("/v1/workspaces/{workspace_id}/members", get(list_workspace_members))
@@ -1268,9 +1270,7 @@ async fn download_avatar(State(state): State<AppState>, current: CurrentUser) ->
     avatar_response(&state, current.id).await
 }
 
-// Avatars referenced by a public board must also be readable without a session;
-// otherwise the board JSON renders only fallback initials for anonymous viewers.
-async fn download_user_avatar(State(state): State<AppState>, _viewer: Viewer, Path(user_id): Path<Uuid>) -> Result<Response, ApiError> {
+async fn download_user_avatar(State(state): State<AppState>, _current: CurrentUser, Path(user_id): Path<Uuid>) -> Result<Response, ApiError> {
     avatar_response(&state, user_id).await
 }
 
@@ -1739,11 +1739,16 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let card_assignees = sqlx::query_as::<_, CardAssigneeRow>("SELECT ca.card_id, u.id, u.display_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url FROM card_assignees ca INNER JOIN users u ON u.id = ca.user_id WHERE ca.card_id = ANY($1) ORDER BY u.display_name")
+    let mut card_assignees = sqlx::query_as::<_, CardAssigneeRow>("SELECT ca.card_id, u.id, u.display_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url FROM card_assignees ca INNER JOIN users u ON u.id = ca.user_id WHERE ca.card_id = ANY($1) ORDER BY u.display_name")
         .bind(&card_ids)
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
+    if actor_id.is_none() {
+        for assignee in &mut card_assignees {
+            if assignee.avatar_url.is_some() { assignee.avatar_url = Some(format!("/v1/public/boards/{}/avatars/{}", board.id, assignee.id)); }
+        }
+    }
     let labels = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color FROM labels WHERE board_id = $1 ORDER BY name")
         .bind(board_id)
         .fetch_all(pool)
@@ -1767,17 +1772,26 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone() }).collect(),
         assignees: card_assignees.iter().filter(|member| member.card_id == card.id).map(|member| MemberResponse { id: member.id, display_name: member.display_name.clone(), avatar_url: member.avatar_url.clone() }).collect(),
     }).collect();
-    let members = sqlx::query_as::<_, MemberResponse>("SELECT u.id, u.display_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url FROM board_members bm INNER JOIN users u ON u.id = bm.user_id WHERE bm.board_id = $1 ORDER BY u.display_name")
+    let mut members = sqlx::query_as::<_, MemberResponse>("SELECT u.id, u.display_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url FROM board_members bm INNER JOIN users u ON u.id = bm.user_id WHERE bm.board_id = $1 ORDER BY u.display_name")
         .bind(board.id)
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
+    if actor_id.is_none() {
+        for member in &mut members {
+            if member.avatar_url.is_some() { member.avatar_url = Some(format!("/v1/public/boards/{}/avatars/{}", board.id, member.id)); }
+        }
+    }
     let lists = lists.into_iter().map(|list| BoardList {
         id: list.id,
         title: list.title,
         cards: cards.iter().filter(|card| card.list_id == list.id).cloned().collect(),
     }).collect();
-    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url: board.background_image_url, visibility: board.visibility, labels, members, lists }))
+    let uploaded_background_url = format!("/v1/boards/{}/background/file", board.id);
+    let background_image_url = if actor_id.is_none() && board.background_image_url.as_deref().is_some_and(|url| url.starts_with(&uploaded_background_url)) {
+        Some(format!("/v1/public/boards/{}/background", board.id))
+    } else { board.background_image_url };
+    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, visibility: board.visibility, labels, members, lists }))
 }
 
 async fn board_events(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -2272,7 +2286,18 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
         title: checklist.title,
         items: checklist_items.iter().filter(|item| item.checklist_id == checklist.id).map(|item| ChecklistItemResponse { id: item.id, title: item.title.clone(), is_completed: item.is_completed }).collect(),
     }).collect();
-    let comments = load_card_comments(pool, card_id, actor_id).await?;
+    let public_board_id = if actor_id.is_none() {
+        Some(sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM cards WHERE id = $1")
+            .bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?)
+    } else { None };
+    let mut comments = load_card_comments(pool, card_id, actor_id).await?;
+    if let Some(board_id) = public_board_id {
+        for comment in &mut comments {
+            if let Some(author_id) = comment.author_id {
+                comment.author_avatar_url = Some(format!("/v1/public/boards/{board_id}/avatars/{author_id}"));
+            }
+        }
+    }
     let attachments = sqlx::query_as::<_, AttachmentResponse>(
         "SELECT id, original_name, media_type, byte_size, COALESCE(external_url, '/v1/attachments/' || id::text || '/content') AS url FROM attachments WHERE card_id = $1 ORDER BY created_at DESC",
     )
@@ -2967,6 +2992,26 @@ async fn download_card_background(State(state): State<AppState>, current: Viewer
         else { tracing::error!(?error, "card background read failed"); ApiError::storage() }
     })?;
     Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"))], bytes).into_response())
+}
+
+// Public boards expose only the media that is visibly referenced by that board.
+// This deliberately avoids making the generic avatar endpoint a public directory.
+async fn download_public_board_background(State(state): State<AppState>, Path(board_id): Path<Uuid>) -> Result<Response, ApiError> {
+    let background = sqlx::query_as::<_, (String, String)>("SELECT bb.object_key, bb.media_type FROM board_backgrounds bb INNER JOIN boards b ON b.id = bb.board_id WHERE bb.board_id = $1 AND b.archived_at IS NULL AND b.visibility = 'public'")
+        .bind(board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "background_not_found", "Board background was not found.".to_owned()))?;
+    let bytes = tokio::fs::read(state.upload_dir.join(background.0)).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "background_not_found", "Board background file was not found.".to_owned()) }
+        else { tracing::error!(?error, "public board background read failed"); ApiError::storage() }
+    })?;
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=300"))], bytes).into_response())
+}
+
+async fn download_public_board_avatar(State(state): State<AppState>, Path((board_id, user_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
+    let is_visible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM boards b WHERE b.id = $1 AND b.archived_at IS NULL AND b.visibility = 'public' AND (EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2) OR EXISTS(SELECT 1 FROM card_assignees ca INNER JOIN cards c ON c.id = ca.card_id WHERE c.board_id = b.id AND c.archived_at IS NULL AND ca.user_id = $2) OR EXISTS(SELECT 1 FROM comments cm INNER JOIN cards c ON c.id = cm.card_id WHERE c.board_id = b.id AND cm.author_id = $2)))")
+        .bind(board_id).bind(user_id).fetch_one(database(&state)?).await.map_err(ApiError::internal)?;
+    if !is_visible { return Err(ApiError(StatusCode::NOT_FOUND, "avatar_not_found", "Avatar was not found.".to_owned())); }
+    avatar_response(&state, user_id).await
 }
 
 async fn update_card_completion(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardCompletionRequest>) -> Result<StatusCode, ApiError> {
