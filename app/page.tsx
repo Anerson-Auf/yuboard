@@ -707,15 +707,18 @@ export default function Home() {
     if (target?.closest('.column-head, button, input, textarea, select, a, .composer') || (!isPublicViewer && target?.closest('.task-card'))) return;
     const board = event.currentTarget;
     boardPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startScrollLeft: board.scrollLeft, moved: false };
-    board.setPointerCapture(event.pointerId);
-    setBoardPanning(true);
-    event.preventDefault();
   }
   function moveBoardPan(event: ReactPointerEvent<HTMLElement>) {
     const pan = boardPanRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    if (Math.abs(event.clientX - pan.startX) > 4) pan.moved = true;
+    if (Math.abs(event.clientX - pan.startX) <= 4 && !pan.moved) return;
+    if (!pan.moved) {
+      pan.moved = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setBoardPanning(true);
+    }
     event.currentTarget.scrollLeft = pan.startScrollLeft - (event.clientX - pan.startX);
+    event.preventDefault();
   }
   function stopBoardPan(event: ReactPointerEvent<HTMLElement>) {
     const pan = boardPanRef.current;
