@@ -222,10 +222,10 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .markdown-description ol { list-style: decimal outside; }
 
 /* Console is supporting telemetry, not a competing chat bubble. */
-.activity-message { background: rgb(8 11 14 / 32%); color: color-mix(in srgb, var(--muted) 82%, transparent); }
-.activity-message i, .activity-message small { color: color-mix(in srgb, var(--faint) 72%, transparent); }
-.activity-message p { opacity: .86; }
-.light .activity-message { background: rgb(28 39 52 / 7%); }
+.activity-message { background: rgb(4 6 8 / 54%); color: color-mix(in srgb, var(--muted) 68%, transparent); }
+.activity-message i, .activity-message small { color: color-mix(in srgb, var(--faint) 58%, transparent); }
+.activity-message p { opacity: .72; }
+.light .activity-message { background: rgb(28 39 52 / 4%); }
 
 .attachment-preview img { cursor: zoom-in; }
 .image-preview-backdrop { z-index: 120; }
