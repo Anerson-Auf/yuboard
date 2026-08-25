@@ -94,7 +94,7 @@ function CardCover({ card }: { card: Pick<Card, 'coverUrl' | 'coverMediaType' | 
   const isVideo = card.coverMediaType?.startsWith('video/');
   return <div className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
     {isVideo
-      ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" aria-hidden="true" />
+      ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture tabIndex={-1} aria-hidden="true" />
       : <img src={assetUrl(card.coverUrl)} alt="" />}
   </div>;
 }
