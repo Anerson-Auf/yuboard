@@ -4633,7 +4633,11 @@ async fn upload_attachment(State(state): State<AppState>, current: CurrentUser, 
     .fetch_one(pool)
     .await;
     match attachment {
-        Ok(attachment) => Ok(Json(attachment)),
+        Ok(attachment) => {
+            record_card_activity(pool, card_id, actor_id, "Добавлено вложение", &original_name).await;
+            let _ = state.events.send(());
+            Ok(Json(attachment))
+        },
         Err(error) => {
             let _ = tokio::fs::remove_file(&path).await;
             Err(ApiError::internal(error))
@@ -5175,6 +5179,15 @@ async fn replace_card_assignees(State(state): State<AppState>, current: CurrentU
         .await
         .map_err(ApiError::internal)?;
     if matching_members != user_ids.len() as i64 { return Err(ApiError::bad_request("Every assignee must belong to the card workspace.")); }
+    let previous_user_ids = sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM card_assignees WHERE card_id = $1 FOR UPDATE")
+        .bind(card_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(ApiError::internal)?;
+    let previous_user_id_set: HashSet<Uuid> = previous_user_ids.iter().copied().collect();
+    let requested_user_id_set: HashSet<Uuid> = user_ids.iter().copied().collect();
+    let actor_was_assignee = previous_user_id_set.contains(&actor_id);
+    let actor_is_assignee = user_ids.contains(&actor_id);
     sqlx::query("DELETE FROM card_assignees WHERE card_id = $1")
         .bind(card_id)
         .execute(&mut *transaction)
@@ -5194,6 +5207,13 @@ async fn replace_card_assignees(State(state): State<AppState>, current: CurrentU
     .await
     .map_err(ApiError::internal)?;
     transaction.commit().await.map_err(ApiError::internal)?;
+    if !actor_was_assignee && actor_is_assignee {
+        record_card_activity(pool, card_id, actor_id, "Присоединился к задаче", "Стал исполнителем").await;
+    } else if actor_was_assignee && !actor_is_assignee {
+        record_card_activity(pool, card_id, actor_id, "Отказался от задачи", "Перестал быть исполнителем").await;
+    } else if previous_user_id_set != requested_user_id_set {
+        record_card_activity(pool, card_id, actor_id, "Изменены исполнители", &format!("Исполнителей: {}", members.len())).await;
+    }
     let _ = state.events.send(());
     Ok(Json(members))
 }

@@ -560,6 +560,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .comment-thread-action.has-unread { color: var(--text); font-weight: 800; }
 .comment-thread-action.has-unread > span { font-weight: 800; }
 .comment-thread-action.has-unread .comment-unread-dot { border-color: rgb(115 21 31 / 82%); background: #ef5b68; box-shadow: 0 0 0 2px rgb(239 91 104 / 18%); }
+.card-join-button { min-height: 26px; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--primary) 50%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); font-size: 11px; font-weight: 700; transition: transform .16s ease, background-color .16s ease, border-color .16s ease; }.card-join-button:hover:not(:disabled) { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 20%, transparent); transform: translateY(-1px); }.card-join-button.joined { border-color: var(--line); background: transparent; color: var(--muted); }.card-join-button:disabled { cursor: wait; opacity: .62; }
 
 /* Compact, legible chips. The same family is used for board labels and the
    labels rendered on cards, so their proportions no longer change by view. */
