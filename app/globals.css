@@ -406,6 +406,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .filter-popover, .board-labels-popover { z-index: 50; }
 .board-menu { z-index: 60; }
 .topbar, .default-board-background > .topbar, .has-board-background > .topbar { z-index: 70; }
+.notifications-popover .notification-mark-all { display: grid; width: 30px; min-height: 30px; padding: 0; place-items: center; }.notifications-popover .notification-mark-all svg { width: 17px; height: 17px; }
 @media (max-width: 760px) { .board-tools { justify-content: flex-start; } }
 
 /* Saved card priority: a compact five-bar signal, from calm to critical. */
