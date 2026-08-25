@@ -346,3 +346,6 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 /* The upload action belongs directly under the background URL, before fit controls. */
 .board-menu form { display: contents; }.board-menu form > label { order: 5; margin-top: 5px; padding-top: 10px; border-top: 1px solid var(--line); }.board-menu > input[type='file'] + button { order: 6; justify-self: start; margin-top: -2px; }.board-menu .background-display-control { order: 7; }.board-menu form > div { order: 8; }
+
+/* Header popovers must outrank the sort control that follows in the DOM. */
+.board-header { position: relative; z-index: 41; }.default-board-background > .board-header { z-index: 41; }
