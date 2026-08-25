@@ -107,8 +107,8 @@ function inlineMarkdown(value: string, highlightMentions = false): ReactNode[] {
   });
 }
 
-function MarkdownDescription({ value, highlightMentions = false }: { value: string; highlightMentions?: boolean }) {
-  if (!value.trim()) return <p className="description-empty">Добавьте описание задачи…</p>;
+function MarkdownDescription({ value, highlightMentions = false, emptyText = 'Добавьте описание задачи…' }: { value: string; highlightMentions?: boolean; emptyText?: string }) {
+  if (!value.trim()) return <p className="description-empty">{emptyText}</p>;
   const lines = value.replace(/\r\n?/g, '\n').split('\n');
   const blocks: ReactNode[] = [];
   let index = 0;
@@ -238,6 +238,11 @@ type MentionTextareaProps = {
 function MentionTextarea({ value, onValueChange, members, className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste }: MentionTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [query, setQuery] = useState<string | null>(null);
+  const isChecklistDescription = ariaLabel.startsWith('Описание пункта ');
+  const [isMarkdownPreview, setMarkdownPreview] = useState(isChecklistDescription);
+  useEffect(() => {
+    if (!isMarkdownPreview) textareaRef.current?.focus();
+  }, [isMarkdownPreview]);
   const findQuery = (nextValue: string, caret: number | null) => {
     const beforeCaret = nextValue.slice(0, caret ?? nextValue.length);
     const match = beforeCaret.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);
@@ -257,7 +262,10 @@ function MentionTextarea({ value, onValueChange, members, className, placeholder
       textarea?.focus(); textarea?.setSelectionRange(nextCaret, nextCaret);
     });
   };
-  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') setQuery(null); if (event.key === 'Tab' && suggestions[0]) { event.preventDefault(); insertMention(suggestions[0]); } }} onBlur={onBlur} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{suggestions.length > 0 && <div className="mention-suggestions" role="listbox" aria-label="Участники доски"><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</div>}</div>;
+  if (isChecklistDescription && isMarkdownPreview) {
+    return <div className={`checklist-description-preview markdown-editable-description ${className ?? ''}`} role={disabled ? undefined : 'button'} tabIndex={disabled ? undefined : 0} onClick={() => { if (!disabled) setMarkdownPreview(false); }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMarkdownPreview(false); } }}><MarkdownDescription value={value} emptyText="Добавьте описание пункта…" /></div>;
+  }
+  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') setQuery(null); if (event.key === 'Tab' && suggestions[0]) { event.preventDefault(); insertMention(suggestions[0]); } }} onBlur={() => { setQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{suggestions.length > 0 && <div className="mention-suggestions" role="listbox" aria-label="Участники доски"><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</div>}</div>;
 }
 
 function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramElement) {

@@ -372,3 +372,9 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 /* A diagram is opened from a card modal, so it must sit above that modal. */
 .diagram-backdrop { z-index: 140; }
+
+/* Checklist item descriptions use the same Markdown preview as card text. */
+.check-item-detail .checklist-description-preview { min-height: 20px; padding: 2px 0; font-size: 12px; line-height: 1.5; }
+.check-item-detail .checklist-description-preview .markdown-description { font-size: inherit; line-height: inherit; }
+.check-item-detail .checklist-description-preview .markdown-description > :last-child { margin-bottom: 0; }
+.public-viewer .checklist-description-preview { pointer-events: none; }
