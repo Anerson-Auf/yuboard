@@ -2121,9 +2121,9 @@ async fn get_board_layout(State(state): State<AppState>, current: CurrentUser, P
         .bind(current.id).bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .unwrap_or_else(|| "standard".to_owned());
     let positions = sqlx::query_as::<_, BoardFreeformPositionResponse>(
-        "SELECT list_id, x, y FROM board_freeform_list_positions WHERE user_id = $1 AND board_id = $2 ORDER BY y, x, list_id",
+        "SELECT list_id, x, y FROM board_freeform_list_positions WHERE board_id = $1 ORDER BY y, x, list_id",
     )
-    .bind(current.id).bind(board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    .bind(board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     Ok(Json(BoardLayoutResponse { view_mode, positions }))
 }
 
@@ -2142,6 +2142,7 @@ async fn update_board_layout(State(state): State<AppState>, current: CurrentUser
     }
     let pool = database(&state)?;
     ensure_board_layout_access(pool, board_id, current.id).await?;
+    ensure_board_permission(pool, board_id, current.id, "create_lists").await?;
     let list_ids: Vec<Uuid> = list_ids.into_iter().collect();
     if !list_ids.is_empty() {
         let valid_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lists WHERE board_id = $1 AND id = ANY($2)")
@@ -2153,13 +2154,14 @@ async fn update_board_layout(State(state): State<AppState>, current: CurrentUser
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
     sqlx::query("INSERT INTO board_layout_preferences (user_id, board_id, view_mode) VALUES ($1, $2, $3) ON CONFLICT (user_id, board_id) DO UPDATE SET view_mode = EXCLUDED.view_mode, updated_at = now()")
         .bind(current.id).bind(board_id).bind(&request.view_mode).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    sqlx::query("DELETE FROM board_freeform_list_positions WHERE user_id = $1 AND board_id = $2")
-        .bind(current.id).bind(board_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    sqlx::query("DELETE FROM board_freeform_list_positions WHERE board_id = $1")
+        .bind(board_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     for position in &request.positions {
-        sqlx::query("INSERT INTO board_freeform_list_positions (user_id, board_id, list_id, x, y) VALUES ($1, $2, $3, $4, $5)")
-            .bind(current.id).bind(board_id).bind(position.list_id).bind(position.x).bind(position.y).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("INSERT INTO board_freeform_list_positions (board_id, list_id, x, y) VALUES ($1, $2, $3, $4)")
+            .bind(board_id).bind(position.list_id).bind(position.x).bind(position.y).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     }
     transaction.commit().await.map_err(ApiError::internal)?;
+    let _ = state.events.send(());
     Ok(Json(BoardLayoutResponse {
         view_mode: request.view_mode,
         positions: request.positions.into_iter().map(|position| BoardFreeformPositionResponse { list_id: position.list_id, x: position.x, y: position.y }).collect(),

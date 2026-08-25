@@ -673,6 +673,14 @@ export default function Home() {
         void fetch(`${API_URL}/v1/boards/${boardId}`).then(async (response) => {
           if (!response.ok) throw new Error('realtime refresh failed');
           applyBoard(await response.json() as ApiBoard);
+          if (authState === 'signed-in') {
+            void fetch(`${API_URL}/v1/boards/${boardId}/layout`)
+              .then(async (layoutResponse) => { if (!layoutResponse.ok) throw new Error('layout refresh failed'); return layoutResponse.json() as Promise<BoardLayout>; })
+              .then((layout) => {
+                setFreeformLayout(Object.fromEntries(layout.positions.map((position) => [position.list_id, { x: position.x, y: position.y }])));
+              })
+              .catch(() => undefined);
+          }
           // The board payload only has comment counters. Reload an open card as
           // well, so Discord/API comments appear without closing the modal.
           if (typeof selectedCardId === 'string') setCardDetailRevision((current) => current + 1);
@@ -682,7 +690,7 @@ export default function Home() {
     stream.addEventListener('refresh', refresh);
     stream.addEventListener('access-revoked', () => { stream.close(); setSelected(null); setView('home'); showToast('Доступ к пространству отозван'); });
     return () => { window.clearTimeout(refreshTimer); stream.close(); };
-  }, [boardId, persistence, isPublicViewer, selectedCardId]);
+  }, [authState, boardId, persistence, isPublicViewer, selectedCardId]);
 
   useEffect(() => {
     const canvas = diagramCanvasRef.current;
