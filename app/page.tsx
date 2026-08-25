@@ -439,11 +439,13 @@ type MentionTextareaProps = {
   onDrop?: (event: ReactDragEvent<HTMLTextAreaElement>) => void;
   onPaste?: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   onSubmitShortcut?: () => void;
+  commands?: { command: string; label: string }[];
 };
 
-function MentionTextarea({ value, onValueChange, members, className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste, onSubmitShortcut }: MentionTextareaProps) {
+function MentionTextarea({ value, onValueChange, members, className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }: MentionTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [query, setQuery] = useState<string | null>(null);
+  const [commandQuery, setCommandQuery] = useState<string | null>(null);
   const isChecklistDescription = ariaLabel.startsWith('Описание пункта ');
   const [isMarkdownPreview, setMarkdownPreview] = useState(isChecklistDescription);
   useEffect(() => {
@@ -452,9 +454,12 @@ function MentionTextarea({ value, onValueChange, members, className, placeholder
   const findQuery = (nextValue: string, caret: number | null) => {
     const beforeCaret = nextValue.slice(0, caret ?? nextValue.length);
     const match = beforeCaret.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);
+    const commandMatch = beforeCaret.match(/(?:^|\s)\/([a-zA-Z]*)$/);
     setQuery(match ? match[1].toLowerCase() : null);
+    setCommandQuery(commandMatch ? commandMatch[1].toLowerCase() : null);
   };
   const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().startsWith(query)).slice(0, 7);
+  const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
   const insertMention = (member: Member) => {
     const textarea = textareaRef.current;
     const caret = textarea?.selectionStart ?? value.length;
@@ -468,10 +473,23 @@ function MentionTextarea({ value, onValueChange, members, className, placeholder
       textarea?.focus(); textarea?.setSelectionRange(nextCaret, nextCaret);
     });
   };
+  const insertCommand = (item: { command: string }) => {
+    const textarea = textareaRef.current;
+    const caret = textarea?.selectionStart ?? value.length;
+    const slash = value.slice(0, caret).lastIndexOf('/');
+    if (slash < 0) return;
+    const next = `${value.slice(0, slash)}/${item.command} ${value.slice(caret)}`;
+    onValueChange(next);
+    setCommandQuery(null);
+    window.requestAnimationFrame(() => {
+      const nextCaret = slash + item.command.length + 2;
+      textarea?.focus(); textarea?.setSelectionRange(nextCaret, nextCaret);
+    });
+  };
   if (isChecklistDescription && isMarkdownPreview) {
     return <div className={`checklist-description-preview markdown-editable-description ${className ?? ''}`} role={disabled ? undefined : 'button'} tabIndex={disabled ? undefined : 0} onClick={() => { if (!disabled) setMarkdownPreview(false); }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMarkdownPreview(false); } }}><MarkdownDescription value={value} emptyText="Добавьте описание пункта…" /></div>;
   }
-  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') setQuery(null); if (event.key === 'Tab' && suggestions[0]) { event.preventDefault(); insertMention(suggestions[0]); } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else onSubmitShortcut(); } }} onBlur={() => { setQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{suggestions.length > 0 && <div className="mention-suggestions" role="listbox" aria-label="Участники доски"><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</div>}</div>;
+  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); else onSubmitShortcut(); } }} onBlur={() => { setQuery(null); setCommandQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); insertCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
 }
 
 function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramElement) {
@@ -589,6 +607,7 @@ export default function Home() {
   const [checklistNameDraft, setChecklistNameDraft] = useState('');
   const [checklistItemDrafts, setChecklistItemDrafts] = useState<Record<string, string>>({});
   const [expandedChecklistItemIds, setExpandedChecklistItemIds] = useState<string[]>([]);
+  const [hideCompletedChecklistItems, setHideCompletedChecklistItems] = useState(false);
   const [checklistItemDescriptionDrafts, setChecklistItemDescriptionDrafts] = useState<Record<string, string>>({});
   const [isUploadingChecklistItemAttachment, setUploadingChecklistItemAttachment] = useState(false);
   const [imagePreview, setImagePreview] = useState<{ url: string; name: string } | null>(null);
@@ -780,11 +799,11 @@ export default function Home() {
   const previousBackgroundDraftRef = useRef('');
   const previousWorkspaceBackgroundDraftRef = useRef('');
   const boardBackgroundDisplayRef = useRef<{ fit: BoardBackgroundFit; position: BoardBackgroundPosition }>({ fit: 'cover', position: 'center' });
-  const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1 } | null>(null);
+  const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1; speed: number } | null>(null);
   const boardRef = useRef<HTMLElement | null>(null);
   const boardDragScrollFrameRef = useRef<number | null>(null);
   const boardDragScrollDirectionRef = useRef<-1 | 1 | null>(null);
-  const boardPanRef = useRef<{ pointerId: number; startX: number; startY: number; startScrollLeft: number; startScrollTop: number; moved: boolean } | null>(null);
+  const boardPanRef = useRef<{ pointerId: number; startX: number; startY: number; startScrollLeft: number; startScrollTop: number; startWindowScrollY: number; moved: boolean } | null>(null);
   const freeformDragRef = useRef<{ pointerId: number; columnId: EntityId; startX: number; startY: number; origin: FreeformPosition } | null>(null);
   const freeformCanvasRef = useRef<HTMLDivElement | null>(null);
   const freeformInkRef = useRef<{ pointerId: number; erasing: boolean } | null>(null);
@@ -1324,7 +1343,7 @@ export default function Home() {
   }
   function renderChecklists() {
     return <section className="checklists checklist-panel">
-      <div className="section-heading"><h3>Чек-листы</h3><span>{checklists.length || '—'}</span></div>
+      <div className="section-heading"><h3>Чек-листы</h3><span>{checklists.length || '—'}</span>{checklists.some((checklist) => checklist.items.some((item) => item.is_completed)) && <button className="text-action checklist-completed-toggle" type="button" onClick={() => setHideCompletedChecklistItems((current) => !current)}>{hideCompletedChecklistItems ? 'Показать отмеченные пункты' : 'Скрыть отмеченные пункты'}</button>}</div>
       {isDetailsLoading ? <p className="detail-loading">Загружаем чек-листы…</p> : <>
         {checklists.map((checklist) => {
           const completed = checklist.items.filter((item) => item.is_completed).length;
@@ -1340,7 +1359,7 @@ export default function Home() {
             </div>
             {!isCollapsed && <>
               <div className="progress"><i style={{ width: `${checklist.items.length ? completed / checklist.items.length * 100 : 0}%` }} /></div>
-              {checklist.items.map((item) => {
+              {checklist.items.filter((item) => !hideCompletedChecklistItems || !item.is_completed).map((item) => {
                 const itemId = String(item.id);
                 const isExpanded = expandedChecklistItemIds.includes(itemId);
                 return <div className="checklist-item" key={item.id}>
@@ -1717,7 +1736,7 @@ export default function Home() {
       const target = dragScrollTargetRef.current;
       if (!target) { dragScrollFrameRef.current = null; return; }
       const previousTop = target.element.scrollTop;
-      target.element.scrollTop += target.direction * 12;
+      target.element.scrollTop += target.direction * target.speed;
       if (target.element.scrollTop === previousTop) { dragScrollFrameRef.current = null; return; }
       dragScrollFrameRef.current = window.requestAnimationFrame(scroll);
     };
@@ -1729,9 +1748,13 @@ export default function Home() {
     if (!list) return;
     const bounds = list.getBoundingClientRect();
     const edge = Math.min(62, Math.max(36, bounds.height * 0.18));
-    const direction: -1 | 1 | null = event.clientY < bounds.top + edge ? -1 : event.clientY > bounds.bottom - edge ? 1 : null;
+    const isNearTop = event.clientY < bounds.top + edge;
+    const isNearBottom = event.clientY > bounds.bottom - edge;
+    const direction: -1 | 1 | null = isNearTop ? -1 : isNearBottom ? 1 : null;
     if (!direction) { stopCardListAutoScroll(); return; }
-    dragScrollTargetRef.current = { element: list, direction };
+    const edgeDistance = isNearTop ? event.clientY - bounds.top : bounds.bottom - event.clientY;
+    const closeness = Math.max(0, Math.min(1, 1 - edgeDistance / edge));
+    dragScrollTargetRef.current = { element: list, direction, speed: 2 + 22 * closeness * closeness };
     startCardListAutoScroll();
   }
   function stopBoardAutoScroll() {
@@ -1756,7 +1779,7 @@ export default function Home() {
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('.column-head, button, input, textarea, select, a, .composer') || (!isPublicViewer && target?.closest('.task-card'))) return;
     const board = event.currentTarget;
-    boardPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startScrollLeft: board.scrollLeft, startScrollTop: board.scrollTop, moved: false };
+    boardPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startScrollLeft: board.scrollLeft, startScrollTop: board.scrollTop, startWindowScrollY: window.scrollY, moved: false };
   }
   function moveBoardPan(event: ReactPointerEvent<HTMLElement>) {
     const pan = boardPanRef.current;
@@ -1768,7 +1791,10 @@ export default function Home() {
       setBoardPanning(true);
     }
     event.currentTarget.scrollLeft = pan.startScrollLeft - (event.clientX - pan.startX);
-    event.currentTarget.scrollTop = pan.startScrollTop - (event.clientY - pan.startY);
+    const requestedTop = pan.startScrollTop - (event.clientY - pan.startY);
+    event.currentTarget.scrollTop = requestedTop;
+    const consumedVerticalMovement = event.currentTarget.scrollTop - pan.startScrollTop;
+    window.scrollTo({ top: pan.startWindowScrollY - (event.clientY - pan.startY) + consumedVerticalMovement, behavior: 'auto' });
     event.preventDefault();
   }
   function stopBoardPan(event: ReactPointerEvent<HTMLElement>) {
@@ -1851,8 +1877,6 @@ export default function Home() {
   function moveCard(cardId: EntityId, sourceListId: EntityId, targetListId: EntityId, beforeCardId?: EntityId) {
     const card = columns.find((column) => column.id === sourceListId)?.cards.find((item) => item.id === cardId);
     if (!card) return;
-    const sourceElement = typeof document === 'undefined' ? null : Array.from(document.querySelectorAll<HTMLElement>('[data-card-id]')).find((element) => element.dataset.cardId === String(cardId));
-    const sourceBounds = cardDragPreview?.card.id === cardId ? { left: cardDragPreview.x - 28, top: cardDragPreview.y - 20, width: cardDragPreview.width, height: cardDragPreview.height } : sourceElement?.getBoundingClientRect();
     setColumns((current) => {
       const withoutCard = current.map((column) => column.id === sourceListId ? { ...column, cards: column.cards.filter((item) => item.id !== cardId) } : column);
       return withoutCard.map((column) => {
@@ -1863,17 +1887,6 @@ export default function Home() {
         return { ...column, cards };
       });
     });
-    if (sourceBounds && typeof window !== 'undefined') {
-      const motionKey = Date.now();
-      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-        const targetElement = Array.from(document.querySelectorAll<HTMLElement>('[data-card-id]')).find((element) => element.dataset.cardId === String(cardId));
-        if (!targetElement) return;
-        const targetBounds = targetElement.getBoundingClientRect();
-        if (Math.abs(targetBounds.left - sourceBounds.left) < 2 && Math.abs(targetBounds.top - sourceBounds.top) < 2) return;
-        setCardMoveMotion({ key: motionKey, cardId: String(cardId), title: card.title, from: sourceBounds, to: targetBounds });
-        window.setTimeout(() => setCardMoveMotion((current) => current?.key === motionKey ? null : current), 480);
-      }));
-    }
     clearFreeformCardPosition(cardId);
     clearDragState(); showToast(`«${card.title}» перемещена`);
     if (persistence === 'connected' && typeof cardId === 'string' && typeof targetListId === 'string') {
@@ -3430,7 +3443,6 @@ export default function Home() {
             </div>
             <section className="description-section"><div className="section-heading"><h3>Описание</h3></div>{isEditingCardDescription ? <MentionTextarea autoFocus className={`card-description-input media-drop-target ${isUploadingAttachment ? 'uploading' : ''} ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} value={cardDescriptionDraft} onValueChange={setCardDescriptionDraft} onBlur={() => setEditingCardDescription(false)} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'description')} onPaste={(event) => handleMediaPaste(event, 'description')} placeholder="Добавьте описание или перетащите изображение/видео…" ariaLabel="Описание задачи" /> : <div className={`markdown-editable-description ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} role={isPublicViewer ? undefined : 'button'} tabIndex={isPublicViewer ? undefined : 0} onClick={() => { if (!isPublicViewer) setEditingCardDescription(true); }} onKeyDown={(event) => { if (!isPublicViewer && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setEditingCardDescription(true); } }}><MarkdownDescription value={cardDescriptionDraft} highlightMentions={unreadMentionSourceIds.includes(String(selected.id))} /></div>}</section>
             </div>
-            <section className="checklists"><div className="section-heading"><h3>Чек-листы</h3><span>{checklists.length || '—'}</span></div>{isDetailsLoading ? <p className="detail-loading">Загружаем чек-листы…</p> : <>{checklists.map((checklist) => { const completed = checklist.items.filter((item) => item.is_completed).length; const itemIds = checklist.items.map((item) => String(item.id)); const allExpanded = itemIds.length > 0 && itemIds.every((id) => expandedChecklistItemIds.includes(id)); return <section className="checklist" key={checklist.id}><div className="section-heading"><h4>{checklist.title}</h4><span>{completed}/{checklist.items.length}</span><button className="text-action checklist-all-toggle" type="button" title={allExpanded ? 'Свернуть все детали' : 'Раскрыть все детали'} onClick={() => setExpandedChecklistItemIds((current) => allExpanded ? current.filter((id) => !itemIds.includes(id)) : [...new Set([...current, ...itemIds])])}>{allExpanded ? '⌃ Все' : '⌄ Все'}</button><button className="text-action danger-text" onClick={() => deleteChecklist(checklist)}>Удалить</button></div><div className="progress"><i style={{ width: `${checklist.items.length ? completed / checklist.items.length * 100 : 0}%` }} /></div>{checklists.map((checklist) => checklist).filter((currentChecklist) => currentChecklist.id === checklist.id).flatMap((currentChecklist) => currentChecklist.items).map((item) => { const itemId = String(item.id); const isExpanded = expandedChecklistItemIds.includes(itemId); return <div className="checklist-item" key={item.id}><div className="check-row"><button className={`check-item ${item.is_completed ? 'done' : ''}`} onClick={() => toggleChecklistItem(checklist.id, item)} aria-pressed={item.is_completed}><span className="check-control">{item.is_completed && '✓'}</span>{item.title}</button><button className={`check-item-toggle ${isExpanded ? 'open' : ''}`} type="button" title={isExpanded ? 'Скрыть детали пункта' : 'Раскрыть детали пункта'} aria-expanded={isExpanded} onClick={() => setExpandedChecklistItemIds((current) => current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId])}>⌄</button><button className="remove-check" onClick={() => removeChecklistItem(checklist.id, item)} aria-label={`Удалить пункт ${item.title}`}>×</button></div>{isExpanded && <div className="check-item-detail"><MentionTextarea className={unreadMentionSourceIds.includes(itemId) ? 'mention-highlight' : undefined} value={checklistItemDescriptionDrafts[itemId] ?? item.description} onValueChange={(value) => setChecklistItemDescriptionDrafts((current) => ({ ...current, [itemId]: value }))} onBlur={() => saveChecklistItemDescription(checklist.id, item)} members={account ? workspaceMembers : []} maxLength={4000} placeholder="Описание пункта…" ariaLabel={`Описание пункта ${item.title}`} /><label className="check-item-upload">{isUploadingChecklistItemAttachment ? 'Загружаем…' : '＋ Картинка или видео'}<input type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple disabled={isUploadingChecklistItemAttachment} onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ''; void uploadChecklistItemAttachments(checklist.id, item, files); }} /></label>{item.attachments.length > 0 && <div className="check-item-attachments">{item.attachments.map((attachment) => <figure key={attachment.id}>{attachment.media_type.startsWith('image/') ? <button className="check-item-image" type="button" onClick={() => setImagePreview({ url: assetUrl(attachment.url), name: attachment.original_name })}><img src={assetUrl(attachment.url)} alt={attachment.original_name} /></button> : attachment.media_type.startsWith('video/') ? <video controls preload="metadata" src={assetUrl(attachment.url)} /> : <a href={assetUrl(attachment.url)} target="_blank" rel="noreferrer">{attachment.original_name}</a>}<figcaption><span>{attachment.original_name}</span><button type="button" onClick={() => deleteChecklistItemAttachment(checklist.id, item, attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure>)}</div>}</div>}</div>; })}<form className="inline-composer" onSubmit={(event) => addChecklistItem(event, checklist.id)}><input value={checklistItemDrafts[checklist.id] ?? ''} onChange={(event) => setChecklistItemDrafts((current) => ({ ...current, [checklist.id]: event.target.value }))} maxLength={500} placeholder="Добавить пункт…" aria-label={`Новый пункт для ${checklist.title}`} /><button type="submit" disabled={isSavingChecklist || !(checklistItemDrafts[checklist.id] ?? '').trim()}>Добавить</button></form></section>; })}<form className="new-checklist-form" onSubmit={createChecklist}><input value={checklistNameDraft} onChange={(event) => setChecklistNameDraft(event.target.value)} maxLength={200} placeholder="Название нового чек-листа" aria-label="Название нового чек-листа" /><button type="submit" disabled={isSavingChecklist || !checklistNameDraft.trim()}>＋ Чек-лист</button></form></>}</section>
             {renderChecklists()}
             <div className="attachments"><div className="section-heading"><h3>Вложения</h3><span>{attachments.length}</span></div>{attachments.length ? <div className="attachment-grid">{attachments.map((attachment) => /^(image|video)\//.test(attachment.media_type) ? <figure className="attachment-preview" key={attachment.id}>{attachment.media_type.startsWith('video/') ? <video controls={selected.coverAttachmentId !== attachment.id} preload="metadata" src={assetUrl(attachment.url)} /> : <img src={assetUrl(attachment.url)} alt={attachment.original_name} />}<figcaption><span>{attachment.original_name}</span><div className="cover-controls"><select value={selected.coverAttachmentId === attachment.id ? selected.coverMode ?? 'full' : coverModeDraft} onChange={(event) => { const mode = event.target.value as 'full' | 'top'; setCoverModeDraft(mode); if (selected.coverAttachmentId === attachment.id) updateCardCover(attachment, mode); }} aria-label="Тип обложки"><option value="full">Фон</option><option value="top">Сверху</option></select><button className="cover-button" onClick={() => updateCardCover(selected.coverAttachmentId === attachment.id ? null : attachment)}>{selected.coverAttachmentId === attachment.id ? 'Снять' : 'Установить'}</button></div><button className="attachment-remove" onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure> : attachment.media_type.startsWith('video/') ? <figure className="attachment-preview" key={attachment.id}><video controls preload="metadata" src={assetUrl(attachment.url)} /><figcaption>{attachment.original_name}<button onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure> : <div className="attachment-file" key={attachment.id}><span>▶</span><a href={assetUrl(attachment.url)} target="_blank" rel="noreferrer">{attachment.original_name}</a><button onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></div>)}</div> : <p className="empty-attachments">Прикрепите изображение или видео до 50 МиБ.</p>}<label className="upload-button">{isUploadingAttachment ? 'Загружаем…' : '＋ Добавить файл'}<input type="file" accept="image/jpeg,image/png,image/gif,image/png,image/webp,video/mp4,video/webm,video/quicktime" multiple disabled={isUploadingAttachment} onChange={uploadAttachments} /></label></div>
             <footer className="modal-actions"><button className="archive-button" onClick={archiveSelectedCard}>Архивировать</button><span className={`autosave-status ${cardSaveStatus}`}>{cardSaveStatus === 'saving' ? 'Изменения сохраняются' : cardSaveStatus === 'error' ? 'Не удалось сохранить' : 'Все изменения сохранены'}</span></footer>
@@ -3443,7 +3455,7 @@ export default function Home() {
                 {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
                 {activity.map((item) => <div className="activity-message" key={item.id}><i>Console</i><p><b>@{item.actor_name ?? 'Deleted user'}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>)}
               </div>}
-              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" /><button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
+              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" /><button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
             </section>
           </aside>
         </div>

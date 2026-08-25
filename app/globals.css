@@ -398,6 +398,8 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .mention-suggestions button { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 6px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left; font-size: 12px; font-weight: 750; }
 .mention-suggestions button:hover { background: var(--surface-soft); color: var(--primary); }
 .mention-suggestions .avatar { width: 24px; height: 24px; flex: 0 0 24px; font-size: 7px; }
+.mention-suggestions button > b { min-width: 44px; color: var(--primary); font-size: 12px; }
+.mention-suggestions button > b + span { color: var(--muted); font-size: 11px; font-weight: 650; }
 .mention-highlight { border-radius: 4px; background: color-mix(in srgb, #ef5b68 28%, transparent); color: var(--text); padding: 1px 3px; font-weight: 750; }
 textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--surface-raised)); box-shadow: inset 2px 0 0 #ef5b68; }
 
