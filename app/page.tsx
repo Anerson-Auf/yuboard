@@ -477,6 +477,7 @@ export default function Home() {
   const [unreadMentionSourceIds, setUnreadMentionSourceIds] = useState<string[]>([]);
   const didDragRef = useRef(false);
   const dragScrollFrameRef = useRef<number | null>(null);
+  const previousBackgroundDraftRef = useRef('');
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1 } | null>(null);
   const boardRef = useRef<HTMLElement | null>(null);
   const boardDragScrollFrameRef = useRef<number | null>(null);
@@ -694,6 +695,12 @@ export default function Home() {
     }, 650);
     return () => window.clearTimeout(timer);
   }, [cardDescriptionDraft, cardTitleDraft, persistence, selected]);
+
+  useEffect(() => {
+    const previous = previousBackgroundDraftRef.current;
+    previousBackgroundDraftRef.current = backgroundDraft;
+    if (previous.trim() && !backgroundDraft.trim() && boardBackgroundUrl) clearBoardBackground();
+  }, [backgroundDraft, boardBackgroundUrl]);
 
   function showToast(message: string) { setToast(message); window.setTimeout(() => setToast(''), 2600); }
   function persistCardDraft(card: Card, updated: { title: string; description: string }) {
@@ -1665,6 +1672,14 @@ export default function Home() {
       .catch(() => showToast('Не удалось сохранить фон: нужен HTTPS-адрес изображения'))
       .finally(() => setSavingBackground(false));
   }
+  function clearBoardBackground() {
+    if (!boardId || isSavingBackground) return;
+    setSavingBackground(true);
+    void fetch(`${API_URL}/v1/boards/${boardId}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url: null, background_fit: boardBackgroundFit, background_position: boardBackgroundPosition }) })
+      .then((response) => { if (!response.ok) throw new Error('background clear failed'); setBoardBackgroundUrl(null); setBackgroundDraft(''); showToast('Фон проекта снят'); })
+      .catch(() => showToast('Не удалось снять фон проекта'))
+      .finally(() => setSavingBackground(false));
+  }
   function uploadBoardBackground(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -1811,12 +1826,14 @@ export default function Home() {
     return <main className={`app-shell ${theme} auth-shell`}><section className="auth-card"><button className="brand auth-brand" type="button" onClick={() => setAuthMode('login')}><span className="brand-mark">✓</span><span>Flowboard</span></button><p className="eyebrow">FLOWBOARD</p><h1>{isRegistering ? inviteToken ? 'Активировать аккаунт' : 'Создать первый аккаунт' : 'С возвращением'}</h1><p className="auth-copy">{isRegistering ? inviteToken ? 'Выберите уникальный ник и пароль.' : 'Первый аккаунт станет system owner.' : 'Войдите по нику, чтобы продолжить.'}</p><form className="auth-form" onSubmit={submitAuth}><label>Ник<input value={authName} onChange={(event) => setAuthName(event.target.value)} maxLength={32} required autoComplete="username" placeholder="your_nick" /></label><label>Пароль<input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} minLength={10} maxLength={256} required autoComplete={isRegistering ? 'new-password' : 'current-password'} /></label>{authError && <p className="auth-error">{authError}</p>}<button className="create-button auth-submit" type="submit" disabled={isAuthorizing}>{isAuthorizing ? 'Подключаем…' : isRegistering ? inviteToken ? 'Активировать' : 'Создать аккаунт' : 'Войти'}</button></form></section></main>;
   }
 
-  return <main className={`app-shell ${theme} ${view === 'home' ? 'home-mode' : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' ? 'has-board-background' : ''}`} style={boardBackgroundStyle}>
+  return <main className={`app-shell ${theme} ${view === 'home' ? 'home-mode' : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' ? 'has-board-background' : ''} ${!boardBackgroundUrl && view === 'board' ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
     <header className="topbar">
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
       <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам" aria-label="Поиск по задачам" /></label>
       <div className="top-actions">{account && <button className="top-utility-button" type="button" onClick={openSessions} aria-label="Открыть сессии">◷ <span>Сессии</span></button>}{account?.user.is_system_owner && <button className="top-utility-button" type="button" onClick={openAdmin} aria-label="Открыть администрирование">⚙ <span>Админ</span></button>}<button className="theme-button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label="Переключить тему">{theme === 'dark' ? '☾' : '☀'} <span>{theme === 'dark' ? 'Ночь' : 'День'}</span></button>{!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
     </header>
+
+    {view === 'board' && !boardBackgroundUrl && <div className="default-board-ambient" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i key={index} />)}</div>}
 
     {isProfileOpen && account && <div className="modal-backdrop" role="presentation" onMouseDown={() => setProfileOpen(false)}><section className="archive-modal profile-modal" role="dialog" aria-modal="true" aria-label="Профиль" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setProfileOpen(false)} aria-label="Закрыть профиль">×</button>{profilePanel === 'overview' ? <><header className="profile-modal-head"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /><div><p className="eyebrow">ПРОФИЛЬ</p><h2>@{account.user.username}</h2></div></header><div className="profile-action-list"><button onClick={() => { setProfileName(account.user.username); setProfilePanel('username'); }}>Изменить ник <span>›</span></button><button onClick={() => setProfilePanel('password')}>Сменить пароль <span>›</span></button><label>Изменить аватар<input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadProfileAvatar} disabled={isSavingProfile} /></label></div><button className="profile-signout" onClick={signOut}>Выйти из аккаунта</button></> : profilePanel === 'username' ? <><button className="text-action" onClick={() => setProfilePanel('overview')}>← Профиль</button><h2>Изменить ник</h2><form className="profile-form" onSubmit={saveProfileName}><label>Новый ник<input autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={32} /></label><div><button type="button" className="secondary-button" onClick={() => setProfilePanel('overview')}>Отмена</button><button className="create-button" type="submit" disabled={isSavingProfile}>Сохранить</button></div></form></> : <><button className="text-action" onClick={() => setProfilePanel('overview')}>← Профиль</button><h2>Сменить пароль</h2><form className="profile-form" onSubmit={changeProfilePassword}><label>Текущий пароль<input autoFocus type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>Новый пароль<input type="password" value={nextPassword} onChange={(event) => setNextPassword(event.target.value)} minLength={10} /></label><div><button type="button" className="secondary-button" onClick={() => setProfilePanel('overview')}>Отмена</button><button className="create-button" type="submit" disabled={isSavingProfile}>Сохранить</button></div></form></>}{profileError && <p className="profile-error">{profileError}</p>}</section></div>}
 
