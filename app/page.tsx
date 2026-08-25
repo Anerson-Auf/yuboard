@@ -1002,7 +1002,7 @@ export default function Home() {
         setUnreadMentionSourceIds((current) => [...new Set([...current, ...detail.unread_mention_source_ids])]);
         const checklistItems = detail.checklists.flatMap((checklist) => checklist.items);
         const cover = detail.attachments.find((attachment) => attachment.id === detail.cover_attachment_id);
-        const cardMeta = { checklist: checklistItems.length ? `${checklistItems.filter((item) => item.is_completed).length}/${checklistItems.length}` : undefined, comments: detail.comments.length || undefined, attachments: detail.attachments.length || undefined, coverAttachmentId: detail.cover_attachment_id ?? undefined, coverMode: detail.cover_mode, coverUrl: cover?.url, backgroundImageUrl: detail.background_image_url ?? undefined };
+        const cardMeta = { checklist: checklistItems.length ? `${checklistItems.filter((item) => item.is_completed).length}/${checklistItems.length}` : undefined, comments: detail.comments.length || undefined, attachments: detail.attachments.length || undefined, coverAttachmentId: detail.cover_attachment_id ?? undefined, coverMode: detail.cover_mode, coverUrl: cover?.url, backgroundImageUrl: detail.background_image_url ?? undefined, hasUnreadComments: detail.comments.some((comment) => Boolean(comment.parent_comment_id) && comment.is_unread) };
         setCoverModeDraft(detail.cover_mode);
         setSelected((current) => current ? { ...current, ...cardMeta } : current);
         setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, ...cardMeta } : card) })));
