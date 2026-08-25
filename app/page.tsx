@@ -23,7 +23,8 @@ type Checklist = { id: string; title: string; items: ChecklistItem[] };
 type Comment = { id: EntityId; body: string; author_id?: string | null; author_name: string; author_avatar_url?: string | null; parent_comment_id?: string | null; created_at?: string; edited_at?: string | null };
 type Attachment = { id: string; original_name: string; media_type: string; byte_size: number; url: string };
 type Activity = { id: string; action: string; detail: string; actor_name: string | null; created_at: string };
-type CardDetail = { checklists: Checklist[]; comments: Comment[]; attachments: Attachment[]; activity: Activity[]; cover_attachment_id: string | null; cover_mode: 'full' | 'top'; background_image_url: string | null; unread_mention_source_ids: string[] };
+type CardDetail = { checklists: Checklist[]; comments: Comment[]; attachments: Attachment[]; activity: Activity[]; cover_attachment_id: string | null; cover_mode: 'full' | 'top'; background_image_url: string | null; unread_mention_source_ids: string[]; watching: boolean };
+type CardNotification = { id: string; card_id: string; board_id: string; card_title: string; board_title: string; actor_name: string | null; action: string; detail: string; is_read: boolean; created_at: string };
 type AuthAccount = { user: { id: string; username: string; avatar_url: string | null; is_system_owner: boolean } };
 type AuthState = 'checking' | 'signed-out' | 'signed-in' | 'public';
 type Workspace = { id: string; name: string };
@@ -465,6 +466,10 @@ export default function Home() {
   const [isAdminLoading, setAdminLoading] = useState(false);
   const [isSessionsOpen, setSessionsOpen] = useState(false);
   const [sessions, setSessions] = useState<AuthSession[]>([]);
+  const [notifications, setNotifications] = useState<CardNotification[]>([]);
+  const [isNotificationsOpen, setNotificationsOpen] = useState(false);
+  const [isNotificationsLoading, setNotificationsLoading] = useState(false);
+  const [pendingNotificationCardId, setPendingNotificationCardId] = useState<string | null>(null);
   const [availableAccounts, setAvailableAccounts] = useState<ApiMember[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
@@ -559,6 +564,7 @@ export default function Home() {
   const [isSavingColumn, setSavingColumn] = useState(false);
   const [cardDetailRevision, setCardDetailRevision] = useState(0);
   const [unreadMentionSourceIds, setUnreadMentionSourceIds] = useState<string[]>([]);
+  const [isWatchingCard, setWatchingCard] = useState(false);
   const didDragRef = useRef(false);
   const dragScrollFrameRef = useRef<number | null>(null);
   const previousBackgroundDraftRef = useRef('');
@@ -587,6 +593,7 @@ export default function Home() {
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
   const selectedCardId = selected?.id;
   const isPublicViewer = authState === 'public' || !canEditBoard;
+  const unreadNotificationCount = notifications.filter((notification) => !notification.is_read).length;
   const dueDays = useMemo(() => calendarDays(dueCursor), [dueCursor]);
   const currentMember = account ? memberFromApi({ id: account.user.id, username: account.user.username, avatar_url: account.user.avatar_url }) : { id: '', initials: '—', color: 'violet', name: 'Пользователь' };
   const boardBackgroundStyle = view === 'board' && boardBackgroundUrl ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${assetUrl(boardBackgroundUrl)}")`, backgroundSize: boardBackgroundFit === 'fill' ? '100% 100%' : boardBackgroundFit, backgroundPosition: boardBackgroundPosition === 'top' ? 'center top' : boardBackgroundPosition === 'bottom' ? 'center bottom' : 'center', backgroundRepeat: 'no-repeat' } : undefined;
@@ -678,6 +685,21 @@ export default function Home() {
   }, [inviteToken, sharedBoardId]);
 
   useEffect(() => {
+    if (authState !== 'signed-in') { setNotifications([]); setNotificationsOpen(false); return; }
+    void loadNotifications();
+    const intervalId = window.setInterval(() => void loadNotifications(), 20_000);
+    return () => window.clearInterval(intervalId);
+  }, [authState]);
+
+  useEffect(() => {
+    if (!pendingNotificationCardId) return;
+    const card = columns.flatMap((column) => column.cards).find((item) => item.id === pendingNotificationCardId);
+    if (!card) return;
+    setPendingNotificationCardId(null);
+    openCard(card);
+  }, [columns, pendingNotificationCardId]);
+
+  useEffect(() => {
     if (persistence !== 'connected' || typeof selectedCardId !== 'string') return;
     let cancelled = false;
     void fetch(`${API_URL}/v1/cards/${selectedCardId}/details`)
@@ -691,6 +713,7 @@ export default function Home() {
         setComments(detail.comments);
         setAttachments(detail.attachments);
         setActivity(detail.activity);
+        setWatchingCard(detail.watching);
         setUnreadMentionSourceIds((current) => [...new Set([...current, ...detail.unread_mention_source_ids])]);
         const checklistItems = detail.checklists.flatMap((checklist) => checklist.items);
         const cover = detail.attachments.find((attachment) => attachment.id === detail.cover_attachment_id);
@@ -760,6 +783,7 @@ export default function Home() {
           // The board payload only has comment counters. Reload an open card as
           // well, so Discord/API comments appear without closing the modal.
           if (typeof selectedCardId === 'string') setCardDetailRevision((current) => current + 1);
+          if (authState === 'signed-in') void loadNotifications();
         }).catch(() => undefined);
       }, 180);
     };
@@ -808,7 +832,7 @@ export default function Home() {
   }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
-    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !sidebarPanel && !columnMenuId) return;
+    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId) return;
     const closePopovers = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
       if (isBoardMenuOpen && !event.target.closest('.board-menu-control')) setBoardMenuOpen(false);
@@ -817,17 +841,18 @@ export default function Home() {
       if (isMilestonesOpen && !event.target.closest('.board-milestones-control')) setMilestonesOpen(false);
       if (isMembersPopoverOpen && !event.target.closest('.board-members-control')) setMembersPopoverOpen(false);
       if (isCardMilestoneOpen && !event.target.closest('.card-milestone-control')) setCardMilestoneOpen(false);
+      if (isNotificationsOpen && !event.target.closest('.notifications-control')) setNotificationsOpen(false);
       if (columnMenuId && !event.target.closest('.column-actions')) setColumnMenuId(null);
       if (sidebarPanel && !event.target.closest('.property-popover, .quick-action, .member-plus, .label-plus')) setSidebarPanel(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setColumnMenuId(null); setSidebarPanel(null);
+      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setNotificationsOpen(false); setColumnMenuId(null); setSidebarPanel(null);
     };
     window.addEventListener('pointerdown', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
-  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, sidebarPanel]);
+  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, sidebarPanel]);
 
   useEffect(() => {
     if (!cardContextMenu && !columnContextMenu && !freeformContextMenu) return;
@@ -1545,6 +1570,7 @@ export default function Home() {
     setAttachments([]);
     setActivity([]);
     setUnreadMentionSourceIds([]);
+    setWatchingCard(false);
     setDetailsLoading(persistence === 'connected' && typeof card.id === 'string');
     setCardTitleDraft(card.title);
     setCardDescriptionDraft(card.description ?? '');
@@ -1634,6 +1660,43 @@ export default function Home() {
     setSessionsOpen(true);
     void fetch(`${API_URL}/v1/auth/sessions`).then(async (response) => { if (!response.ok) throw new Error('sessions failed'); return response.json() as Promise<AuthSession[]>; })
       .then(setSessions).catch(() => { setSessionsOpen(false); showToast('Не удалось загрузить сессии'); });
+  }
+  function loadNotifications() {
+    if (authState !== 'signed-in') return Promise.resolve();
+    return fetch(`${API_URL}/v1/notifications`)
+      .then(async (response) => { if (!response.ok) throw new Error('notifications failed'); return response.json() as Promise<CardNotification[]>; })
+      .then(setNotifications)
+      .catch(() => undefined);
+  }
+  function toggleNotifications() {
+    setNotificationsOpen((current) => {
+      const next = !current;
+      if (next) { setNotificationsLoading(true); void loadNotifications().finally(() => setNotificationsLoading(false)); }
+      return next;
+    });
+  }
+  function openNotification(notification: CardNotification) {
+    setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, is_read: true } : item));
+    setNotificationsOpen(false);
+    if (!notification.is_read) void fetch(`${API_URL}/v1/notifications/${notification.id}/read`, { method: 'POST' }).catch(() => undefined);
+    if (notification.board_id !== boardId) { setPendingNotificationCardId(notification.card_id); void selectBoard(notification.board_id); }
+    else {
+      const card = columns.flatMap((column) => column.cards).find((item) => item.id === notification.card_id);
+      if (card) openCard(card);
+    }
+  }
+  function markAllNotificationsRead() {
+    setNotifications((current) => current.map((item) => ({ ...item, is_read: true })));
+    void fetch(`${API_URL}/v1/notifications/read`, { method: 'POST' }).catch(() => { void loadNotifications(); });
+  }
+  function toggleCardWatch() {
+    if (!selected || authState !== 'signed-in' || typeof selected.id !== 'string') return;
+    const watching = !isWatchingCard;
+    setWatchingCard(watching);
+    void fetch(`${API_URL}/v1/cards/${selected.id}/watch`, { method: watching ? 'PUT' : 'DELETE' })
+      .then(async (response) => { if (!response.ok) throw new Error('watch failed'); return response.json() as Promise<{ watching: boolean }>; })
+      .then((result) => { setWatchingCard(result.watching); showToast(result.watching ? 'Вы подписались на изменения карточки' : 'Подписка на карточку отключена'); })
+      .catch(() => { setWatchingCard(!watching); showToast('Не удалось изменить подписку'); });
   }
   function revokeSession(session: AuthSession) {
     void fetch(`${API_URL}/v1/auth/sessions/${session.id}`, { method: 'DELETE' })
@@ -2513,7 +2576,11 @@ export default function Home() {
     <header className="topbar">
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
       <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам" aria-label="Поиск по задачам" /></label>
-      <div className="top-actions">{account && <button className="top-utility-button" type="button" onClick={openSessions} aria-label="Открыть сессии">◷ <span>Сессии</span></button>}{account?.user.is_system_owner && <button className="top-utility-button" type="button" onClick={openAdmin} aria-label="Открыть администрирование">⚙ <span>Админ</span></button>}<button className="theme-button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label="Переключить тему">{theme === 'dark' ? '☾' : '☀'} <span>{theme === 'dark' ? 'Ночь' : 'День'}</span></button>{!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
+      <div className="top-actions">
+        {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action" onClick={markAllNotificationsRead}>Прочитать всё</button>}</div>{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
+        {account && <button className="top-utility-button" type="button" onClick={openSessions} aria-label="Открыть сессии">◷ <span>Сессии</span></button>}
+        {account?.user.is_system_owner && <button className="top-utility-button" type="button" onClick={openAdmin} aria-label="Открыть администрирование">⚙ <span>Админ</span></button>}
+        <button className="theme-button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label="Переключить тему">{theme === 'dark' ? '☾' : '☀'} <span>{theme === 'dark' ? 'Ночь' : 'День'}</span></button>{!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
     </header>
 
     {(view === 'home' || (view === 'board' && !boardBackgroundUrl)) && <div className="default-board-ambient" aria-hidden="true">{Array.from({ length: 84 }, (_, index) => <i key={index} />)}</div>}
@@ -2625,6 +2692,7 @@ export default function Home() {
             <div className={`card-detail-top ${selected.backgroundImageUrl ? 'has-card-background' : ''}`} style={selected.backgroundImageUrl ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
             <div className="card-property-area">
               {renderCardMilestoneControl()}
+              {authState === 'signed-in' && <button type="button" className={`quick-action card-watch-toggle ${isWatchingCard ? 'active' : ''}`} onClick={toggleCardWatch} title={isWatchingCard ? 'Отключить уведомления об этой карточке' : 'Подписаться на изменения карточки'}>{isWatchingCard ? '◉ Подписаны' : '◌ Подписаться'}</button>}
               <div className="card-quick-actions"><button className="quick-action" onClick={openDiagram}>⌁ Схема</button><button className={`quick-action ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(false); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }}>🏷 Метки</button><button className={`quick-action ${sidebarPanel === 'due' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'due' ? null : 'due')}>◷ {selected.dueAt ? formatDue(selected.dueAt) : 'Дедлайн'}</button><button className={`quick-action ${sidebarPanel === 'background' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'background' ? null : 'background')}>▧ Фон</button><button className={`quick-action ${sidebarPanel === 'public-visibility' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'public-visibility' ? null : 'public-visibility')}>◉ Доступ</button></div>
               {sidebarPanel && sidebarPanel !== 'assignees' && <div className="property-popover quick-property-popover" role="dialog" aria-label="Настройки карточки">
                 {sidebarPanel === 'labels' && <><div className="popover-heading"><b>Метки</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="label-options">{boardLabels.map((label) => <button key={label.id} className={`label-option ${selected.labels.some((current) => current.id === label.id) ? 'selected' : ''}`} style={{ borderColor: label.color, backgroundColor: `${label.color}22` }} onClick={() => toggleSelectedLabel(label)}><i style={{ backgroundColor: label.color }} /><span>{label.name}</span>{selected.labels.some((current) => current.id === label.id) && <b>✓</b>}</button>)}</div>{!existingLabelsOnly && <form className="new-label-form" onSubmit={createLabel}><input value={newLabelName} onChange={(event) => setNewLabelName(event.target.value)} maxLength={60} placeholder="Новая метка" aria-label="Название новой метки" /><input type="color" value={newLabelColor} onChange={(event) => setNewLabelColor(event.target.value)} aria-label="Цвет метки" /><button type="submit" disabled={!newLabelName.trim() || isSavingLabel}>{isSavingLabel ? 'Создаём…' : 'Создать метку'}</button></form>}</>}

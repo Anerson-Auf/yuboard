@@ -1068,6 +1068,26 @@ struct CardDetail {
     cover_mode: String,
     background_image_url: Option<String>,
     unread_mention_source_ids: Vec<Uuid>,
+    watching: bool,
+}
+
+#[derive(Serialize, FromRow)]
+struct CardNotificationResponse {
+    id: Uuid,
+    card_id: Uuid,
+    board_id: Uuid,
+    card_title: String,
+    board_title: String,
+    actor_name: Option<String>,
+    action: String,
+    detail: String,
+    is_read: bool,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct CardWatchResponse {
+    watching: bool,
 }
 
 #[derive(Serialize)]
@@ -1202,7 +1222,11 @@ async fn main() {
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
         .route("/v1/cards/{card_id}/public-visibility", patch(update_card_public_visibility))
         .route("/v1/cards/{card_id}/details", get(get_card_detail))
+        .route("/v1/cards/{card_id}/watch", put(watch_card).delete(unwatch_card))
         .route("/v1/cards/{card_id}/mentions/read", post(mark_card_mentions_read))
+        .route("/v1/notifications", get(list_notifications))
+        .route("/v1/notifications/read", post(mark_all_notifications_read))
+        .route("/v1/notifications/{notification_id}/read", post(mark_notification_read))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
         .route("/v1/checklists/{checklist_id}", axum::routing::delete(delete_checklist))
@@ -2998,6 +3022,7 @@ async fn record_card_activity(pool: &PgPool, card_id: Uuid, actor_id: Uuid, acti
     {
         tracing::error!(?error, card_id = %card_id, "card activity insert failed");
     }
+    notify_card_watchers(pool, card_id, Some(actor_id), action, detail).await;
 }
 
 async fn record_external_card_activity(pool: &PgPool, card_id: Uuid, action: &str, detail: &str) {
@@ -3010,6 +3035,35 @@ async fn record_external_card_activity(pool: &PgPool, card_id: Uuid, action: &st
         .await
     {
         tracing::error!(?error, card_id = %card_id, "external card activity insert failed");
+    }
+    notify_card_watchers(pool, card_id, None, action, detail).await;
+}
+
+async fn notify_card_watchers(pool: &PgPool, card_id: Uuid, actor_id: Option<Uuid>, action: &str, detail: &str) {
+    let watchers = sqlx::query_scalar::<_, Uuid>(
+        "SELECT cw.user_id FROM card_watchers cw INNER JOIN cards c ON c.id = cw.card_id INNER JOIN boards b ON b.id = c.board_id WHERE cw.card_id = $1 AND c.archived_at IS NULL AND b.archived_at IS NULL AND ($2::uuid IS NULL OR cw.user_id <> $2) AND (b.visibility = 'public' OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = cw.user_id) OR EXISTS(SELECT 1 FROM users u WHERE u.id = cw.user_id AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = cw.user_id AND wm.role IN ('owner', 'full_access')))"
+    )
+    .bind(card_id)
+    .bind(actor_id)
+    .fetch_all(pool)
+    .await;
+    let watchers = match watchers {
+        Ok(watchers) => watchers,
+        Err(error) => { tracing::error!(?error, card_id = %card_id, "card watcher lookup failed"); return; }
+    };
+    for user_id in watchers {
+        if let Err(error) = sqlx::query("INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail) VALUES ($1, $2, $3, $4, $5, $6)")
+            .bind(Uuid::new_v4())
+            .bind(user_id)
+            .bind(card_id)
+            .bind(actor_id)
+            .bind(action)
+            .bind(detail)
+            .execute(pool)
+            .await
+        {
+            tracing::error!(?error, card_id = %card_id, user_id = %user_id, "card notification insert failed");
+        }
     }
 }
 
@@ -3110,6 +3164,45 @@ async fn mark_card_mentions_read(State(state): State<AppState>, current: Current
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn watch_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<CardWatchResponse> {
+    let pool = database(&state)?;
+    ensure_card_public_read(pool, card_id, Some(current.id)).await?;
+    sqlx::query("INSERT INTO card_watchers (card_id, user_id) VALUES ($1, $2) ON CONFLICT (card_id, user_id) DO NOTHING")
+        .bind(card_id).bind(current.id).execute(pool).await.map_err(ApiError::internal)?;
+    Ok(Json(CardWatchResponse { watching: true }))
+}
+
+async fn unwatch_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<CardWatchResponse> {
+    let pool = database(&state)?;
+    ensure_card_public_read(pool, card_id, Some(current.id)).await?;
+    sqlx::query("DELETE FROM card_watchers WHERE card_id = $1 AND user_id = $2")
+        .bind(card_id).bind(current.id).execute(pool).await.map_err(ApiError::internal)?;
+    Ok(Json(CardWatchResponse { watching: false }))
+}
+
+async fn list_notifications(State(state): State<AppState>, current: CurrentUser) -> ApiResult<Vec<CardNotificationResponse>> {
+    let notifications = sqlx::query_as::<_, CardNotificationResponse>(
+        "SELECT n.id, n.card_id, c.board_id, c.title AS card_title, b.title AS board_title, COALESCE(u.username, 'Deleted user') AS actor_name, n.action, n.detail, n.read_at IS NOT NULL AS is_read, n.created_at::text AS created_at FROM card_notifications n INNER JOIN cards c ON c.id = n.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN users u ON u.id = n.actor_id WHERE n.user_id = $1 AND b.archived_at IS NULL AND (b.visibility = 'public' OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = n.user_id) OR EXISTS(SELECT 1 FROM users owner WHERE owner.id = n.user_id AND owner.is_system_owner AND owner.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = n.user_id AND wm.role IN ('owner', 'full_access'))) ORDER BY n.created_at DESC LIMIT 80"
+    )
+    .bind(current.id)
+    .fetch_all(database(&state)?)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(notifications))
+}
+
+async fn mark_notification_read(State(state): State<AppState>, current: CurrentUser, Path(notification_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    sqlx::query("UPDATE card_notifications SET read_at = now() WHERE id = $1 AND user_id = $2 AND read_at IS NULL")
+        .bind(notification_id).bind(current.id).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn mark_all_notifications_read(State(state): State<AppState>, current: CurrentUser) -> Result<StatusCode, ApiError> {
+    sqlx::query("UPDATE card_notifications SET read_at = now() WHERE user_id = $1 AND read_at IS NULL")
+        .bind(current.id).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<CardDetail> {
     let pool = database(&state)?;
     let actor_id = current.0.map(|user| user.id);
@@ -3205,7 +3298,11 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
         sqlx::query_scalar::<_, Uuid>("SELECT source_id FROM card_mentions WHERE card_id = $1 AND user_id = $2 AND read_at IS NULL")
             .bind(card_id).bind(actor_id).fetch_all(pool).await.map_err(ApiError::internal)?
     } else { vec![] };
-    Ok(Json(CardDetail { checklists, comments, attachments, activity, cover_attachment_id, cover_mode, background_image_url, unread_mention_source_ids }))
+    let watching = if let Some(actor_id) = actor_id {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM card_watchers WHERE card_id = $1 AND user_id = $2)")
+            .bind(card_id).bind(actor_id).fetch_one(pool).await.map_err(ApiError::internal)?
+    } else { false };
+    Ok(Json(CardDetail { checklists, comments, attachments, activity, cover_attachment_id, cover_mode, background_image_url, unread_mention_source_ids, watching }))
 }
 
 fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {
