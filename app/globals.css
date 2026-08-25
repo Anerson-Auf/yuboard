@@ -457,7 +457,8 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-members-row .member-plus { width: 37px; height: 37px; flex-basis: 37px; font-size: 20px; }
 .detail-card-labels { gap: 6px; font-size: 13px; font-weight: 800; }
 .detail-card-labels > .card-labels { min-height: 38px; gap: 7px; }
-.detail-card-labels .custom-label { min-height: 29px; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 800; }
+.label { font-weight: 600; letter-spacing: .01em; }
+.detail-card-labels .custom-label { min-height: 29px; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; }
 .card-priority-editor { gap: 12px; margin-top: 13px; font-size: 13px; }
 .card-priority-editor > div { gap: 5px; padding: 4px; }
 .card-priority-editor button { min-width: 40px; min-height: 32px; font-size: 11px; }
