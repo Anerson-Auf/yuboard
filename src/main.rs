@@ -902,6 +902,7 @@ struct BoardCardRow {
     comment_count: i64,
     attachment_count: i64,
     has_unread_mentions: bool,
+    has_unread_comments: bool,
     milestone_id: Option<Uuid>,
     milestone_name: Option<String>,
     milestone_description: Option<String>,
@@ -991,6 +992,7 @@ struct BoardCard {
     comment_count: i64,
     attachment_count: i64,
     has_unread_mentions: bool,
+    has_unread_comments: bool,
     milestone: Option<MilestoneResponse>,
     labels: Vec<LabelResponse>,
     roles: Vec<ProfileRoleResponse>,
@@ -2537,7 +2539,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -2593,6 +2595,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         comment_count: card.comment_count,
         attachment_count: card.attachment_count,
         has_unread_mentions: card.has_unread_mentions,
+        has_unread_comments: card.has_unread_comments,
         milestone: card.milestone_id.map(|id| MilestoneResponse { id, name: card.milestone_name.unwrap_or_default(), description: card.milestone_description.unwrap_or_default(), color: card.milestone_color.unwrap_or_else(|| "#6ea8fe".to_owned()), target_date: card.milestone_target_date }),
         labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone(), icon_shape: label.icon_shape.clone(), icon_color: label.icon_color.clone() }).collect(),
         roles: card_roles.iter().filter(|role| role.card_id == card.id).map(|role| ProfileRoleResponse { id: role.id, name: role.name.clone(), color: role.color.clone(), icon_shape: role.icon_shape.clone(), icon_color: role.icon_color.clone() }).collect(),
@@ -3949,9 +3952,9 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, actor_id, "edit_cards").await?;
     if let Some(parent_id) = request.parent_comment_id {
-        let parent_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2)")
+        let parent_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2 AND parent_comment_id IS NULL)")
             .bind(parent_id).bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
-        if !parent_exists { return Err(ApiError::bad_request("Thread parent does not belong to this card.")); }
+        if !parent_exists { return Err(ApiError::bad_request("A thread can only be started from a main card comment.")); }
     }
     let comment_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO comments (id, card_id, author_id, body, parent_comment_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
