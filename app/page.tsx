@@ -37,6 +37,9 @@ type FreeformDrawing = { strokes: FreeformStroke[] };
 type FreeformLiveCursor = { user_id: string; username: string; avatar_url?: string | null; x: number; y: number };
 type FreeformPing = FreeformLiveCursor & { id: string; expires_in_ms: number };
 type FreeformLive = { cursors: FreeformLiveCursor[]; pings: FreeformPing[] };
+type FreeformLiveSocketEvent =
+  | ({ type: 'cursor' } & FreeformLiveCursor)
+  | ({ type: 'ping' } & FreeformPing);
 type FreeformContextMenu = { x: number; y: number; position: FreeformPosition };
 type ArchivedCard = { id: string; list_id: string; title: string; description: string; archived_at: string };
 type TeamMember = { id: string; username: string; preset: 'owner' | 'viewer' | 'contributor' | 'editor' | 'full_access'; avatar_url?: string | null };
@@ -71,6 +74,13 @@ const browserFetch = globalThis.fetch.bind(globalThis);
 function assetUrl(url: string | null | undefined) {
   if (!url) return '';
   return /^https?:\/\//i.test(url) ? url : `${API_URL}${url}`;
+}
+
+function freeformLiveSocketUrl(boardId: string) {
+  const base = API_URL || window.location.origin;
+  const url = new URL(`/v1/boards/${boardId}/freeform/live/ws`, base);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
 }
 
 function csrfCookie() {
@@ -540,6 +550,8 @@ export default function Home() {
   const freeformCanvasRef = useRef<HTMLDivElement | null>(null);
   const freeformInkRef = useRef<{ pointerId: number; erasing: boolean } | null>(null);
   const freeformLiveSentAtRef = useRef(0);
+  const freeformLiveSocketRef = useRef<WebSocket | null>(null);
+  const freeformLiveExpiryTimersRef = useRef<Map<string, number>>(new Map());
   const freeformDrawingDirtyRef = useRef(false);
   const freeformEraseForeignRef = useRef(false);
   const freeformDrawingSaveTimerRef = useRef<number | null>(null);
@@ -880,17 +892,71 @@ export default function Home() {
   }, [authState, boardId]);
 
   useEffect(() => {
-    if (!boardId || authState !== 'signed-in' || boardViewMode !== 'freeform') { setFreeformLive({ cursors: [], pings: [] }); return; }
+    if (!boardId || authState !== 'signed-in' || boardViewMode !== 'freeform') {
+      setFreeformLive({ cursors: [], pings: [] });
+      return;
+    }
     let active = true;
-    const refresh = () => {
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    const expiryTimers = freeformLiveExpiryTimersRef.current;
+    const clearExpiry = (key: string) => {
+      const timer = expiryTimers.get(key);
+      if (timer !== undefined) window.clearTimeout(timer);
+      expiryTimers.delete(key);
+    };
+    const scheduleExpiry = (key: string, delay: number, remove: () => void) => {
+      clearExpiry(key);
+      expiryTimers.set(key, window.setTimeout(() => { expiryTimers.delete(key); if (active) remove(); }, delay));
+    };
+    const applyEvent = (event: FreeformLiveSocketEvent) => {
+      if (event.type === 'cursor') {
+        setFreeformLive((current) => ({ ...current, cursors: [...current.cursors.filter((cursor) => cursor.user_id !== event.user_id), event] }));
+        scheduleExpiry(`cursor:${event.user_id}`, 12_200, () => setFreeformLive((current) => ({ ...current, cursors: current.cursors.filter((cursor) => cursor.user_id !== event.user_id) })));
+        return;
+      }
+      setFreeformLive((current) => ({ ...current, pings: [...current.pings.filter((ping) => ping.id !== event.id), event] }));
+      scheduleExpiry(`ping:${event.id}`, Math.max(100, event.expires_in_ms), () => setFreeformLive((current) => ({ ...current, pings: current.pings.filter((ping) => ping.id !== event.id) })));
+    };
+    const loadSnapshot = () => {
       void fetch(`${API_URL}/v1/boards/${boardId}/freeform/live`)
-        .then(async (response) => { if (!response.ok) throw new Error('live refresh failed'); return response.json() as Promise<FreeformLive>; })
-        .then((live) => { if (active) setFreeformLive(live); })
+        .then(async (response) => { if (!response.ok) throw new Error('live snapshot failed'); return response.json() as Promise<FreeformLive>; })
+        .then((live) => {
+          if (!active) return;
+          setFreeformLive(live);
+          live.cursors.forEach((cursor) => scheduleExpiry(`cursor:${cursor.user_id}`, 12_200, () => setFreeformLive((current) => ({ ...current, cursors: current.cursors.filter((item) => item.user_id !== cursor.user_id) }))));
+          live.pings.forEach((ping) => scheduleExpiry(`ping:${ping.id}`, Math.max(100, ping.expires_in_ms), () => setFreeformLive((current) => ({ ...current, pings: current.pings.filter((item) => item.id !== ping.id) }))));
+        })
         .catch(() => undefined);
     };
-    refresh();
-    const timer = window.setInterval(refresh, 650);
-    return () => { active = false; window.clearInterval(timer); };
+    const connect = () => {
+      if (!active) return;
+      let nextSocket: WebSocket;
+      try { nextSocket = new WebSocket(freeformLiveSocketUrl(boardId)); } catch { reconnectTimer = window.setTimeout(connect, 1_000); return; }
+      socket = nextSocket;
+      freeformLiveSocketRef.current = nextSocket;
+      nextSocket.onopen = loadSnapshot;
+      nextSocket.onmessage = (message) => {
+        try {
+          const event = JSON.parse(String(message.data)) as FreeformLiveSocketEvent;
+          if (event.type === 'cursor' || event.type === 'ping') applyEvent(event);
+        } catch { /* Ignore malformed broadcast packets. */ }
+      };
+      nextSocket.onerror = () => nextSocket.close();
+      nextSocket.onclose = () => {
+        if (freeformLiveSocketRef.current === nextSocket) freeformLiveSocketRef.current = null;
+        if (active) reconnectTimer = window.setTimeout(connect, 1_000);
+      };
+    };
+    connect();
+    return () => {
+      active = false;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (freeformLiveSocketRef.current === socket) freeformLiveSocketRef.current = null;
+      socket?.close();
+      expiryTimers.forEach((timer) => window.clearTimeout(timer));
+      expiryTimers.clear();
+    };
   }, [authState, boardId, boardViewMode]);
 
   useEffect(() => {
@@ -924,8 +990,13 @@ export default function Home() {
   function publishFreeformCursor(point: FreeformPosition, ping = false) {
     if (!boardId || authState !== 'signed-in' || boardViewMode !== 'freeform') return;
     const now = Date.now();
-    if (!ping && now - freeformLiveSentAtRef.current < 110) return;
+    if (!ping && now - freeformLiveSentAtRef.current < 32) return;
     freeformLiveSentAtRef.current = now;
+    const socket = freeformLiveSocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(ping ? { type: 'ping', ...point } : { type: 'cursor', ...point }));
+      return;
+    }
     void fetch(`${API_URL}/v1/boards/${boardId}/freeform/live`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...point, ping }) })
       .then(async (response) => { if (!response.ok) throw new Error('live update failed'); return response.json() as Promise<FreeformLive>; })
       .then((live) => setFreeformLive(live))
@@ -939,17 +1010,18 @@ export default function Home() {
   function zoomFreeformWithWheel(event: ReactWheelEvent<HTMLElement>) {
     if (boardViewMode !== 'freeform' || event.target instanceof Element && event.target.closest('.card-list, textarea, input, select')) return;
     event.preventDefault();
+    event.stopPropagation();
     const delta = event.deltaY > 0 ? -0.08 : 0.08;
     const board = event.currentTarget;
     const bounds = board.getBoundingClientRect();
     const cursorX = (event.clientX - bounds.left + board.scrollLeft) / freeformZoom;
-    const cursorY = (event.clientY - bounds.top + board.scrollTop) / freeformZoom;
+    const scrollTop = board.scrollTop;
     const nextZoom = Math.max(0.42, Math.min(1.45, Math.round((freeformZoom + delta) * 100) / 100));
     if (nextZoom === freeformZoom) return;
     setFreeformZoom(nextZoom);
     window.requestAnimationFrame(() => {
       board.scrollLeft = Math.max(0, cursorX * nextZoom - (event.clientX - bounds.left));
-      board.scrollTop = Math.max(0, cursorY * nextZoom - (event.clientY - bounds.top));
+      board.scrollTop = scrollTop;
     });
   }
   function startFreeformInk(event: ReactPointerEvent<SVGSVGElement>) {

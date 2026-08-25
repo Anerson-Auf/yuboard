@@ -6,7 +6,8 @@ use argon2::{
 };
 use axum::{
     body::Body,
-    extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, State, WebSocketUpgrade},
+    extract::ws::{Message, WebSocket},
     http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::{sse::{Event, Sse}, IntoResponse, Response},
     routing::{get, patch, post, put},
@@ -14,6 +15,7 @@ use axum::{
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::{DateTime, Datelike, FixedOffset, Utc};
+use futures_util::SinkExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -31,6 +33,7 @@ struct AppState {
     external_http: reqwest::Client,
     events: broadcast::Sender<()>,
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
+    freeform_live_events: broadcast::Sender<FreeformLiveEvent>,
     auth_rate_limiter: RateLimiter,
     trust_proxy: bool,
 }
@@ -348,6 +351,13 @@ struct FreeformCursorPresence { x: i32, y: i32, last_seen: Instant }
 #[derive(Clone)]
 struct FreeformPingPresence { id: Uuid, user_id: Uuid, x: i32, y: i32, expires_at: Instant }
 
+#[derive(Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum FreeformLiveEvent {
+    Cursor { board_id: Uuid, user_id: Uuid, username: String, avatar_url: Option<String>, x: i32, y: i32 },
+    Ping { board_id: Uuid, id: Uuid, user_id: Uuid, username: String, avatar_url: Option<String>, x: i32, y: i32, expires_in_ms: u64 },
+}
+
 #[derive(Serialize)]
 struct BoardBackgroundUploadResponse {
     url: String,
@@ -431,6 +441,13 @@ struct UpdateFreeformLiveRequest {
     y: i32,
     #[serde(default)]
     ping: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum FreeformLiveSocketRequest {
+    Cursor { x: i32, y: i32 },
+    Ping { x: i32, y: i32 },
 }
 
 #[derive(Serialize, FromRow)]
@@ -1098,6 +1115,7 @@ async fn main() {
         .route("/v1/boards/{board_id}", get(get_board).patch(update_board).delete(delete_board))
         .route("/v1/boards/{board_id}/layout", get(get_board_layout).patch(update_board_layout))
         .route("/v1/boards/{board_id}/freeform/live", get(get_freeform_live).post(update_freeform_live))
+        .route("/v1/boards/{board_id}/freeform/live/ws", get(freeform_live_websocket))
         .route("/v1/boards/{board_id}/freeform/drawing", get(get_board_freeform_drawing).put(replace_board_freeform_drawing))
         .route("/v1/boards/{board_id}/background", put(update_board_background))
         .route("/v1/boards/{board_id}/background/file", get(download_board_background).post(upload_board_background))
@@ -1156,7 +1174,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -2262,21 +2280,66 @@ async fn get_freeform_live(State(state): State<AppState>, current: CurrentUser, 
     freeform_live_snapshot(&state, board_id).await
 }
 
-async fn update_freeform_live(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateFreeformLiveRequest>) -> ApiResult<FreeformLiveResponse> {
-    if !(0..=200_000).contains(&request.x) || !(0..=200_000).contains(&request.y) {
+async fn record_freeform_live_update(state: &AppState, board_id: Uuid, current: CurrentUser, x: i32, y: i32, ping: bool) -> Result<FreeformLiveEvent, ApiError> {
+    if !(0..=200_000).contains(&x) || !(0..=200_000).contains(&y) {
         return Err(ApiError::bad_request("Freeform coordinates must be between 0 and 200000."));
     }
     ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    let account = sqlx::query_as::<_, FreeformLiveAccount>("SELECT id, username, CASE WHEN avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || id::text END AS avatar_url FROM users WHERE id = $1 AND disabled_at IS NULL")
+        .bind(current.id).fetch_optional(database(state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(ApiError::unauthorized)?;
     let now = Instant::now();
+    let ping_id = if ping { Some(Uuid::new_v4()) } else { None };
     {
         let mut boards = state.freeform_live.lock().await;
         let board = boards.entry(board_id).or_default();
-        board.cursors.insert(current.id, FreeformCursorPresence { x: request.x, y: request.y, last_seen: now });
-        if request.ping {
-            board.pings.push(FreeformPingPresence { id: Uuid::new_v4(), user_id: current.id, x: request.x, y: request.y, expires_at: now + Duration::from_secs(5) });
+        board.cursors.insert(current.id, FreeformCursorPresence { x, y, last_seen: now });
+        if let Some(id) = ping_id {
+            board.pings.push(FreeformPingPresence { id, user_id: current.id, x, y, expires_at: now + Duration::from_secs(5) });
         }
     }
+    Ok(match ping_id {
+        Some(id) => FreeformLiveEvent::Ping { board_id, id, user_id: current.id, username: account.username, avatar_url: account.avatar_url, x, y, expires_in_ms: 5_000 },
+        None => FreeformLiveEvent::Cursor { board_id, user_id: current.id, username: account.username, avatar_url: account.avatar_url, x, y },
+    })
+}
+
+async fn update_freeform_live(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateFreeformLiveRequest>) -> ApiResult<FreeformLiveResponse> {
+    let event = record_freeform_live_update(&state, board_id, current, request.x, request.y, request.ping).await?;
+    let _ = state.freeform_live_events.send(event);
     freeform_live_snapshot(&state, board_id).await
+}
+
+async fn freeform_live_websocket(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, upgrade: WebSocketUpgrade) -> Result<Response, ApiError> {
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    Ok(upgrade.on_upgrade(move |socket| run_freeform_live_websocket(state, board_id, current, socket)))
+}
+
+async fn run_freeform_live_websocket(state: AppState, board_id: Uuid, current: CurrentUser, socket: WebSocket) {
+    let (mut sender, mut receiver) = futures_util::StreamExt::split(socket);
+    let mut events = state.freeform_live_events.subscribe();
+    loop {
+        tokio::select! {
+            incoming = futures_util::StreamExt::next(&mut receiver) => {
+                let Some(Ok(Message::Text(payload))) = incoming else { break; };
+                let Ok(request) = serde_json::from_str::<FreeformLiveSocketRequest>(&payload) else { continue; };
+                let (x, y, ping) = match request {
+                    FreeformLiveSocketRequest::Cursor { x, y } => (x, y, false),
+                    FreeformLiveSocketRequest::Ping { x, y } => (x, y, true),
+                };
+                if let Ok(event) = record_freeform_live_update(&state, board_id, current, x, y, ping).await {
+                    let _ = state.freeform_live_events.send(event);
+                } else { break; }
+            }
+            event = events.recv() => {
+                let Ok(event) = event else { continue; };
+                let event_board_id = match &event { FreeformLiveEvent::Cursor { board_id, .. } | FreeformLiveEvent::Ping { board_id, .. } => *board_id };
+                if event_board_id != board_id { continue; }
+                let Ok(payload) = serde_json::to_string(&event) else { continue; };
+                if sender.send(Message::Text(payload.into())).await.is_err() { break; }
+            }
+        }
+    }
 }
 
 async fn get_board_freeform_drawing(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<BoardFreeformDrawingResponse> {
