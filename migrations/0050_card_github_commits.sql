@@ -1,6 +1,6 @@
--- NOT IMPLEMENTED YET.  This schema is reserved for future, explicit
--- read-only GitHub commit snapshots. The GitHub repository URL and credentials
--- must never enter the database or the browser response.
+-- A card keeps a safe, immutable summary of commits that were explicitly
+-- attached to it. The GitHub repository URL and credentials never enter the
+-- database or the browser response.
 CREATE TABLE IF NOT EXISTS card_github_commits (
     id UUID PRIMARY KEY,
     card_id UUID NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
