@@ -30,6 +30,7 @@ struct AppState {
     cookie_secure: bool,
     external_http: reqwest::Client,
     events: broadcast::Sender<()>,
+    freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
     auth_rate_limiter: RateLimiter,
     trust_proxy: bool,
 }
@@ -335,6 +336,18 @@ struct UpdateBoardBackgroundRequest {
     background_position: Option<String>,
 }
 
+#[derive(Default)]
+struct FreeformLiveBoard {
+    cursors: HashMap<Uuid, FreeformCursorPresence>,
+    pings: Vec<FreeformPingPresence>,
+}
+
+#[derive(Clone)]
+struct FreeformCursorPresence { x: i32, y: i32, last_seen: Instant }
+
+#[derive(Clone)]
+struct FreeformPingPresence { id: Uuid, user_id: Uuid, x: i32, y: i32, expires_at: Instant }
+
 #[derive(Serialize)]
 struct BoardBackgroundUploadResponse {
     url: String,
@@ -411,6 +424,53 @@ struct BoardLayoutResponse {
     view_mode: String,
     positions: Vec<BoardFreeformPositionResponse>,
 }
+
+#[derive(Deserialize)]
+struct UpdateFreeformLiveRequest {
+    x: i32,
+    y: i32,
+    #[serde(default)]
+    ping: bool,
+}
+
+#[derive(Serialize, FromRow)]
+struct FreeformLiveAccount {
+    id: Uuid,
+    username: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FreeformLiveCursorResponse {
+    user_id: Uuid,
+    username: String,
+    avatar_url: Option<String>,
+    x: i32,
+    y: i32,
+}
+
+#[derive(Serialize)]
+struct FreeformPingResponse {
+    id: Uuid,
+    user_id: Uuid,
+    username: String,
+    avatar_url: Option<String>,
+    x: i32,
+    y: i32,
+    expires_in_ms: u64,
+}
+
+#[derive(Serialize)]
+struct FreeformLiveResponse {
+    cursors: Vec<FreeformLiveCursorResponse>,
+    pings: Vec<FreeformPingResponse>,
+}
+
+#[derive(Serialize)]
+struct BoardFreeformDrawingResponse { document: Value }
+
+#[derive(Deserialize)]
+struct ReplaceBoardFreeformDrawingRequest { document: Value }
 
 #[derive(Serialize, FromRow)]
 #[derive(Clone)]
@@ -1033,6 +1093,8 @@ async fn main() {
         .route("/v1/boards/{board_id}/members/{user_id}", patch(update_board_member).delete(remove_board_member))
         .route("/v1/boards/{board_id}", get(get_board).patch(update_board).delete(delete_board))
         .route("/v1/boards/{board_id}/layout", get(get_board_layout).patch(update_board_layout))
+        .route("/v1/boards/{board_id}/freeform/live", get(get_freeform_live).post(update_freeform_live))
+        .route("/v1/boards/{board_id}/freeform/drawing", get(get_board_freeform_drawing).put(replace_board_freeform_drawing))
         .route("/v1/boards/{board_id}/background", put(update_board_background))
         .route("/v1/boards/{board_id}/background/file", get(download_board_background).post(upload_board_background))
         .route("/v1/boards/{board_id}/visibility", put(update_board_visibility))
@@ -1090,7 +1152,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -2166,6 +2228,74 @@ async fn update_board_layout(State(state): State<AppState>, current: CurrentUser
         view_mode: request.view_mode,
         positions: request.positions.into_iter().map(|position| BoardFreeformPositionResponse { list_id: position.list_id, x: position.x, y: position.y }).collect(),
     }))
+}
+
+async fn freeform_live_snapshot(state: &AppState, board_id: Uuid) -> ApiResult<FreeformLiveResponse> {
+    let now = Instant::now();
+    let (cursors, pings) = {
+        let mut boards = state.freeform_live.lock().await;
+        let board = boards.entry(board_id).or_default();
+        board.cursors.retain(|_, cursor| now.duration_since(cursor.last_seen) <= Duration::from_secs(12));
+        board.pings.retain(|ping| ping.expires_at > now);
+        (
+            board.cursors.iter().map(|(user_id, cursor)| (*user_id, cursor.x, cursor.y)).collect::<Vec<_>>(),
+            board.pings.iter().map(|ping| (ping.id, ping.user_id, ping.x, ping.y, ping.expires_at.saturating_duration_since(now).as_millis().min(u64::MAX as u128) as u64)).collect::<Vec<_>>(),
+        )
+    };
+    let user_ids = cursors.iter().map(|(user_id, _, _)| *user_id).chain(pings.iter().map(|(_, user_id, _, _, _)| *user_id)).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>();
+    if user_ids.is_empty() { return Ok(Json(FreeformLiveResponse { cursors: Vec::new(), pings: Vec::new() })); }
+    let accounts = sqlx::query_as::<_, FreeformLiveAccount>("SELECT id, username, CASE WHEN avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || id::text END AS avatar_url FROM users WHERE id = ANY($1) AND disabled_at IS NULL")
+        .bind(&user_ids).fetch_all(database(state)?).await.map_err(ApiError::internal)?;
+    let accounts = accounts.into_iter().map(|account| (account.id, account)).collect::<HashMap<_, _>>();
+    Ok(Json(FreeformLiveResponse {
+        cursors: cursors.into_iter().filter_map(|(user_id, x, y)| accounts.get(&user_id).map(|account| FreeformLiveCursorResponse { user_id, username: account.username.clone(), avatar_url: account.avatar_url.clone(), x, y })).collect(),
+        pings: pings.into_iter().filter_map(|(id, user_id, x, y, expires_in_ms)| accounts.get(&user_id).map(|account| FreeformPingResponse { id, user_id, username: account.username.clone(), avatar_url: account.avatar_url.clone(), x, y, expires_in_ms })).collect(),
+    }))
+}
+
+async fn get_freeform_live(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<FreeformLiveResponse> {
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    freeform_live_snapshot(&state, board_id).await
+}
+
+async fn update_freeform_live(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateFreeformLiveRequest>) -> ApiResult<FreeformLiveResponse> {
+    if !(0..=200_000).contains(&request.x) || !(0..=200_000).contains(&request.y) {
+        return Err(ApiError::bad_request("Freeform coordinates must be between 0 and 200000."));
+    }
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    let now = Instant::now();
+    {
+        let mut boards = state.freeform_live.lock().await;
+        let board = boards.entry(board_id).or_default();
+        board.cursors.insert(current.id, FreeformCursorPresence { x: request.x, y: request.y, last_seen: now });
+        if request.ping {
+            board.pings.push(FreeformPingPresence { id: Uuid::new_v4(), user_id: current.id, x: request.x, y: request.y, expires_at: now + Duration::from_secs(5) });
+        }
+    }
+    freeform_live_snapshot(&state, board_id).await
+}
+
+async fn get_board_freeform_drawing(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<BoardFreeformDrawingResponse> {
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    let document = sqlx::query_scalar::<_, Value>("SELECT document FROM board_freeform_drawings WHERE board_id = $1")
+        .bind(board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .unwrap_or_else(|| json!({ "strokes": [] }));
+    Ok(Json(BoardFreeformDrawingResponse { document }))
+}
+
+async fn replace_board_freeform_drawing(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<ReplaceBoardFreeformDrawingRequest>) -> ApiResult<BoardFreeformDrawingResponse> {
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    ensure_board_permission(database(&state)?, board_id, current.id, "edit_cards").await?;
+    let strokes = request.document.get("strokes").and_then(Value::as_array).ok_or_else(|| ApiError::bad_request("Drawing document must contain a strokes array."))?;
+    if strokes.len() > 600 { return Err(ApiError::bad_request("A freeform drawing supports up to 600 strokes.")); }
+    let point_count = strokes.iter().map(|stroke| stroke.get("points").and_then(Value::as_array).map_or(0, Vec::len)).sum::<usize>();
+    if point_count > 30_000 || serde_json::to_vec(&request.document).map_or(true, |document| document.len() > 1_500_000) {
+        return Err(ApiError::bad_request("The freeform drawing is too large."));
+    }
+    sqlx::query("INSERT INTO board_freeform_drawings (board_id, document) VALUES ($1, $2) ON CONFLICT (board_id) DO UPDATE SET document = EXCLUDED.document, updated_at = now()")
+        .bind(board_id).bind(SqlJson(&request.document)).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    let _ = state.events.send(());
+    Ok(Json(BoardFreeformDrawingResponse { document: request.document }))
 }
 
 async fn board_events(State(state): State<AppState>, viewer: Viewer, Path(board_id): Path<Uuid>) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
