@@ -468,4 +468,10 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .markdown-editable-description .markdown-description, .card-description-input { font-size: 14px; line-height: 1.65; }
 
 /* A workspace cover is artwork for the whole card, so never crop it to fill. */
-.workspace-card.has-background { background-color: #242528; background-position: center; background-repeat: no-repeat; background-size: contain; }
+.workspace-card.has-background { background-color: #242528; background-position: center; background-repeat: no-repeat; background-size: 100% 100%; }
+
+/* Coins finish at the lower-left edge instead of collecting in the centre. */
+.default-board-ambient > i:nth-child(4n + 1) { left: 112% !important; --coin-drift: -116vw !important; }
+.default-board-ambient > i:nth-child(4n + 2) { left: 104% !important; --coin-drift: -108vw !important; }
+.default-board-ambient > i:nth-child(4n + 3) { left: 96% !important; --coin-drift: -100vw !important; }
+.default-board-ambient > i:nth-child(4n) { left: 88% !important; --coin-drift: -92vw !important; }
