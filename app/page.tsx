@@ -812,6 +812,16 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!dragging) return;
+    const followNativeDrag = (event: DragEvent) => {
+      if (event.clientX <= 0 || event.clientY <= 0) return;
+      setCardDragPreview((current) => current ? { ...current, x: event.clientX, y: event.clientY } : current);
+    };
+    window.addEventListener('dragover', followNativeDrag);
+    return () => window.removeEventListener('dragover', followNativeDrag);
+  }, [dragging]);
+
+  useEffect(() => {
     async function connectToApi() {
       try {
         const setupRequest = fetch(`${API_URL}/v1/auth/setup`);
