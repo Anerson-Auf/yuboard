@@ -218,6 +218,8 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .markdown-editable-description .markdown-description > :first-child { margin-top: 0; }
 .markdown-editable-description .markdown-description > :last-child { margin-bottom: 0; }
 .markdown-editable-description .description-empty { margin: 0; color: var(--faint); }
+.markdown-description ul { list-style: disc outside; }
+.markdown-description ol { list-style: decimal outside; }
 
 /* Leave a deliberate gutter between cards and a column's vertical scrollbar. */
 .card-list { padding-right: 10px; }
