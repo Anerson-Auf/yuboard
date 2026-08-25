@@ -265,25 +265,6 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 
 .attachment-preview img { cursor: zoom-in; }
 
-/* Read-only GitHub commit snapshots. There are deliberately no repository or
-   GitHub URLs in this component: private repository topology stays private. */
-.github-commits { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
-.github-commit-list { display: grid; gap: 10px; margin-top: 12px; }
-.github-commit-list article { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--surface-raised) 84%, transparent); }
-.github-commit-list article > header { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px 0; color: var(--muted); font-size: 11px; }
-.github-commit-list code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
-.github-commit-list header code { flex: 0 0 auto; padding: 3px 5px; border-radius: 5px; background: color-mix(in srgb, var(--primary) 14%, var(--surface-soft)); color: var(--primary); font-size: 10px; font-weight: 800; }
-.github-commit-list header > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.github-commit-list header button { width: 22px; height: 22px; flex: 0 0 22px; margin-left: auto; border: 0; border-radius: 6px; background: transparent; color: var(--faint); font-size: 16px; }
-.github-commit-list header button:hover { background: #4a2631; color: #ff91a5; }
-.github-commit-list article > p { margin: 7px 10px; color: var(--text); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
-.github-commit-list article > small { display: flex; gap: 8px; padding: 0 10px 9px; color: var(--muted); font-size: 10px; }
-.github-additions { color: #77c86a; }.github-deletions { color: #ed7485; }
-.github-commit-list ul { display: grid; gap: 1px; max-height: 178px; margin: 0; padding: 6px 10px; overflow: auto; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 55%, transparent); list-style: none; }
-.github-commit-list li { display: flex; justify-content: space-between; gap: 8px; min-width: 0; padding: 3px 0; color: var(--muted); font-size: 10px; }
-.github-commit-list li code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.github-commit-list li span { display: inline-flex; flex: 0 0 auto; gap: 5px; }
-.github-commit-list article > em { display: block; padding: 7px 10px 9px; color: var(--faint); font-size: 10px; font-style: normal; }
-.github-commit-form { display: flex; gap: 8px; margin-top: 11px; }.github-commit-form input { min-width: 0; flex: 1; }.github-commit-form button { flex: 0 0 auto; }
 .image-preview-backdrop { z-index: 120; }
 
 /* Leave a deliberate gutter between cards and a column's vertical scrollbar. */
