@@ -1765,7 +1765,7 @@ export default function Home() {
     event.preventDefault();
     const title = draft.trim();
     if (!title) return;
-    const card: Card = { id: nextCardId, title, labels: [], members: [] };
+    const card: Card = { id: nextCardId, title, labels: [], roles: [], members: [] };
     setColumns((current) => current.map((column) => column.id === columnId ? { ...column, cards: [...column.cards, card] } : column));
     setNextCardId((current) => current + 1); setDraft(''); setComposerOpen(null); showToast('Задача добавлена в доску');
     if (persistence === 'connected' && typeof columnId === 'string') {
