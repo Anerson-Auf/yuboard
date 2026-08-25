@@ -537,3 +537,12 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .thread-composer { margin: 0; padding: 13px 17px 16px; border-top: 1px solid #454b52; background: #303134; }
 .thread-composer textarea { min-height: 76px; }
 @media (max-width: 640px) { .thread-window-backdrop { padding: 10px; }.thread-window { width: 100%; min-height: min(500px, calc(100vh - 20px)); max-height: calc(100vh - 20px); }.thread-window-scroll { padding: 12px; }.thread-composer { padding: 11px 12px 13px; } }
+
+/* White dots are intentionally quiet: they only distinguish unread human
+   messages from the rest of a dense technical discussion. */
+.comment-text { position: relative; }
+.comment-unread-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border: 1px solid rgb(9 12 16 / 72%); border-radius: 50%; background: #f7f8fc; box-shadow: 0 0 0 2px rgb(247 248 252 / 12%); }
+.comment-unread-dot-message { position: absolute; right: 6px; bottom: 6px; }
+.comment-thread-action { display: inline-flex; align-items: center; gap: 4px; }
+.comment-thread-action .card-meta-icon { width: 13px; height: 13px; }
+.comment-thread-action.has-unread { color: var(--text); }

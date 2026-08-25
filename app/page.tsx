@@ -22,7 +22,7 @@ type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
 type Checklist = { id: string; title: string; items: ChecklistItem[] };
-type Comment = { id: EntityId; body: string; author_id?: string | null; author_name: string; author_avatar_url?: string | null; parent_comment_id?: string | null; created_at?: string; edited_at?: string | null };
+type Comment = { id: EntityId; body: string; author_id?: string | null; author_name: string; author_avatar_url?: string | null; parent_comment_id?: string | null; created_at?: string; edited_at?: string | null; is_unread?: boolean; has_unread_thread?: boolean };
 type Attachment = { id: string; original_name: string; media_type: string; byte_size: number; url: string };
 type Activity = { id: string; action: string; detail: string; actor_name: string | null; created_at: string };
 type BoardActivityItem = { id: string; card_id: string; card_title: string; action: string; detail: string; actor_id: string | null; actor_name: string; actor_avatar_url: string | null; created_at: string; count: number };
@@ -1009,6 +1009,12 @@ export default function Home() {
           setSelected((current) => current?.id === selectedCardId ? { ...current, hasUnreadMentions: false } : current);
           setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, hasUnreadMentions: false } : card) })));
           void fetch(`${API_URL}/v1/cards/${selectedCardId}/mentions/read`, { method: 'POST' });
+        }
+        if (account && !isPublicViewer) {
+          // Main comments are read when the card itself is opened. Thread
+          // replies stay unread until their own window is opened.
+          void fetch(`${API_URL}/v1/cards/${selectedCardId}/comments/read`, { method: 'POST' });
+          setComments((current) => current.map((comment) => comment.parent_comment_id ? comment : { ...comment, is_unread: false }));
         }
       })
       .catch(() => { if (!cancelled) showToast('Не удалось загрузить детали карточки'); })
@@ -2527,7 +2533,14 @@ export default function Home() {
     setThreadLoading(true);
     void fetch(`${API_URL}/v1/comments/${comment.id}/thread`)
       .then(async (response) => { if (!response.ok) throw new Error('thread load failed'); return response.json() as Promise<{ root: Comment; comments: Comment[] }>; })
-      .then((thread) => { setThreadRoot(thread.root); setThreadComments(thread.comments); })
+      .then((thread) => {
+        setThreadRoot({ ...thread.root, is_unread: false, has_unread_thread: false });
+        setThreadComments(thread.comments.map((item) => ({ ...item, is_unread: false })));
+        if (account && !isPublicViewer) {
+          void fetch(`${API_URL}/v1/comments/${comment.id}/thread/read`, { method: 'POST' });
+          setComments((current) => current.map((item) => item.id === comment.id ? { ...item, is_unread: false, has_unread_thread: false } : item.parent_comment_id === String(comment.id) ? { ...item, is_unread: false } : item));
+        }
+      })
       .catch(() => { setThreadRoot(null); showToast('Не удалось загрузить тред'); })
       .finally(() => setThreadLoading(false));
   }
@@ -2605,9 +2618,9 @@ export default function Home() {
           <div><button type="submit">Сохранить</button><button type="button" onClick={() => setEditingCommentId(null)}>Отмена</button></div>
         </form> : <>
           <header><b>@{comment.author_name}</b><time>{commentTime(comment)}{comment.edited_at && ' · изменено'}</time></header>
-          <div className="comment-text"><MarkdownDescription value={comment.body} highlightMentions={unreadMentionSourceIds.includes(String(comment.id))} /></div>
+          <div className="comment-text"><MarkdownDescription value={comment.body} highlightMentions={unreadMentionSourceIds.includes(String(comment.id))} />{comment.is_unread && <i className="comment-unread-dot comment-unread-dot-message" aria-label="Новое непрочитанное сообщение" />}</div>
           <div className="comment-actions">
-            <button type="button" onClick={() => openCommentThread(comment)}>Обсудить{threadCount ? ` · ${threadCount}` : ''}</button>
+            <button type="button" className={`comment-thread-action ${comment.has_unread_thread ? 'has-unread' : ''}`} onClick={() => openCommentThread(comment)}><CardMetaIcon type="comments" /><span>Обсудить{threadCount ? ` · ${threadCount}` : ''}</span>{comment.has_unread_thread && <i className="comment-unread-dot" aria-label="Новые сообщения в треде" />}</button>
             {comment.author_id === account?.user.id && <><button type="button" onClick={() => beginCommentEdit(comment)}>Изменить</button><button type="button" onClick={() => removeComment(comment)}>Удалить</button></>}
           </div>
         </>}

@@ -1064,6 +1064,8 @@ struct CommentResponse {
     parent_comment_id: Option<Uuid>,
     created_at: String,
     edited_at: Option<String>,
+    is_unread: bool,
+    has_unread_thread: bool,
     reactions: Vec<CommentReactionResponse>,
     attachments: Vec<CommentAttachmentResponse>,
 }
@@ -1332,6 +1334,7 @@ async fn main() {
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
         .route("/v1/checklist-items/{item_id}/attachments", post(upload_checklist_item_attachment))
         .route("/v1/cards/{card_id}/comments", post(create_comment))
+        .route("/v1/cards/{card_id}/comments/read", post(mark_card_comments_read))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
         .route("/v1/discord-media/{token}/cards/{card_id}/avatars/{user_id}", get(download_discord_comment_avatar))
         .route("/v1/integrations/discord/labels", get(list_discord_labels).post(create_discord_label))
@@ -1352,6 +1355,7 @@ async fn main() {
         .route("/v1/integrations/discord/cards/{card_id}/attachments/{attachment_id}", get(download_discord_card_attachment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
         .route("/v1/comments/{comment_id}/thread", get(get_comment_thread))
+        .route("/v1/comments/{comment_id}/thread/read", post(mark_comment_thread_read))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
@@ -3502,7 +3506,7 @@ async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Optio
 async fn comment_responses(pool: &PgPool, rows: Vec<CommentRow>, current_user_id: Option<Uuid>) -> Result<Vec<CommentResponse>, ApiError> {
     let mut comments: Vec<CommentResponse> = rows.into_iter().map(|row| CommentResponse {
         id: row.id, body: row.body, author_id: row.author_id, author_name: row.author_name, author_avatar_url: row.author_avatar_url, parent_comment_id: row.parent_comment_id,
-        created_at: row.created_at, edited_at: row.edited_at, reactions: vec![], attachments: vec![],
+        created_at: row.created_at, edited_at: row.edited_at, is_unread: false, has_unread_thread: false, reactions: vec![], attachments: vec![],
     }).collect();
     if comments.is_empty() { return Ok(comments); }
 
@@ -3519,6 +3523,22 @@ async fn comment_responses(pool: &PgPool, rows: Vec<CommentRow>, current_user_id
         comment.reactions = reactions.iter().filter(|reaction| reaction.comment_id == comment.id).map(|reaction| CommentReactionResponse {
             emoji: reaction.emoji.clone(), count: reaction.count, reacted: reaction.reacted,
         }).collect();
+    }
+    if let Some(user_id) = current_user_id {
+        let unread_rows = sqlx::query_as::<_, (Uuid, bool, bool)>(
+            "SELECT c.id, \
+                (c.author_id IS DISTINCT FROM $2 AND c.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS is_unread, \
+                EXISTS(SELECT 1 FROM comments reply LEFT JOIN comment_read_states reply_read ON reply_read.comment_id = reply.id AND reply_read.user_id = $2 WHERE reply.parent_comment_id = c.id AND reply.author_id IS DISTINCT FROM $2 AND reply.created_at > COALESCE(reply_read.read_at, viewer.created_at)) AS has_unread_thread \
+             FROM comments c CROSS JOIN users viewer LEFT JOIN comment_read_states read_state ON read_state.comment_id = c.id AND read_state.user_id = $2 \
+             WHERE c.id = ANY($1) AND viewer.id = $2",
+        )
+        .bind(&comment_ids).bind(user_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+        for comment in &mut comments {
+            if let Some((_, is_unread, has_unread_thread)) = unread_rows.iter().find(|(id, _, _)| *id == comment.id) {
+                comment.is_unread = *is_unread;
+                comment.has_unread_thread = *has_unread_thread;
+            }
+        }
     }
     Ok(comments)
 }
@@ -3580,6 +3600,33 @@ async fn mark_card_mentions_read(State(state): State<AppState>, current: Current
     sqlx::query("UPDATE card_mentions SET read_at = now() WHERE card_id = $1 AND user_id = $2 AND read_at IS NULL")
         .bind(card_id).bind(current.id).execute(pool).await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn mark_card_comments_read(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    sqlx::query(
+        "INSERT INTO comment_read_states (comment_id, user_id, read_at) \
+         SELECT id, $2, now() FROM comments WHERE card_id = $1 AND parent_comment_id IS NULL AND author_id IS DISTINCT FROM $2 \
+         ON CONFLICT (comment_id, user_id) DO UPDATE SET read_at = EXCLUDED.read_at",
+    )
+    .bind(card_id).bind(current.id).execute(pool).await.map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn mark_comment_thread_read(State(state): State<AppState>, current: CurrentUser, Path(comment_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM comments WHERE id = $1")
+        .bind(comment_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "comment_not_found", "Comment was not found.".to_owned()))?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    sqlx::query(
+        "INSERT INTO comment_read_states (comment_id, user_id, read_at) \
+         SELECT id, $2, now() FROM comments WHERE card_id = $1 AND (id = $3 OR parent_comment_id = $3) AND author_id IS DISTINCT FROM $2 \
+         ON CONFLICT (comment_id, user_id) DO UPDATE SET read_at = EXCLUDED.read_at",
+    )
+    .bind(card_id).bind(current.id).bind(comment_id).execute(pool).await.map_err(ApiError::internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
