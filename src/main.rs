@@ -14,8 +14,9 @@ use axum::{
     Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use chrono::{DateTime, Datelike, FixedOffset, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, FixedOffset, Utc};
 use futures_util::SinkExt;
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -31,6 +32,7 @@ struct AppState {
     upload_dir: PathBuf,
     cookie_secure: bool,
     external_http: reqwest::Client,
+    github: Option<Arc<GithubAppConfig>>,
     events: broadcast::Sender<()>,
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
     freeform_live_events: broadcast::Sender<FreeformLiveEvent>,
@@ -285,6 +287,126 @@ struct ProfileRoleResponse {
     color: String,
     icon_shape: String,
     icon_color: String,
+}
+
+/// The App only has repository `Contents: Read-only`.  It is deliberately
+/// process configuration instead of a database setting so a board member can
+/// never alter the target private repository from the browser.
+struct GithubAppConfig {
+    app_id: String,
+    owner: String,
+    repo: String,
+    private_key: EncodingKey,
+}
+
+#[derive(Serialize)]
+struct GithubJwtClaims {
+    iat: i64,
+    exp: i64,
+    iss: String,
+}
+
+#[derive(Deserialize)]
+struct GithubInstallationPayload { id: i64 }
+
+#[derive(Deserialize)]
+struct GithubInstallationTokenPayload { token: String }
+
+#[derive(Deserialize)]
+struct GithubCommitPayload {
+    sha: String,
+    commit: GithubCommitMetadata,
+    stats: GithubCommitStats,
+    #[serde(default)]
+    author: Option<GithubCommitAuthor>,
+    #[serde(default)]
+    files: Vec<GithubCommitFilePayload>,
+}
+
+#[derive(Default, Deserialize)]
+struct GithubCommitStats {
+    #[serde(default)]
+    additions: i32,
+    #[serde(default)]
+    deletions: i32,
+}
+
+#[derive(Deserialize)]
+struct GithubCommitMetadata {
+    message: String,
+    author: GithubCommitSignature,
+}
+
+#[derive(Deserialize)]
+struct GithubCommitSignature {
+    name: String,
+    date: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubCommitAuthor { login: String }
+
+#[derive(Deserialize)]
+struct GithubCommitFilePayload {
+    filename: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    additions: i32,
+    #[serde(default)]
+    deletions: i32,
+}
+
+async fn load_github_app_config() -> Option<Arc<GithubAppConfig>> {
+    let app_id = match env::var("FLOWBOARD_GITHUB_APP_ID") {
+        Ok(value) if value.bytes().all(|byte| byte.is_ascii_digit()) && !value.is_empty() => value,
+        Ok(_) => {
+            tracing::warn!("GitHub integration disabled: FLOWBOARD_GITHUB_APP_ID must contain only digits");
+            return None;
+        }
+        Err(_) => return None,
+    };
+    let owner = match env::var("FLOWBOARD_GITHUB_REPOSITORY_OWNER") {
+        Ok(value) if valid_github_name(&value) => value,
+        _ => {
+            tracing::warn!("GitHub integration disabled: FLOWBOARD_GITHUB_REPOSITORY_OWNER is missing or invalid");
+            return None;
+        }
+    };
+    let repo = match env::var("FLOWBOARD_GITHUB_REPOSITORY_NAME") {
+        Ok(value) if valid_github_name(&value) => value,
+        _ => {
+            tracing::warn!("GitHub integration disabled: FLOWBOARD_GITHUB_REPOSITORY_NAME is missing or invalid");
+            return None;
+        }
+    };
+    let key_path = match env::var("FLOWBOARD_GITHUB_PRIVATE_KEY_PATH") {
+        Ok(value) if !value.trim().is_empty() => PathBuf::from(value),
+        _ => {
+            tracing::warn!("GitHub integration disabled: FLOWBOARD_GITHUB_PRIVATE_KEY_PATH is missing");
+            return None;
+        }
+    };
+    let key_bytes = match tokio::fs::read(&key_path).await {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(?error, path = %key_path.display(), "GitHub integration disabled: private key could not be read");
+            return None;
+        }
+    };
+    let private_key = match EncodingKey::from_rsa_pem(&key_bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(?error, "GitHub integration disabled: private key is not a valid RSA PEM");
+            return None;
+        }
+    };
+    tracing::info!(owner = %owner, repo = %repo, "GitHub commit attachment integration enabled");
+    Some(Arc::new(GithubAppConfig { app_id, owner, repo, private_key }))
+}
+
+fn valid_github_name(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 100 && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 #[derive(Serialize)]
@@ -559,6 +681,9 @@ struct UpdateCardRequest {
 struct UpdateCardPublicVisibilityRequest {
     is_public: bool,
 }
+
+#[derive(Deserialize)]
+struct AttachGithubCommitRequest { sha: String }
 
 #[derive(Deserialize)]
 struct UpdateListRequest {
@@ -1113,6 +1238,50 @@ struct CardActivityResponse {
     created_at: String,
 }
 
+#[derive(Clone, Serialize)]
+struct GithubCommitFileResponse {
+    path: String,
+    status: String,
+    additions: i32,
+    deletions: i32,
+}
+
+#[derive(Clone, Serialize)]
+struct GithubCommitResponse {
+    id: Uuid,
+    short_sha: String,
+    message: String,
+    author_name: String,
+    committed_at: Option<String>,
+    additions: i32,
+    deletions: i32,
+    file_count: i32,
+    files_truncated: bool,
+    files: Vec<GithubCommitFileResponse>,
+}
+
+#[derive(FromRow)]
+struct GithubCommitRow {
+    id: Uuid,
+    short_sha: String,
+    message: String,
+    author_name: String,
+    committed_at: Option<String>,
+    additions: i32,
+    deletions: i32,
+    file_count: i32,
+    files_truncated: bool,
+}
+
+#[derive(FromRow)]
+struct GithubCommitFileRow {
+    github_commit_id: Uuid,
+    path: String,
+    status: String,
+    additions: i32,
+    deletions: i32,
+}
+
 #[derive(Serialize)]
 struct CardDetail {
     checklists: Vec<ChecklistResponse>,
@@ -1124,6 +1293,7 @@ struct CardDetail {
     background_image_url: Option<String>,
     unread_mention_source_ids: Vec<Uuid>,
     watching: bool,
+    github_commits: Vec<GithubCommitResponse>,
 }
 
 #[derive(Deserialize)]
@@ -1229,6 +1399,7 @@ async fn main() {
         .redirect(reqwest::redirect::Policy::limited(3))
         .build()
         .expect("could not initialize external media client");
+    let github = load_github_app_config().await;
 
     let app = Router::new()
         .route("/health", get(health))
@@ -1314,6 +1485,8 @@ async fn main() {
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
         .route("/v1/cards/{card_id}/public-visibility", patch(update_card_public_visibility))
         .route("/v1/cards/{card_id}/details", get(get_card_detail))
+        .route("/v1/cards/{card_id}/github-commits", get(list_card_github_commits).post(attach_github_commit))
+        .route("/v1/cards/{card_id}/github-commits/{commit_id}", axum::routing::delete(delete_card_github_commit))
         .route("/v1/cards/{card_id}/watch", put(watch_card).delete(unwatch_card))
         .route("/v1/cards/{card_id}/mentions/read", post(mark_card_mentions_read))
         .route("/v1/notifications", get(list_notifications))
@@ -1349,7 +1522,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, github, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -3615,6 +3788,204 @@ async fn mark_all_notifications_read(State(state): State<AppState>, current: Cur
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn github_installation_token(state: &AppState) -> Result<(Arc<GithubAppConfig>, String), ApiError> {
+    let config = state.github.clone().ok_or_else(|| ApiError(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "github_not_configured",
+        "GitHub commit integration is not configured by the administrator yet.".to_owned(),
+    ))?;
+    let now = Utc::now();
+    let claims = GithubJwtClaims {
+        iat: (now - ChronoDuration::seconds(30)).timestamp(),
+        exp: (now + ChronoDuration::minutes(9)).timestamp(),
+        iss: config.app_id.clone(),
+    };
+    let jwt = encode(&Header::new(Algorithm::RS256), &claims, &config.private_key).map_err(|error| {
+        tracing::error!(?error, "could not sign GitHub App JWT");
+        ApiError(StatusCode::SERVICE_UNAVAILABLE, "github_not_configured", "GitHub commit integration key is invalid.".to_owned())
+    })?;
+    let installation_response = state.external_http
+        .get(format!("https://api.github.com/repos/{}/{}/installation", config.owner, config.repo))
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .header(header::USER_AGENT, "Flowboard-GitHub-Commit-Links")
+        .bearer_auth(&jwt)
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::warn!(?error, "GitHub installation lookup failed");
+            ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub is temporarily unavailable.".to_owned())
+        })?;
+    if !installation_response.status().is_success() {
+        tracing::warn!(status = %installation_response.status(), "GitHub App is not installed on the configured repository");
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "github_not_installed", "GitHub App is not installed on the configured repository.".to_owned()));
+    }
+    let installation = installation_response.json::<GithubInstallationPayload>().await.map_err(|error| {
+        tracing::warn!(?error, "GitHub installation response was invalid");
+        ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub returned an invalid response.".to_owned())
+    })?;
+    let token_response = state.external_http
+        .post(format!("https://api.github.com/app/installations/{}/access_tokens", installation.id))
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .header(header::USER_AGENT, "Flowboard-GitHub-Commit-Links")
+        .bearer_auth(jwt)
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::warn!(?error, "GitHub installation token request failed");
+            ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub is temporarily unavailable.".to_owned())
+        })?;
+    if !token_response.status().is_success() {
+        tracing::warn!(status = %token_response.status(), "GitHub installation token was rejected");
+        return Err(ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub did not grant read access to the repository.".to_owned()));
+    }
+    let token = token_response.json::<GithubInstallationTokenPayload>().await.map_err(|error| {
+        tracing::warn!(?error, "GitHub installation token response was invalid");
+        ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub returned an invalid response.".to_owned())
+    })?;
+    Ok((config, token.token))
+}
+
+async fn fetch_github_commit(state: &AppState, requested_sha: &str) -> Result<(GithubCommitPayload, Vec<GithubCommitFilePayload>, bool), ApiError> {
+    let (config, token) = github_installation_token(state).await?;
+    let mut first: Option<GithubCommitPayload> = None;
+    let mut files = Vec::new();
+    let mut truncated = false;
+    // GitHub paginates large commit file lists.  A hard limit prevents a
+    // pathological single commit from turning a card into unbounded storage.
+    for page in 1..=10 {
+        let response = state.external_http
+            .get(format!("https://api.github.com/repos/{}/{}/commits/{requested_sha}?per_page=100&page={page}", config.owner, config.repo))
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .header(header::USER_AGENT, "Flowboard-GitHub-Commit-Links")
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|error| {
+                tracing::warn!(?error, "GitHub commit request failed");
+                ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub is temporarily unavailable.".to_owned())
+            })?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Err(ApiError(StatusCode::NOT_FOUND, "github_commit_not_found", "The commit was not found in the configured repository.".to_owned()));
+        }
+        if !response.status().is_success() {
+            tracing::warn!(status = %response.status(), "GitHub commit request was rejected");
+            return Err(ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub could not read that commit.".to_owned()));
+        }
+        let payload = response.json::<GithubCommitPayload>().await.map_err(|error| {
+            tracing::warn!(?error, "GitHub commit response was invalid");
+            ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub returned an invalid commit response.".to_owned())
+        })?;
+        let page_file_count = payload.files.len();
+        if first.is_none() { first = Some(payload); } else { files.extend(payload.files); }
+        if first.as_ref().is_some_and(|_| page == 1) {
+            let first_files = first.as_mut().expect("checked").files.split_off(0);
+            files.extend(first_files);
+        }
+        if page_file_count < 100 { break; }
+        if page == 10 { truncated = true; }
+    }
+    let mut commit = first.ok_or_else(|| ApiError(StatusCode::BAD_GATEWAY, "github_unavailable", "GitHub returned no commit data.".to_owned()))?;
+    commit.files.clear();
+    Ok((commit, files, truncated))
+}
+
+async fn load_card_github_commits(pool: &PgPool, card_id: Uuid) -> Result<Vec<GithubCommitResponse>, ApiError> {
+    let commits = sqlx::query_as::<_, GithubCommitRow>(
+        "SELECT id, short_sha, message, author_name, committed_at::text AS committed_at, additions, deletions, file_count, files_truncated FROM card_github_commits WHERE card_id = $1 ORDER BY created_at DESC, id DESC",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    if commits.is_empty() { return Ok(vec![]); }
+    let ids: Vec<Uuid> = commits.iter().map(|commit| commit.id).collect();
+    let files = sqlx::query_as::<_, GithubCommitFileRow>(
+        "SELECT github_commit_id, path, status, additions, deletions FROM card_github_commit_files WHERE github_commit_id = ANY($1) ORDER BY position, id",
+    )
+    .bind(&ids)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(commits.into_iter().map(|commit| GithubCommitResponse {
+        id: commit.id,
+        short_sha: commit.short_sha,
+        message: commit.message,
+        author_name: commit.author_name,
+        committed_at: commit.committed_at,
+        additions: commit.additions,
+        deletions: commit.deletions,
+        file_count: commit.file_count,
+        files_truncated: commit.files_truncated,
+        files: files.iter().filter(|file| file.github_commit_id == commit.id).map(|file| GithubCommitFileResponse {
+            path: file.path.clone(), status: file.status.clone(), additions: file.additions, deletions: file.deletions,
+        }).collect(),
+    }).collect())
+}
+
+fn compact_github_text(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}
+
+async fn list_card_github_commits(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<GithubCommitResponse>> {
+    let pool = database(&state)?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    Ok(Json(load_card_github_commits(pool, card_id).await?))
+}
+
+async fn attach_github_commit(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<AttachGithubCommitRequest>) -> ApiResult<GithubCommitResponse> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let sha = request.sha.trim().to_ascii_lowercase();
+    if !(7..=64).contains(&sha.len()) || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request("Enter a Git commit SHA (7 to 64 hexadecimal characters)."));
+    }
+    let (commit, files, files_truncated) = fetch_github_commit(&state, &sha).await?;
+    let commit_id = Uuid::new_v4();
+    let committed_at = commit.commit.author.date.as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    let canonical_sha = compact_github_text(&commit.sha.to_ascii_lowercase(), 64);
+    let short_sha = canonical_sha.chars().take(10).collect::<String>();
+    let message = compact_github_text(&commit.commit.message, 4_000);
+    let author_name = compact_github_text(commit.author.as_ref().map(|author| author.login.as_str()).unwrap_or(&commit.commit.author.name), 160);
+    let additions = commit.stats.additions.max(0);
+    let deletions = commit.stats.deletions.max(0);
+    let file_count = i32::try_from(files.len()).unwrap_or(i32::MAX);
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    let inserted = sqlx::query(
+        "INSERT INTO card_github_commits (id, card_id, sha, short_sha, message, author_name, committed_at, additions, deletions, file_count, files_truncated, attached_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (card_id, sha) DO NOTHING",
+    )
+    .bind(commit_id).bind(card_id).bind(&canonical_sha).bind(&short_sha).bind(&message).bind(&author_name).bind(committed_at).bind(additions).bind(deletions).bind(file_count).bind(files_truncated).bind(current.id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(ApiError::internal)?;
+    if inserted.rows_affected() == 0 {
+        return Err(ApiError(StatusCode::CONFLICT, "github_commit_already_attached", "This commit is already attached to the card.".to_owned()));
+    }
+    for (position, file) in files.into_iter().enumerate() {
+        sqlx::query("INSERT INTO card_github_commit_files (id, github_commit_id, path, status, additions, deletions, position) VALUES ($1, $2, $3, $4, $5, $6, $7)")
+            .bind(Uuid::new_v4()).bind(commit_id).bind(compact_github_text(&file.filename, 1_000)).bind(compact_github_text(&file.status, 40)).bind(file.additions.max(0)).bind(file.deletions.max(0)).bind(i32::try_from(position).unwrap_or(i32::MAX))
+            .execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    }
+    transaction.commit().await.map_err(ApiError::internal)?;
+    record_card_activity(pool, card_id, current.id, "Прикреплён GitHub-коммит", &short_sha).await;
+    let _ = state.events.send(());
+    let mut attached = load_card_github_commits(pool, card_id).await?;
+    attached.retain(|item| item.id == commit_id);
+    attached.into_iter().next().map(Json).ok_or_else(|| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "database_error", "Commit summary could not be loaded.".to_owned()))
+}
+
+async fn delete_card_github_commit(State(state): State<AppState>, current: CurrentUser, Path((card_id, commit_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let removed = sqlx::query("DELETE FROM card_github_commits WHERE id = $1 AND card_id = $2")
+        .bind(commit_id).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
+    if removed.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "github_commit_not_found", "The attached commit was not found.".to_owned())); }
+    record_card_activity(pool, card_id, current.id, "Откреплён GitHub-коммит", "").await;
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<CardDetail> {
     let pool = database(&state)?;
     let actor_id = current.0.map(|user| user.id);
@@ -3714,7 +4085,15 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM card_watchers WHERE card_id = $1 AND user_id = $2)")
             .bind(card_id).bind(actor_id).fetch_one(pool).await.map_err(ApiError::internal)?
     } else { false };
-    Ok(Json(CardDetail { checklists, comments, attachments, activity, cover_attachment_id, cover_mode, background_image_url, unread_mention_source_ids, watching }))
+    // File paths and commit messages can reveal private repository structure.
+    // Public-board visitors therefore never receive this snapshot, even though
+    // they may read the rest of a public card.
+    let github_commits = if let Some(actor_id) = actor_id {
+        if ensure_card_access(pool, card_id, actor_id).await.is_ok() {
+            load_card_github_commits(pool, card_id).await?
+        } else { vec![] }
+    } else { vec![] };
+    Ok(Json(CardDetail { checklists, comments, attachments, activity, cover_attachment_id, cover_mode, background_image_url, unread_mention_source_ids, watching, github_commits }))
 }
 
 fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {

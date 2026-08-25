@@ -5,6 +5,9 @@ dist/
 .wrangler/
 target/
 .env
+secrets/
+*.pem
+*.key
 uploads/
 postgres_data/
 minio_data/
