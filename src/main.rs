@@ -2313,7 +2313,7 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
         if !foreign { continue; }
         match submitted_by_id.get(id) {
             Some(new_stroke) if *new_stroke == old_stroke => {}
-            Some(_) if request.erase_foreign => return Err(ApiError::bad_request("The eraser can remove a чужой stroke, but cannot modify it.")),
+            Some(_) if request.erase_foreign => {}
             Some(_) => return Err(ApiError::forbidden("You can only modify your own freeform strokes.")),
             None if request.erase_foreign => {}
             None => return Err(ApiError::forbidden("Use the eraser to remove a чужой freeform stroke.")),
@@ -2324,7 +2324,7 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
         let id = stroke.get("id").and_then(Value::as_str).expect("validated stroke id");
         if !previous_ids.contains(id) {
             let author_id = stroke.get("author_id").and_then(Value::as_str).expect("validated author id");
-            if Uuid::parse_str(author_id).ok() != Some(current.id) { return Err(ApiError::forbidden("New freeform strokes must belong to the current user.")); }
+            if Uuid::parse_str(author_id).ok() != Some(current.id) && !request.erase_foreign { return Err(ApiError::forbidden("New freeform strokes must belong to the current user.")); }
         }
     }
     sqlx::query("INSERT INTO board_freeform_drawings (board_id, document) VALUES ($1, $2) ON CONFLICT (board_id) DO UPDATE SET document = EXCLUDED.document, updated_at = now()")
