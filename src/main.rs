@@ -1556,10 +1556,15 @@ fn attachment_extension(media_type: &str, original_name: &str) -> Option<&'stati
         "video/mp4" => Some("mp4"),
         "video/webm" => Some("webm"),
         "video/quicktime" => Some("mov"),
+        "audio/webm" => Some("webm"),
+        "audio/ogg" => Some("ogg"),
+        "audio/mp4" => Some("m4a"),
+        "audio/mpeg" => Some("mp3"),
+        "audio/wav" => Some("wav"),
         _ => None,
     };
     from_media_type.or_else(|| match original_name.rsplit('.').next()?.to_ascii_lowercase().as_str() {
-        "jpg" | "jpeg" => Some("jpg"), "png" => Some("png"), "gif" => Some("gif"), "webp" => Some("webp"), "mp4" => Some("mp4"), "webm" => Some("webm"), "mov" => Some("mov"), _ => None,
+        "jpg" | "jpeg" => Some("jpg"), "png" => Some("png"), "gif" => Some("gif"), "webp" => Some("webp"), "mp4" => Some("mp4"), "webm" => Some("webm"), "mov" => Some("mov"), "ogg" => Some("ogg"), "m4a" => Some("m4a"), "mp3" => Some("mp3"), "wav" => Some("wav"), _ => None,
     })
 }
 
@@ -4475,7 +4480,7 @@ async fn upload_attachment(State(state): State<AppState>, current: CurrentUser, 
     let original_name = field.file_name().unwrap_or("attachment").replace(['/', '\\'], "_");
     if original_name.is_empty() || original_name.chars().count() > 255 { return Err(ApiError::bad_request("Attachment filename must contain 1 to 255 characters.")); }
     let media_type = field.content_type().map(ToString::to_string).unwrap_or_else(|| "application/octet-stream".to_owned());
-    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Only JPEG, PNG, GIF, WebP, MP4, WebM, and MOV files are supported."))?;
+    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Only supported image, video, and audio files may be attached."))?;
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Attachment upload could not be read."))?;
     if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Attachment must be between 1 byte and 50 MiB.")); }
     let attachment_id = Uuid::new_v4();
@@ -4563,7 +4568,7 @@ async fn upload_checklist_item_attachment(State(state): State<AppState>, current
     let original_name = field.file_name().unwrap_or("checklist-attachment").replace(['/', '\\'], "_");
     if original_name.is_empty() || original_name.chars().count() > 255 { return Err(ApiError::bad_request("Attachment filename must contain 1 to 255 characters.")); }
     let media_type = field.content_type().map(ToString::to_string).unwrap_or_else(|| "application/octet-stream".to_owned());
-    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Only JPEG, PNG, GIF, WebP, MP4, WebM, and MOV files are supported."))?;
+    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Only supported image, video, and audio files may be attached."))?;
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Attachment upload could not be read."))?;
     if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Attachment must be between 1 byte and 50 MiB.")); }
     let attachment_id = Uuid::new_v4();

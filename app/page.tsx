@@ -211,8 +211,11 @@ function inlineMarkdown(value: string, highlightMentions = false): ReactNode[] {
     const image = /^!\[([^\]]*)\]\(([^\s)]+)/.exec(part);
     if (image) {
       const isVideo = image[1].startsWith('video:');
-      const name = image[1].replace(/^video:/, '') || (isVideo ? 'Видео' : 'Изображение');
-      return isVideo
+      const isAudio = image[1].startsWith('audio:');
+      const name = image[1].replace(/^(?:video|audio):/, '') || (isVideo ? 'Видео' : isAudio ? 'Голосовое сообщение' : 'Изображение');
+      return isAudio
+        ? <audio className="markdown-media markdown-audio" key={index} controls preload="metadata" src={image[2]} aria-label={name} />
+        : isVideo
         ? <video className="markdown-media markdown-video" key={index} controls preload="metadata" src={image[2]} aria-label={name} />
         : <a className="markdown-image-link" key={index} href={image[2]} target="_blank" rel="noreferrer"><img className="markdown-media" src={image[2]} alt={name} /></a>;
     }
@@ -581,6 +584,10 @@ export default function Home() {
   const [threadDraft, setThreadDraft] = useState('');
   const [isThreadLoading, setThreadLoading] = useState(false);
   const [isSendingThread, setSendingThread] = useState(false);
+  const [voiceRecordingTarget, setVoiceRecordingTarget] = useState<'comment' | 'thread' | null>(null);
+  const voiceRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
   const [editingCommentId, setEditingCommentId] = useState<EntityId | null>(null);
   const [commentEditDraft, setCommentEditDraft] = useState('');
   const [isSavingChecklist, setSavingChecklist] = useState(false);
@@ -2574,6 +2581,70 @@ export default function Home() {
       })
       .finally(() => setSendingThread(false));
   }
+  async function sendRecordedVoice(attachment: Attachment, target: 'comment' | 'thread') {
+    if (!selected || typeof selected.id !== 'string') return;
+    const body = markdownForAttachment(attachment);
+    if (target === 'comment') {
+      setSendingComment(true);
+      try {
+        const response = await fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
+        if (!response.ok) throw new Error('voice comment save failed');
+        const comment = await response.json() as Comment;
+        setComments((current) => [comment, ...current]);
+      } catch { showToast('Не удалось отправить голосовое сообщение'); }
+      finally { setSendingComment(false); }
+      return;
+    }
+    if (!threadRoot || typeof threadRoot.id !== 'string') return;
+    const parentCommentId = threadRoot.id;
+    const localComment: Comment = { id: `local-voice-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: parentCommentId, created_at: new Date().toISOString() };
+    setSendingThread(true);
+    setThreadComments((current) => [...current, localComment]);
+    setComments((current) => [...current, localComment]);
+    try {
+      const response = await fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body, parent_comment_id: parentCommentId }) });
+      if (!response.ok) throw new Error('voice thread save failed');
+      const comment = await response.json() as Comment;
+      setThreadComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
+      setComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
+    } catch {
+      setThreadComments((current) => current.filter((item) => item.id !== localComment.id));
+      setComments((current) => current.filter((item) => item.id !== localComment.id));
+      showToast('Не удалось отправить голосовое сообщение');
+    } finally { setSendingThread(false); }
+  }
+  async function startVoiceRecording(target: 'comment' | 'thread') {
+    if (voiceRecordingTarget || isUploadingAttachment || !selected || typeof selected.id !== 'string') return;
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { showToast('Запись голоса не поддерживается этим браузером'); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg'].find((candidate) => MediaRecorder.isTypeSupported(candidate));
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      voiceChunksRef.current = [];
+      voiceRecorderRef.current = recorder;
+      voiceStreamRef.current = stream;
+      recorder.ondataavailable = (event) => { if (event.data.size > 0) voiceChunksRef.current.push(event.data); };
+      recorder.onstop = () => {
+        const recordedMime = (recorder.mimeType || mimeType || 'audio/webm').split(';')[0];
+        const extension = recordedMime.includes('ogg') ? 'ogg' : recordedMime.includes('mp4') ? 'm4a' : 'webm';
+        const blob = new Blob(voiceChunksRef.current, { type: recordedMime });
+        voiceChunksRef.current = [];
+        voiceRecorderRef.current = null;
+        voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+        voiceStreamRef.current = null;
+        setVoiceRecordingTarget(null);
+        if (!blob.size) { showToast('Голосовое сообщение получилось пустым'); return; }
+        const file = new File([blob], `voice-message-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`, { type: recordedMime });
+        void uploadMediaFiles([file]).then((uploaded) => uploaded[0] && sendRecordedVoice(uploaded[0], target));
+      };
+      recorder.start(500);
+      setVoiceRecordingTarget(target);
+    } catch { showToast('Не удалось включить микрофон. Проверьте разрешение браузера.'); }
+  }
+  function stopVoiceRecording() {
+    const recorder = voiceRecorderRef.current;
+    if (recorder?.state === 'recording') recorder.stop();
+  }
   function beginCommentEdit(comment: Comment) {
     setEditingCommentId(comment.id);
     setCommentEditDraft(comment.body);
@@ -2628,12 +2699,12 @@ export default function Home() {
       </div>
     </div>;
   }
-  const supportedMediaTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime']);
+  const supportedMediaTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime', 'audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/wav']);
   function isSupportedMedia(file: File) { return supportedMediaTypes.has(file.type); }
   function markdownForAttachment(attachment: Attachment) {
     const name = attachment.original_name.replace(/[\[\]\r\n]/g, '').trim() || 'Вложение';
     const url = assetUrl(attachment.url);
-    return attachment.media_type.startsWith('video/') ? `![video:${name}](${url})` : `![${name}](${url})`;
+    return attachment.media_type.startsWith('audio/') ? `![audio:${name}](${url})` : attachment.media_type.startsWith('video/') ? `![video:${name}](${url})` : `![${name}](${url})`;
   }
   function appendEmbeddedMedia(target: 'description' | 'comment' | 'thread', uploaded: Attachment[]) {
     if (!uploaded.length) return;
@@ -2649,13 +2720,13 @@ export default function Home() {
     setSelected((current) => current ? patch(current) : current);
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? patch(card) : card) })));
   }
-  async function uploadMediaFiles(files: File[], target?: 'description' | 'comment' | 'thread') {
-    if (!selected || !files.length || isUploadingAttachment) return;
-    if (persistence !== 'connected' || typeof selected.id !== 'string') { showToast('Для вложений нужно подключение к серверу'); return; }
+  async function uploadMediaFiles(files: File[], target?: 'description' | 'comment' | 'thread'): Promise<Attachment[]> {
+    if (!selected || !files.length || isUploadingAttachment) return [];
+    if (persistence !== 'connected' || typeof selected.id !== 'string') { showToast('Для вложений нужно подключение к серверу'); return []; }
     const unsupported = files.filter((file) => !isSupportedMedia(file));
-    if (unsupported.length) showToast('Можно добавить только JPEG, PNG, GIF, WebP, MP4, WebM или MOV');
+    if (unsupported.length) showToast('Можно добавить изображения, видео или аудио до 50 МиБ');
     const accepted = files.filter(isSupportedMedia);
-    if (!accepted.length) return;
+    if (!accepted.length) return [];
     setUploadingAttachment(true);
     try {
       const uploaded: Attachment[] = [];
@@ -2673,6 +2744,7 @@ export default function Home() {
         } catch { showToast(`Не удалось загрузить «${file.name}»`); }
       }
       if (target) appendEmbeddedMedia(target, uploaded);
+      return uploaded;
     } finally {
       // A rejected parse or a state update must never leave the card in its loading appearance.
       setUploadingAttachment(false);
@@ -3352,7 +3424,7 @@ export default function Home() {
                 {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
                 {activity.map((item) => <div className="activity-message" key={item.id}><i>Console</i><p><b>@{item.actor_name ?? 'Deleted user'}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>)}
               </div>}
-              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" /><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
+              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" /><button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}>{voiceRecordingTarget === 'comment' ? '■ Запись' : '◉ Голос'}</button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
             </section>
           </aside>
         </div>
@@ -3368,7 +3440,7 @@ export default function Home() {
         </div>
         {!isPublicViewer && <form className="comment-composer thread-composer" onSubmit={addThreadComment}>
           <MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} onSubmitShortcut={() => addThreadComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} maxLength={10000} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" />
-          <button className="add-card" type="submit" disabled={isSendingThread || !threadDraft.trim()}>{isSendingThread ? 'Отправка…' : 'Отправить'}</button>
+          <button className={`voice-record-button ${voiceRecordingTarget === 'thread' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'thread' ? stopVoiceRecording() : void startVoiceRecording('thread')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'thread') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'thread' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'thread' ? 'Остановить и отправить' : 'Записать голосовое'}>{voiceRecordingTarget === 'thread' ? '■ Запись' : '◉ Голос'}</button><button className="add-card" type="submit" disabled={isSendingThread || !threadDraft.trim()}>{isSendingThread ? 'Отправка…' : 'Отправить'}</button>
         </form>}
       </section>
     </div>}
