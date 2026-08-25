@@ -7,8 +7,8 @@ import './auth.css';
 type EntityId = number | string;
 type Member = { id: EntityId; initials: string; color: string; name: string; avatarUrl?: string | null };
 type RoleShape = 'circle' | 'square' | 'diamond' | 'star' | 'triangle' | 'hexagon' | 'bolt' | 'flag' | 'check' | 'cross';
-type Label = { id: string; name: string; color: string; icon_shape?: RoleShape };
-type ProfileRole = { id: string; name: string; color: string; icon_shape: RoleShape };
+type Label = { id: string; name: string; color: string; icon_shape?: RoleShape; icon_color?: string };
+type ProfileRole = { id: string; name: string; color: string; icon_shape: RoleShape; icon_color: string };
 type Milestone = { id: string; name: string; description: string; color: string; target_date?: string | null };
 type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
 type Column = { id: EntityId; title: string; cards: Card[] };
@@ -346,12 +346,12 @@ function ShapeIcon({ shape = 'circle', color, size = 12 }: { shape?: RoleShape; 
 
 function LabelChip({ label, asButton = false, onClick }: { label: Label; asButton?: boolean; onClick?: ReactMouseEventHandler<HTMLButtonElement> }) {
   const className = 'label custom-label label-with-shape';
-  const content = <><ShapeIcon shape={label.icon_shape} color={label.color} /><span>{label.name}</span></>;
+  const content = <><ShapeIcon shape={label.icon_shape} color={label.icon_color ?? label.color} /><span>{label.name}</span></>;
   return asButton ? <button className={className} style={{ color: '#F7F8FC', backgroundColor: `${label.color}66` }} onClick={onClick}>{content}</button> : <span className={className} style={{ color: '#F7F8FC', backgroundColor: `${label.color}66` }}>{content}</span>;
 }
 
 function ProfileRoleChip({ role, compact = false }: { role: ProfileRole; compact?: boolean }) {
-  return <span className={`label custom-label profile-role-chip ${compact ? 'compact' : ''}`} style={{ color: '#F7F8FC', backgroundColor: `${role.color}66` }}><ShapeIcon shape={role.icon_shape} color={role.color} /><span>{role.name}</span></span>;
+  return <span className={`label custom-label profile-role-chip ${compact ? 'compact' : ''}`} style={{ color: '#F7F8FC', backgroundColor: `${role.color}66` }}><ShapeIcon shape={role.icon_shape} color={role.icon_color ?? role.color} /><span>{role.name}</span></span>;
 }
 
 function ShapePicker({ value, onChange, label }: { value: RoleShape; onChange: (shape: RoleShape) => void; label: string }) {
@@ -572,6 +572,7 @@ export default function Home() {
   const [newProfileRoleName, setNewProfileRoleName] = useState('');
   const [newProfileRoleColor, setNewProfileRoleColor] = useState('#6B7CFF');
   const [newProfileRoleShape, setNewProfileRoleShape] = useState<RoleShape>('circle');
+  const [newProfileRoleIconColor, setNewProfileRoleIconColor] = useState('#FFFFFF');
   const [editingProfileRole, setEditingProfileRole] = useState<ProfileRole | null>(null);
   const [isSavingProfileRole, setSavingProfileRole] = useState(false);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
@@ -619,11 +620,13 @@ export default function Home() {
   const [newLabelName, setNewLabelName] = useState('');
   const [newLabelColor, setNewLabelColor] = useState('#6B7CFF');
   const [newLabelShape, setNewLabelShape] = useState<RoleShape>('circle');
+  const [newLabelIconColor, setNewLabelIconColor] = useState('#FFFFFF');
   const [isSavingLabel, setSavingLabel] = useState(false);
   const [editingBoardLabel, setEditingBoardLabel] = useState<Label | null>(null);
   const [boardLabelNameDraft, setBoardLabelNameDraft] = useState('');
   const [boardLabelColorDraft, setBoardLabelColorDraft] = useState('#6B7CFF');
   const [boardLabelShapeDraft, setBoardLabelShapeDraft] = useState<RoleShape>('circle');
+  const [boardLabelIconColorDraft, setBoardLabelIconColorDraft] = useState('#FFFFFF');
   const [isSavingBoardLabel, setSavingBoardLabel] = useState(false);
   const [boardTitle, setBoardTitle] = useState('');
   const [boardBackgroundUrl, setBoardBackgroundUrl] = useState<string | null>(null);
@@ -1108,12 +1111,14 @@ export default function Home() {
             <label>Название<input autoFocus value={boardLabelNameDraft} onChange={(event) => setBoardLabelNameDraft(event.target.value)} maxLength={60} aria-label="Название метки" /></label>
             <label>Цвет<input type="color" value={boardLabelColorDraft} onChange={(event) => setBoardLabelColorDraft(event.target.value)} aria-label="Цвет метки" /></label>
             <label className="label-editor-shape">Фигура<ShapePicker value={boardLabelShapeDraft} onChange={setBoardLabelShapeDraft} label="Фигура метки" /></label>
+            <label>Цвет фигуры<input type="color" value={boardLabelIconColorDraft} onChange={(event) => setBoardLabelIconColorDraft(event.target.value)} aria-label="Цвет фигуры метки" /></label>
             <div className="label-editor-actions"><button type="submit" disabled={!boardLabelNameDraft.trim() || isSavingBoardLabel}>Сохранить</button><button type="button" className="text-action" onClick={() => setEditingBoardLabel(null)}>Отмена</button></div>
-          </form> : <><span className="board-label-chip" style={{ backgroundColor: label.color }}><ShapeIcon shape={label.icon_shape} color="#fff" /><span>{label.name}</span></span>{!isPublicViewer && <span><button type="button" className="text-action" onClick={() => beginBoardLabelEdit(label)}>Изменить</button><button type="button" className="text-action danger-text" onClick={() => removeBoardLabel(label)}>Удалить</button></span>}</>}</article>) : <p className="empty-comments">На этой доске пока нет меток.</p>}</div>
+          </form> : <><span className="board-label-chip" style={{ backgroundColor: label.color }}><ShapeIcon shape={label.icon_shape} color={label.icon_color ?? '#fff'} /><span>{label.name}</span></span>{!isPublicViewer && <span><button type="button" className="text-action" onClick={() => beginBoardLabelEdit(label)}>Изменить</button><button type="button" className="text-action danger-text" onClick={() => removeBoardLabel(label)}>Удалить</button></span>}</>}</article>) : <p className="empty-comments">На этой доске пока нет меток.</p>}</div>
         {!isPublicViewer && <form className="label-editor label-create-editor" onSubmit={createLabel}>
           <label>Название<input value={newLabelName} onChange={(event) => setNewLabelName(event.target.value)} maxLength={60} placeholder="Новая метка" aria-label="Название новой метки" /></label>
           <label>Цвет<input type="color" value={newLabelColor} onChange={(event) => setNewLabelColor(event.target.value)} aria-label="Цвет метки" /></label>
           <label className="label-editor-shape">Фигура<ShapePicker value={newLabelShape} onChange={setNewLabelShape} label="Фигура метки" /></label>
+          <label>Цвет фигуры<input type="color" value={newLabelIconColor} onChange={(event) => setNewLabelIconColor(event.target.value)} aria-label="Цвет фигуры метки" /></label>
           <button type="submit" disabled={!newLabelName.trim() || isSavingLabel}>{isSavingLabel ? 'Создаём…' : 'Создать метку'}</button>
         </form>}
       </div>}
@@ -2004,11 +2009,11 @@ export default function Home() {
     event.preventDefault();
     const name = newLabelName.trim();
     if (!boardId || !name || isSavingLabel) return;
-    if (persistence !== 'connected') { const label = { id: `local-label-${Date.now()}`, name, color: newLabelColor, icon_shape: newLabelShape }; setBoardLabels((current) => [...current, label]); setNewLabelName(''); toggleSelectedLabel(label); return; }
+    if (persistence !== 'connected') { const label = { id: `local-label-${Date.now()}`, name, color: newLabelColor, icon_shape: newLabelShape, icon_color: newLabelIconColor }; setBoardLabels((current) => [...current, label]); setNewLabelName(''); toggleSelectedLabel(label); return; }
     setSavingLabel(true);
-    void fetch(`${API_URL}/v1/boards/${boardId}/labels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, color: newLabelColor, icon_shape: newLabelShape }) })
+    void fetch(`${API_URL}/v1/boards/${boardId}/labels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, color: newLabelColor, icon_shape: newLabelShape, icon_color: newLabelIconColor }) })
       .then(async (response) => { if (!response.ok) throw new Error('label save failed'); return response.json() as Promise<Label>; })
-      .then((label) => { setBoardLabels((current) => current.some((item) => item.id === label.id) ? current.map((item) => item.id === label.id ? label : item) : [...current, label]); setNewLabelName(''); setNewLabelShape('circle'); toggleSelectedLabel(label); })
+      .then((label) => { setBoardLabels((current) => current.some((item) => item.id === label.id) ? current.map((item) => item.id === label.id ? label : item) : [...current, label]); setNewLabelName(''); setNewLabelShape('circle'); setNewLabelIconColor('#FFFFFF'); toggleSelectedLabel(label); })
       .catch(() => showToast('Не удалось создать метку'))
       .finally(() => setSavingLabel(false));
   }
@@ -2017,6 +2022,7 @@ export default function Home() {
     setBoardLabelNameDraft(label.name);
     setBoardLabelColorDraft(label.color);
     setBoardLabelShapeDraft(label.icon_shape ?? 'circle');
+    setBoardLabelIconColorDraft(label.icon_color ?? '#FFFFFF');
   }
   function saveBoardLabel(event: FormEvent) {
     event.preventDefault();
@@ -2024,7 +2030,7 @@ export default function Home() {
     const name = boardLabelNameDraft.trim();
     if (!label || !name || isSavingBoardLabel) return;
     if (persistence !== 'connected') {
-      const saved = { ...label, name, color: boardLabelColorDraft, icon_shape: boardLabelShapeDraft };
+      const saved = { ...label, name, color: boardLabelColorDraft, icon_shape: boardLabelShapeDraft, icon_color: boardLabelIconColorDraft };
       setBoardLabels((current) => current.map((item) => item.id === saved.id ? saved : item));
       setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => ({ ...card, labels: card.labels.map((item) => item.id === saved.id ? saved : item) })) })));
       setSelected((current) => current ? { ...current, labels: current.labels.map((item) => item.id === saved.id ? saved : item) } : current);
@@ -2032,7 +2038,7 @@ export default function Home() {
       return;
     }
     setSavingBoardLabel(true);
-    void fetch(`${API_URL}/v1/labels/${label.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, color: boardLabelColorDraft, icon_shape: boardLabelShapeDraft }) })
+    void fetch(`${API_URL}/v1/labels/${label.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, color: boardLabelColorDraft, icon_shape: boardLabelShapeDraft, icon_color: boardLabelIconColorDraft }) })
       .then(async (response) => { if (!response.ok) throw new Error('label update failed'); return response.json() as Promise<Label>; })
       .then((saved) => {
         setBoardLabels((current) => current.map((item) => item.id === saved.id ? saved : item));
@@ -2509,14 +2515,14 @@ export default function Home() {
     const editing = editingProfileRole;
     setSavingProfileRole(true);
     const url = editing ? `${API_URL}/v1/profile-roles/${editing.id}` : `${API_URL}/v1/profile-roles`;
-    void fetch(url, { method: editing ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, color: newProfileRoleColor, icon_shape: newProfileRoleShape }) })
+    void fetch(url, { method: editing ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, color: newProfileRoleColor, icon_shape: newProfileRoleShape, icon_color: newProfileRoleIconColor }) })
       .then(async (response) => { if (!response.ok) throw new Error('profile role save failed'); return response.json() as Promise<ProfileRole>; })
-      .then((role) => { applyProfileRoleCatalog(editing ? profileRoles.map((item) => item.id === role.id ? role : item) : [...profileRoles, role]); setNewProfileRoleName(''); setNewProfileRoleColor('#6B7CFF'); setNewProfileRoleShape('circle'); setEditingProfileRole(null); showToast(editing ? 'Роль сохранена' : 'Роль создана'); })
+      .then((role) => { applyProfileRoleCatalog(editing ? profileRoles.map((item) => item.id === role.id ? role : item) : [...profileRoles, role]); setNewProfileRoleName(''); setNewProfileRoleColor('#6B7CFF'); setNewProfileRoleShape('circle'); setNewProfileRoleIconColor('#FFFFFF'); setEditingProfileRole(null); showToast(editing ? 'Роль сохранена' : 'Роль создана'); })
       .catch(() => showToast('Не удалось сохранить роль'))
       .finally(() => setSavingProfileRole(false));
   }
   function beginProfileRoleEdit(role: ProfileRole) {
-    setEditingProfileRole(role); setNewProfileRoleName(role.name); setNewProfileRoleColor(role.color); setNewProfileRoleShape(role.icon_shape);
+    setEditingProfileRole(role); setNewProfileRoleName(role.name); setNewProfileRoleColor(role.color); setNewProfileRoleShape(role.icon_shape); setNewProfileRoleIconColor(role.icon_color ?? '#FFFFFF');
   }
   function removeProfileRole(role: ProfileRole) {
     if (isSavingProfileRole) return;
@@ -2892,7 +2898,7 @@ export default function Home() {
 
     {isWorkspaceComposerOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => !isCreatingWorkspace && setWorkspaceComposerOpen(false)}><section className="archive-modal workspace-create-modal" role="dialog" aria-modal="true" aria-label="Создать пространство" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setWorkspaceComposerOpen(false)} disabled={isCreatingWorkspace} aria-label="Закрыть">×</button><p className="eyebrow">НОВОЕ ПРОСТРАНСТВО</p><h2>Создать пространство</h2><p className="archive-copy">Вы станете его owner и сможете добавить команду в настройках пространства.</p><form className="workspace-create-form" onSubmit={createWorkspace}><label htmlFor="workspace-name">Название</label><input id="workspace-name" autoFocus value={newWorkspaceName} onChange={(event) => { setNewWorkspaceName(event.target.value); setWorkspaceCreateError(''); }} maxLength={120} placeholder="Например, Маркетинг" disabled={isCreatingWorkspace} />{workspaceCreateError && <p className="form-error" role="alert">{workspaceCreateError}</p>}<div><button className="secondary-button" type="button" onClick={() => setWorkspaceComposerOpen(false)} disabled={isCreatingWorkspace}>Отмена</button><button className="create-button" type="submit" disabled={!newWorkspaceName.trim() || isCreatingWorkspace}>{isCreatingWorkspace ? 'Создаём…' : 'Создать пространство'}</button></div></form></section></div>}
     {isAdminOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setAdminOpen(false)}><section className="archive-modal team-modal admin-modal" role="dialog" aria-modal="true" aria-label="Администрирование" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setAdminOpen(false)} aria-label="Закрыть">×</button><p className="eyebrow">SYSTEM OWNER</p><h2>Администрирование</h2><button className="create-button admin-invite-button" type="button" onClick={createAccountInvite}>Создать account-invite</button>{isAdminLoading ? <p className="detail-loading">Загружаем данные…</p> : <><section className="admin-section"><h3>Аккаунты</h3><div className="team-list">{adminAccounts.map((item) => <article key={item.id}><Avatar member={memberFromApi({ id: item.id, username: item.username, avatar_url: item.avatar_url })} /><div><b>@{item.username}</b><small>{item.is_system_owner ? 'System owner' : 'Активен'}</small></div>{!item.is_system_owner && <button className="danger-action" onClick={() => deleteAccount(item)}>Удалить</button>}</article>)}</div></section><section className="admin-section"><h3>Пространства</h3><div className="team-list">{adminWorkspaces.map((item) => <article key={item.id}><div><b>{item.name}</b><small>Owner: @{item.owner_username} · {item.member_count} уч.</small></div><span className="workspace-admin-actions"><button onClick={() => archiveWorkspace(item)}>{item.archived_at ? 'Восстановить' : 'Архивировать'}</button><button className="danger-action" onClick={() => deleteWorkspace(item)}>Удалить</button></span></article>)}</div></section><section className="admin-section"><h3>Активные invite</h3><div className="team-list">{adminInvites.length ? adminInvites.map((item) => <article key={item.id}><div><b>Invite</b><small>до {new Date(item.expires_at).toLocaleString('ru-RU')}</small></div></article>) : <p className="empty-comments">Нет активных invite.</p>}</div></section></>}</section></div>}
-    {isAdminOpen && account?.user.is_system_owner && <section className="profile-roles-admin-sheet" aria-label="Управление ролями"><h3>Роли</h3><p>Специализации для профилей и карточек.</p><div>{profileRoles.map((role) => <article key={role.id}><ProfileRoleChip role={role} /><span><button type="button" className="text-action" onClick={() => beginProfileRoleEdit(role)}>Изменить</button><button type="button" className="text-action danger-text" onClick={() => removeProfileRole(role)}>Удалить</button></span></article>)}</div><form className="new-label-form profile-role-form" onSubmit={saveProfileRole}><input value={newProfileRoleName} onChange={(event) => setNewProfileRoleName(event.target.value)} maxLength={80} placeholder="Например, Программист" aria-label="Название роли" /><input type="color" value={newProfileRoleColor} onChange={(event) => setNewProfileRoleColor(event.target.value)} aria-label="Цвет роли" /><ShapePicker value={newProfileRoleShape} onChange={setNewProfileRoleShape} label="Фигура роли" /><button type="submit" disabled={isSavingProfileRole || !newProfileRoleName.trim()}>{editingProfileRole ? 'Сохранить' : 'Создать роль'}</button>{editingProfileRole && <button type="button" className="text-action" onClick={() => { setEditingProfileRole(null); setNewProfileRoleName(''); setNewProfileRoleColor('#6B7CFF'); setNewProfileRoleShape('circle'); }}>Отмена</button>}</form></section>}
+    {isAdminOpen && account?.user.is_system_owner && <section className="profile-roles-admin-sheet" aria-label="Управление ролями"><h3>Роли</h3><p>Специализации для профилей и карточек.</p><div>{profileRoles.map((role) => <article key={role.id}><ProfileRoleChip role={role} /><span><button type="button" className="text-action" onClick={() => beginProfileRoleEdit(role)}>Изменить</button><button type="button" className="text-action danger-text" onClick={() => removeProfileRole(role)}>Удалить</button></span></article>)}</div><form className="new-label-form profile-role-form" onSubmit={saveProfileRole}><input value={newProfileRoleName} onChange={(event) => setNewProfileRoleName(event.target.value)} maxLength={80} placeholder="Например, Программист" aria-label="Название роли" /><label title="Цвет роли"><input type="color" value={newProfileRoleColor} onChange={(event) => setNewProfileRoleColor(event.target.value)} aria-label="Цвет роли" /></label><ShapePicker value={newProfileRoleShape} onChange={setNewProfileRoleShape} label="Фигура роли" /><label title="Цвет фигуры"><input type="color" value={newProfileRoleIconColor} onChange={(event) => setNewProfileRoleIconColor(event.target.value)} aria-label="Цвет фигуры роли" /></label><button type="submit" disabled={isSavingProfileRole || !newProfileRoleName.trim()}>{editingProfileRole ? 'Сохранить' : 'Создать роль'}</button>{editingProfileRole && <button type="button" className="text-action" onClick={() => { setEditingProfileRole(null); setNewProfileRoleName(''); setNewProfileRoleColor('#6B7CFF'); setNewProfileRoleShape('circle'); setNewProfileRoleIconColor('#FFFFFF'); }}>Отмена</button>}</form></section>}
     {isSessionsOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setSessionsOpen(false)}><section className="archive-modal team-modal security-modal" role="dialog" aria-modal="true" aria-label="Сессии" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSessionsOpen(false)} aria-label="Закрыть">×</button><p className="eyebrow">БЕЗОПАСНОСТЬ</p><h2>Активные сессии</h2><button className="secondary-button session-revoke-all" onClick={revokeOtherSessions}>Выйти на других устройствах</button><div className="team-list">{sessions.map((session) => <article key={session.id}><div><b>{session.current ? 'Это устройство' : 'Активная сессия'}</b><small>Последняя активность: {new Date(session.last_seen_at).toLocaleString('ru-RU')}</small></div>{!session.current && <button className="danger-action" onClick={() => revokeSession(session)}>Отозвать</button>}</article>)}</div></section></div>}
 
     {view === 'home' ? <section className="home-screen workspace-cards-screen">
@@ -3001,7 +3007,7 @@ export default function Home() {
                 {sidebarPanel === 'due' && <div className="date-panel"><div className="popover-heading"><b>Дедлайн</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="calendar-head"><button onClick={() => setDueCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} aria-label="Предыдущий месяц">‹</button><strong>{monthNames[dueCursor.getMonth()]} {dueCursor.getFullYear()}</strong><button onClick={() => setDueCursor((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))} aria-label="Следующий месяц">›</button></div><div className="calendar-weekdays">{weekdayNames.map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{dueDays.map((day) => <button key={day.toISOString()} className={`${day.getMonth() !== dueCursor.getMonth() ? 'outside' : ''} ${selected.dueAt && isSameDay(day, new Date(selected.dueAt)) ? 'chosen' : ''} ${isSameDay(day, new Date()) ? 'today' : ''}`} onClick={() => saveDueDate(day, dueTime)}>{day.getDate()}</button>)}</div><div className="time-options">{dueTimeOptions.map((time) => <button key={time} className={dueTime === time ? 'selected' : ''} onClick={() => { setDueTime(time); if (selected.dueAt) saveDueDate(new Date(selected.dueAt), time); }}>{time}</button>)}</div>{selected.dueAt && <button className="clear-deadline" onClick={clearDueDate}>Снять дедлайн</button>}</div>}
                 {sidebarPanel === 'background' && <div className="card-background-form"><div className="popover-heading"><b>Фон карточки</b><button type="button" onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><p>Загрузите изображение с компьютера — оно сохранится в Flowboard.</p><input ref={cardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadCardBackground} /><div><button className="secondary-button" type="button" onClick={clearCardBackground}>Снять</button><button className="create-button" type="button" onClick={() => cardBackgroundFileRef.current?.click()} disabled={isUploadingCardBackground}>{isUploadingCardBackground ? 'Загружаем…' : 'Выбрать файл'}</button></div></div>}
                 {sidebarPanel === 'public-visibility' && <div className="card-public-visibility"><div className="popover-heading"><b>Видимость карточки</b><button type="button" onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><label><input type="checkbox" checked={selected.isPublic ?? true} onChange={(event) => setSelectedCardPublicVisibility(event.target.checked)} /> Видна гостям</label><p>Снимите галочку, чтобы карточка и её вложения были доступны только после входа в аккаунт.</p></div>}
-                {sidebarPanel === 'roles' && <><div className="popover-heading"><b>Роли карточки</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="label-options">{profileRoles.map((role) => <button key={role.id} className={`label-option ${selected.roles.some((current) => current.id === role.id) ? 'selected' : ''}`} style={{ borderColor: role.color, backgroundColor: `${role.color}22` }} onClick={() => toggleSelectedProfileRole(role)}><ShapeIcon shape={role.icon_shape} color={role.color} /><span>{role.name}</span>{selected.roles.some((current) => current.id === role.id) && <b>✓</b>}</button>)}</div>{!profileRoles.length && <p className="empty-comments">System owner ещё не создал роли.</p>}</>}
+                {sidebarPanel === 'roles' && <><div className="popover-heading"><b>Роли карточки</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="label-options">{profileRoles.map((role) => <button key={role.id} className={`label-option ${selected.roles.some((current) => current.id === role.id) ? 'selected' : ''}`} style={{ borderColor: role.color, backgroundColor: `${role.color}22` }} onClick={() => toggleSelectedProfileRole(role)}><ShapeIcon shape={role.icon_shape} color={role.icon_color ?? role.color} /><span>{role.name}</span>{selected.roles.some((current) => current.id === role.id) && <b>✓</b>}</button>)}</div>{!profileRoles.length && <p className="empty-comments">System owner ещё не создал роли.</p>}</>}
               </div>}
               <div className="detail-title-row"><button className={`detail-card-complete ${selected.completedAt ? 'done' : ''}`} aria-label={selected.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(selected.completedAt)} onClick={(event) => toggleCardCompletion(selected, event)}>{selected.completedAt && '✓'}</button><input className="card-title-input" value={cardTitleDraft} onChange={(event) => setCardTitleDraft(event.target.value)} aria-label="Название задачи" /></div>
               <section className="card-priority-editor" aria-label="Приоритет задачи"><span>Приоритет</span><div><button type="button" className={(selected.priority ?? 0) === 0 ? 'selected' : ''} onClick={() => setSelectedCardPriority(0)}>Нет</button>{[1, 2, 3, 4, 5].map((level) => <button type="button" className={(selected.priority ?? 0) === level ? 'selected' : ''} onClick={() => setSelectedCardPriority(level)} key={level}><PrioritySignal priority={level} /></button>)}</div></section>

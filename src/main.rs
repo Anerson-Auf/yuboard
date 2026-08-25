@@ -284,6 +284,7 @@ struct ProfileRoleResponse {
     name: String,
     color: String,
     icon_shape: String,
+    icon_color: String,
 }
 
 #[derive(Serialize)]
@@ -293,10 +294,10 @@ struct ProfileRoleCatalogResponse {
 }
 
 #[derive(Deserialize)]
-struct CreateProfileRoleRequest { name: String, color: String, icon_shape: String }
+struct CreateProfileRoleRequest { name: String, color: String, icon_shape: String, icon_color: String }
 
 #[derive(Deserialize)]
-struct UpdateProfileRoleRequest { name: String, color: String, icon_shape: String }
+struct UpdateProfileRoleRequest { name: String, color: String, icon_shape: String, icon_color: String }
 
 #[derive(Deserialize)]
 struct ReplaceCardProfileRolesRequest { role_ids: Vec<Uuid> }
@@ -656,6 +657,7 @@ struct UpdateCardBackgroundRequest {
 
 fn default_cover_mode() -> String { "full".to_owned() }
 fn default_role_shape() -> String { "circle".to_owned() }
+fn default_icon_color() -> String { "#FFFFFF".to_owned() }
 
 #[derive(Deserialize)]
 struct UpdateCardCompletionRequest {
@@ -673,6 +675,8 @@ struct CreateLabelRequest {
     color: String,
     #[serde(default = "default_role_shape")]
     icon_shape: String,
+    #[serde(default = "default_icon_color")]
+    icon_color: String,
 }
 
 #[derive(Deserialize)]
@@ -683,6 +687,8 @@ struct UpdateLabelRequest {
     color: Option<String>,
     #[serde(default)]
     icon_shape: Option<String>,
+    #[serde(default)]
+    icon_color: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -693,6 +699,8 @@ struct UpdateDiscordLabelRequest {
     color: Option<String>,
     #[serde(default)]
     icon_shape: Option<String>,
+    #[serde(default)]
+    icon_color: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -907,6 +915,7 @@ struct LabelResponse {
     name: String,
     color: String,
     icon_shape: String,
+    icon_color: String,
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -925,6 +934,7 @@ struct CardLabelRow {
     name: String,
     color: String,
     icon_shape: String,
+    icon_color: String,
 }
 
 #[derive(FromRow)]
@@ -934,6 +944,7 @@ struct CardProfileRoleRow {
     name: String,
     color: String,
     icon_shape: String,
+    icon_color: String,
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -1846,7 +1857,7 @@ fn valid_profile_role_shape(value: &str) -> Result<&str, ApiError> {
 
 async fn list_profile_roles(State(state): State<AppState>, current: CurrentUser) -> ApiResult<ProfileRoleCatalogResponse> {
     let pool = database(&state)?;
-    let roles = sqlx::query_as::<_, ProfileRoleResponse>("SELECT id, name, color, icon_shape FROM profile_roles ORDER BY name")
+    let roles = sqlx::query_as::<_, ProfileRoleResponse>("SELECT id, name, color, icon_shape, icon_color FROM profile_roles ORDER BY name")
         .fetch_all(pool).await.map_err(ApiError::internal)?;
     let assigned_role_ids = sqlx::query_scalar::<_, Uuid>("SELECT role_id FROM user_profile_roles WHERE user_id = $1 ORDER BY role_id")
         .bind(current.id).fetch_all(pool).await.map_err(ApiError::internal)?;
@@ -1859,8 +1870,9 @@ async fn create_profile_role(State(state): State<AppState>, current: CurrentUser
     let name = valid_text(&request.name, "name", 80)?.to_owned();
     let color = valid_label_color(&request.color)?;
     let icon_shape = valid_profile_role_shape(&request.icon_shape)?.to_owned();
-    let role = sqlx::query_as::<_, ProfileRoleResponse>("INSERT INTO profile_roles (id, name, color, icon_shape, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, color, icon_shape")
-        .bind(Uuid::new_v4()).bind(name).bind(color).bind(icon_shape).bind(current.id)
+    let icon_color = valid_label_color(&request.icon_color)?;
+    let role = sqlx::query_as::<_, ProfileRoleResponse>("INSERT INTO profile_roles (id, name, color, icon_shape, icon_color, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, color, icon_shape, icon_color")
+        .bind(Uuid::new_v4()).bind(name).bind(color).bind(icon_shape).bind(icon_color).bind(current.id)
         .fetch_one(pool).await.map_err(ApiError::internal)?;
     record_audit(pool, current.id, None, None, "profile_role.created").await;
     Ok(Json(role))
@@ -1872,8 +1884,9 @@ async fn update_profile_role(State(state): State<AppState>, current: CurrentUser
     let name = valid_text(&request.name, "name", 80)?.to_owned();
     let color = valid_label_color(&request.color)?;
     let icon_shape = valid_profile_role_shape(&request.icon_shape)?.to_owned();
-    let role = sqlx::query_as::<_, ProfileRoleResponse>("UPDATE profile_roles SET name = $1, color = $2, icon_shape = $3, updated_at = now() WHERE id = $4 RETURNING id, name, color, icon_shape")
-        .bind(name).bind(color).bind(icon_shape).bind(role_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+    let icon_color = valid_label_color(&request.icon_color)?;
+    let role = sqlx::query_as::<_, ProfileRoleResponse>("UPDATE profile_roles SET name = $1, color = $2, icon_shape = $3, icon_color = $4, updated_at = now() WHERE id = $5 RETURNING id, name, color, icon_shape, icon_color")
+        .bind(name).bind(color).bind(icon_shape).bind(icon_color).bind(role_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "profile_role_not_found", "Role was not found.".to_owned()))?;
     record_audit(pool, current.id, None, None, "profile_role.updated").await;
     Ok(Json(role))
@@ -2391,7 +2404,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .await
         .map_err(ApiError::internal)?;
     let card_ids: Vec<Uuid> = cards.iter().map(|card| card.id).collect();
-    let card_labels = sqlx::query_as::<_, CardLabelRow>("SELECT cl.card_id, l.id, l.name, l.color, l.icon_shape FROM card_labels cl INNER JOIN cards c ON c.id = cl.card_id INNER JOIN labels l ON l.id = cl.label_id AND l.board_id = c.board_id WHERE cl.card_id = ANY($1) ORDER BY l.name")
+    let card_labels = sqlx::query_as::<_, CardLabelRow>("SELECT cl.card_id, l.id, l.name, l.color, l.icon_shape, l.icon_color FROM card_labels cl INNER JOIN cards c ON c.id = cl.card_id INNER JOIN labels l ON l.id = cl.label_id AND l.board_id = c.board_id WHERE cl.card_id = ANY($1) ORDER BY l.name")
         .bind(&card_ids)
         .fetch_all(pool)
         .await
@@ -2401,7 +2414,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let card_roles = sqlx::query_as::<_, CardProfileRoleRow>("SELECT cpr.card_id, pr.id, pr.name, pr.color, pr.icon_shape FROM card_profile_roles cpr INNER JOIN profile_roles pr ON pr.id = cpr.role_id WHERE cpr.card_id = ANY($1) ORDER BY pr.name")
+    let card_roles = sqlx::query_as::<_, CardProfileRoleRow>("SELECT cpr.card_id, pr.id, pr.name, pr.color, pr.icon_shape, pr.icon_color FROM card_profile_roles cpr INNER JOIN profile_roles pr ON pr.id = cpr.role_id WHERE cpr.card_id = ANY($1) ORDER BY pr.name")
         .bind(&card_ids)
         .fetch_all(pool)
         .await
@@ -2411,7 +2424,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
             if assignee.avatar_url.is_some() { assignee.avatar_url = Some(format!("/v1/public/boards/{}/avatars/{}", board.id, assignee.id)); }
         }
     }
-    let labels = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color, icon_shape FROM labels WHERE board_id = $1 ORDER BY name")
+    let labels = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color, icon_shape, icon_color FROM labels WHERE board_id = $1 ORDER BY name")
         .bind(board_id)
         .fetch_all(pool)
         .await
@@ -2441,8 +2454,8 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         attachment_count: card.attachment_count,
         has_unread_mentions: card.has_unread_mentions,
         milestone: card.milestone_id.map(|id| MilestoneResponse { id, name: card.milestone_name.unwrap_or_default(), description: card.milestone_description.unwrap_or_default(), color: card.milestone_color.unwrap_or_else(|| "#6ea8fe".to_owned()), target_date: card.milestone_target_date }),
-        labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone(), icon_shape: label.icon_shape.clone() }).collect(),
-        roles: card_roles.iter().filter(|role| role.card_id == card.id).map(|role| ProfileRoleResponse { id: role.id, name: role.name.clone(), color: role.color.clone(), icon_shape: role.icon_shape.clone() }).collect(),
+        labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone(), icon_shape: label.icon_shape.clone(), icon_color: label.icon_color.clone() }).collect(),
+        roles: card_roles.iter().filter(|role| role.card_id == card.id).map(|role| ProfileRoleResponse { id: role.id, name: role.name.clone(), color: role.color.clone(), icon_shape: role.icon_shape.clone(), icon_color: role.icon_color.clone() }).collect(),
         assignees: card_assignees.iter().filter(|member| member.card_id == card.id).map(|member| MemberResponse { id: member.id, display_name: member.display_name.clone(), avatar_url: member.avatar_url.clone() }).collect(),
     }).collect();
     let mut members = sqlx::query_as::<_, MemberResponse>("SELECT u.id, u.display_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url FROM board_members bm INNER JOIN users u ON u.id = bm.user_id WHERE bm.board_id = $1 AND u.password_hash IS NOT NULL AND u.disabled_at IS NULL ORDER BY u.display_name")
@@ -3019,13 +3032,15 @@ async fn create_label(State(state): State<AppState>, current: CurrentUser, Path(
     let name = valid_text(&request.name, "name", 60)?;
     let color = valid_label_color(&request.color)?;
     let icon_shape = valid_profile_role_shape(&request.icon_shape)?;
+    let icon_color = valid_label_color(&request.icon_color)?;
     let label = sqlx::query_as::<_, LabelResponse>(
-        "INSERT INTO labels (id, workspace_id, board_id, name, color, icon_shape) SELECT $1, b.workspace_id, b.id, $2, $3, $4 FROM boards b WHERE b.id = $5 AND b.archived_at IS NULL ON CONFLICT (board_id, name) DO UPDATE SET color = EXCLUDED.color, icon_shape = EXCLUDED.icon_shape RETURNING id, name, color, icon_shape",
+        "INSERT INTO labels (id, workspace_id, board_id, name, color, icon_shape, icon_color) SELECT $1, b.workspace_id, b.id, $2, $3, $4, $5 FROM boards b WHERE b.id = $6 AND b.archived_at IS NULL ON CONFLICT (board_id, name) DO UPDATE SET color = EXCLUDED.color, icon_shape = EXCLUDED.icon_shape, icon_color = EXCLUDED.icon_color RETURNING id, name, color, icon_shape, icon_color",
     )
     .bind(Uuid::new_v4())
     .bind(name)
     .bind(color)
     .bind(icon_shape)
+    .bind(icon_color)
     .bind(board_id)
     .fetch_optional(database(&state)?)
     .await
@@ -3037,18 +3052,19 @@ async fn create_label(State(state): State<AppState>, current: CurrentUser, Path(
 
 async fn update_label(State(state): State<AppState>, current: CurrentUser, Path(label_id): Path<Uuid>, Json(request): Json<UpdateLabelRequest>) -> ApiResult<LabelResponse> {
     let pool = database(&state)?;
-    let current_label = sqlx::query_as::<_, (Uuid, String, String, String)>("SELECT board_id, name, color, icon_shape FROM labels WHERE id = $1")
+    let current_label = sqlx::query_as::<_, (Uuid, String, String, String, String)>("SELECT board_id, name, color, icon_shape, icon_color FROM labels WHERE id = $1")
         .bind(label_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "label_not_found", "Label was not found.".to_owned()))?;
     ensure_board_permission(pool, current_label.0, current.id, "create_labels").await?;
     let name = match request.name { Some(value) => valid_text(&value, "name", 60)?.to_owned(), None => current_label.1 };
     let color = match request.color { Some(value) => valid_label_color(&value)?, None => current_label.2 };
     let icon_shape = match request.icon_shape { Some(value) => valid_profile_role_shape(&value)?.to_owned(), None => current_label.3 };
+    let icon_color = match request.icon_color { Some(value) => valid_label_color(&value)?, None => current_label.4 };
     let duplicate_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM labels WHERE board_id = $1 AND name = $2 AND id <> $3)")
         .bind(current_label.0).bind(&name).bind(label_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if duplicate_exists { return Err(ApiError::bad_request("A label with this name already exists on the board.")); }
-    let label = sqlx::query_as::<_, LabelResponse>("UPDATE labels SET name = $1, color = $2, icon_shape = $3 WHERE id = $4 RETURNING id, name, color, icon_shape")
-        .bind(name).bind(color).bind(icon_shape).bind(label_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    let label = sqlx::query_as::<_, LabelResponse>("UPDATE labels SET name = $1, color = $2, icon_shape = $3, icon_color = $4 WHERE id = $5 RETURNING id, name, color, icon_shape, icon_color")
+        .bind(name).bind(color).bind(icon_shape).bind(icon_color).bind(label_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(Json(label))
 }
@@ -3742,7 +3758,7 @@ async fn list_discord_board_lists(State(state): State<AppState>, integration: Di
 }
 
 async fn list_discord_labels(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<LabelResponse>> {
-    let labels = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color, icon_shape FROM labels WHERE board_id = $1 ORDER BY name")
+    let labels = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color, icon_shape, icon_color FROM labels WHERE board_id = $1 ORDER BY name")
         .bind(integration.board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
     Ok(Json(labels))
 }
@@ -3751,10 +3767,11 @@ async fn create_discord_label(State(state): State<AppState>, integration: Discor
     let name = valid_text(&request.name, "name", 60)?;
     let color = valid_label_color(&request.color)?;
     let icon_shape = valid_profile_role_shape(&request.icon_shape)?;
+    let icon_color = valid_label_color(&request.icon_color)?;
     let label = sqlx::query_as::<_, LabelResponse>(
-        "INSERT INTO labels (id, workspace_id, board_id, name, color, icon_shape) SELECT $1, b.workspace_id, b.id, $2, $3, $4 FROM boards b WHERE b.id = $5 AND b.archived_at IS NULL ON CONFLICT (board_id, name) DO UPDATE SET color = EXCLUDED.color, icon_shape = EXCLUDED.icon_shape RETURNING id, name, color, icon_shape",
+        "INSERT INTO labels (id, workspace_id, board_id, name, color, icon_shape, icon_color) SELECT $1, b.workspace_id, b.id, $2, $3, $4, $5 FROM boards b WHERE b.id = $6 AND b.archived_at IS NULL ON CONFLICT (board_id, name) DO UPDATE SET color = EXCLUDED.color, icon_shape = EXCLUDED.icon_shape, icon_color = EXCLUDED.icon_color RETURNING id, name, color, icon_shape, icon_color",
     )
-    .bind(Uuid::new_v4()).bind(name).bind(color).bind(icon_shape).bind(integration.board_id)
+    .bind(Uuid::new_v4()).bind(name).bind(color).bind(icon_shape).bind(icon_color).bind(integration.board_id)
     .fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Discord integration board was not found.".to_owned()))?;
     let _ = state.events.send(());
@@ -3763,17 +3780,18 @@ async fn create_discord_label(State(state): State<AppState>, integration: Discor
 
 async fn update_discord_label(State(state): State<AppState>, integration: DiscordIntegration, Path(label_id): Path<Uuid>, Json(request): Json<UpdateDiscordLabelRequest>) -> ApiResult<LabelResponse> {
     let pool = database(&state)?;
-    let current = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color, icon_shape FROM labels WHERE id = $1 AND board_id = $2")
+    let current = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color, icon_shape, icon_color FROM labels WHERE id = $1 AND board_id = $2")
         .bind(label_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "label_not_found", "Label was not found on this Discord integration board.".to_owned()))?;
     let name = match request.name { Some(value) => valid_text(&value, "name", 60)?.to_owned(), None => current.name };
     let color = match request.color { Some(value) => valid_label_color(&value)?, None => current.color };
     let icon_shape = match request.icon_shape { Some(value) => valid_profile_role_shape(&value)?.to_owned(), None => current.icon_shape };
+    let icon_color = match request.icon_color { Some(value) => valid_label_color(&value)?, None => current.icon_color };
     let duplicate_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM labels WHERE board_id = $1 AND name = $2 AND id <> $3)")
         .bind(integration.board_id).bind(&name).bind(label_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if duplicate_exists { return Err(ApiError::bad_request("A label with this name already exists on the board.")); }
-    let label = sqlx::query_as::<_, LabelResponse>("UPDATE labels SET name = $1, color = $2, icon_shape = $3 WHERE id = $4 AND board_id = $5 RETURNING id, name, color, icon_shape")
-        .bind(name).bind(color).bind(icon_shape).bind(label_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    let label = sqlx::query_as::<_, LabelResponse>("UPDATE labels SET name = $1, color = $2, icon_shape = $3, icon_color = $4 WHERE id = $5 AND board_id = $6 RETURNING id, name, color, icon_shape, icon_color")
+        .bind(name).bind(color).bind(icon_shape).bind(icon_color).bind(label_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(Json(label))
 }
@@ -3801,7 +3819,7 @@ async fn replace_discord_card_labels(State(state): State<AppState>, integration:
         .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?.into_iter().collect();
     let requested_label_ids: HashSet<Uuid> = label_ids.iter().copied().collect();
     if current_label_ids == requested_label_ids {
-        let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name")
+        let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape, l.icon_color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name")
             .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
         transaction.commit().await.map_err(ApiError::internal)?;
         return Ok(Json(labels));
@@ -3811,7 +3829,7 @@ async fn replace_discord_card_labels(State(state): State<AppState>, integration:
         sqlx::query("INSERT INTO card_labels (card_id, label_id) SELECT $1, label_id FROM UNNEST($2::uuid[]) AS selected_labels(label_id) ON CONFLICT DO NOTHING")
             .bind(card_id).bind(&label_ids).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     }
-    let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name")
+    let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape, l.icon_color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name")
         .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
     transaction.commit().await.map_err(ApiError::internal)?;
     record_external_card_activity(pool, card_id, "Discord: обновлены метки", "").await;
@@ -3820,7 +3838,7 @@ async fn replace_discord_card_labels(State(state): State<AppState>, integration:
 }
 
 async fn add_discord_card_label(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, label_id)): Path<(Uuid, Uuid)>) -> ApiResult<Vec<LabelResponse>> {
-    let current = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id INNER JOIN cards c ON c.id = cl.card_id WHERE cl.card_id = $1 AND c.board_id = $2 ORDER BY l.name")
+    let current = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape, l.icon_color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id INNER JOIN cards c ON c.id = cl.card_id WHERE cl.card_id = $1 AND c.board_id = $2 ORDER BY l.name")
         .bind(card_id).bind(integration.board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
     let mut label_ids: Vec<Uuid> = current.iter().map(|label| label.id).collect();
     if !label_ids.contains(&label_id) { label_ids.push(label_id); }
@@ -3828,7 +3846,7 @@ async fn add_discord_card_label(State(state): State<AppState>, integration: Disc
 }
 
 async fn remove_discord_card_label(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, label_id)): Path<(Uuid, Uuid)>) -> ApiResult<Vec<LabelResponse>> {
-    let current = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id INNER JOIN cards c ON c.id = cl.card_id WHERE cl.card_id = $1 AND c.board_id = $2 ORDER BY l.name")
+    let current = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape, l.icon_color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id INNER JOIN cards c ON c.id = cl.card_id WHERE cl.card_id = $1 AND c.board_id = $2 ORDER BY l.name")
         .bind(card_id).bind(integration.board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
     let label_ids: Vec<Uuid> = current.into_iter().filter_map(|label| (label.id != label_id).then_some(label.id)).collect();
     replace_discord_card_labels(State(state), integration, Path(card_id), Json(ReplaceDiscordCardLabelsRequest { label_ids })).await
@@ -4635,7 +4653,7 @@ async fn replace_card_labels(State(state): State<AppState>, current: CurrentUser
             .await
             .map_err(ApiError::internal)?;
     }
-    let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name")
+    let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color, l.icon_shape, l.icon_color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name")
         .bind(card_id)
         .fetch_all(&mut *transaction)
     .await
@@ -4662,7 +4680,7 @@ async fn replace_card_profile_roles(State(state): State<AppState>, current: Curr
         sqlx::query("INSERT INTO card_profile_roles (card_id, role_id) SELECT $1, role_id FROM UNNEST($2::uuid[]) AS selected_roles(role_id) ON CONFLICT DO NOTHING")
             .bind(card_id).bind(&role_ids).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     }
-    let roles = sqlx::query_as::<_, ProfileRoleResponse>("SELECT pr.id, pr.name, pr.color, pr.icon_shape FROM card_profile_roles cpr INNER JOIN profile_roles pr ON pr.id = cpr.role_id WHERE cpr.card_id = $1 ORDER BY pr.name")
+    let roles = sqlx::query_as::<_, ProfileRoleResponse>("SELECT pr.id, pr.name, pr.color, pr.icon_shape, pr.icon_color FROM card_profile_roles cpr INNER JOIN profile_roles pr ON pr.id = cpr.role_id WHERE cpr.card_id = $1 ORDER BY pr.name")
         .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
     transaction.commit().await.map_err(ApiError::internal)?;
     record_card_activity(pool, card_id, current.id, "Обновлены роли карточки", "").await;
