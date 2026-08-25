@@ -470,7 +470,11 @@ struct FreeformLiveResponse {
 struct BoardFreeformDrawingResponse { document: Value }
 
 #[derive(Deserialize)]
-struct ReplaceBoardFreeformDrawingRequest { document: Value }
+struct ReplaceBoardFreeformDrawingRequest {
+    document: Value,
+    #[serde(default)]
+    erase_foreign: bool,
+}
 
 #[derive(Serialize, FromRow)]
 #[derive(Clone)]
@@ -2291,6 +2295,37 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
     let point_count = strokes.iter().map(|stroke| stroke.get("points").and_then(Value::as_array).map_or(0, Vec::len)).sum::<usize>();
     if point_count > 30_000 || serde_json::to_vec(&request.document).map_or(true, |document| document.len() > 1_500_000) {
         return Err(ApiError::bad_request("The freeform drawing is too large."));
+    }
+    for stroke in strokes {
+        let Some(id) = stroke.get("id").and_then(Value::as_str) else { continue; };
+        Uuid::parse_str(id).map_err(|_| ApiError::bad_request("Each stroke id must be a UUID."))?;
+        let author_id = stroke.get("author_id").and_then(Value::as_str).ok_or_else(|| ApiError::bad_request("Each identified stroke must have an author."))?;
+        Uuid::parse_str(author_id).map_err(|_| ApiError::bad_request("Each stroke author must be a UUID."))?;
+    }
+    let previous = sqlx::query_scalar::<_, Value>("SELECT document FROM board_freeform_drawings WHERE board_id = $1")
+        .bind(board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .unwrap_or_else(|| json!({ "strokes": [] }));
+    let previous_strokes = previous.get("strokes").and_then(Value::as_array).cloned().unwrap_or_default();
+    let submitted_by_id = strokes.iter().filter_map(|stroke| stroke.get("id").and_then(Value::as_str).map(|id| (id, stroke))).collect::<HashMap<_, _>>();
+    for old_stroke in &previous_strokes {
+        let Some(id) = old_stroke.get("id").and_then(Value::as_str) else { continue; };
+        let foreign = old_stroke.get("author_id").and_then(Value::as_str).and_then(|author| Uuid::parse_str(author).ok()).is_none_or(|author| author != current.id);
+        if !foreign { continue; }
+        match submitted_by_id.get(id) {
+            Some(new_stroke) if *new_stroke == old_stroke => {}
+            Some(_) if request.erase_foreign => return Err(ApiError::bad_request("The eraser can remove a чужой stroke, but cannot modify it.")),
+            Some(_) => return Err(ApiError::forbidden("You can only modify your own freeform strokes.")),
+            None if request.erase_foreign => {}
+            None => return Err(ApiError::forbidden("Use the eraser to remove a чужой freeform stroke.")),
+        }
+    }
+    let previous_ids = previous_strokes.iter().filter_map(|stroke| stroke.get("id").and_then(Value::as_str)).collect::<HashSet<_>>();
+    for stroke in strokes {
+        let id = stroke.get("id").and_then(Value::as_str).expect("validated stroke id");
+        if !previous_ids.contains(id) {
+            let author_id = stroke.get("author_id").and_then(Value::as_str).expect("validated author id");
+            if Uuid::parse_str(author_id).ok() != Some(current.id) { return Err(ApiError::forbidden("New freeform strokes must belong to the current user.")); }
+        }
     }
     sqlx::query("INSERT INTO board_freeform_drawings (board_id, document) VALUES ($1, $2) ON CONFLICT (board_id) DO UPDATE SET document = EXCLUDED.document, updated_at = now()")
         .bind(board_id).bind(SqlJson(&request.document)).execute(database(&state)?).await.map_err(ApiError::internal)?;
