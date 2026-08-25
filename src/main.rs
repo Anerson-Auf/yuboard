@@ -671,6 +671,7 @@ struct BoardCardRow {
     title: String,
     description: String,
     priority: i16,
+    last_activity_at: Option<String>,
     is_public: bool,
     background_image_url: Option<String>,
     due_at: Option<String>,
@@ -731,6 +732,7 @@ struct BoardCard {
     title: String,
     description: String,
     priority: i16,
+    last_activity_at: Option<String>,
     is_public: bool,
     background_image_url: Option<String>,
     due_at: Option<String>,
@@ -1877,7 +1879,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -1910,6 +1912,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         title: card.title,
         description: card.description,
         priority: card.priority,
+        last_activity_at: card.last_activity_at,
         is_public: card.is_public,
         background_image_url: card.background_image_url,
         due_at: card.due_at,
@@ -2180,8 +2183,9 @@ async fn import_trello_board(State(state): State<AppState>, current: CurrentUser
         let Some(&list_id) = list_ids.get(&list_source_id) else { continue; };
         let position = card_positions.entry(list_id).and_modify(|value| *value += 1000).or_insert(1000);
         let card_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO cards (id, board_id, list_id, title, description, position, due_at, completed_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
-            .bind(card_id).bind(board_id).bind(list_id).bind(import_string(card, "name", 500).unwrap_or_else(|| "Без названия".to_owned())).bind(import_string(card, "desc", 20_000).unwrap_or_default()).bind(*position).bind(import_timestamp(card.get("due"))).bind(import_timestamp(card.get("dateCompleted"))).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        let priority = card.get("flowboardPriority").and_then(Value::as_i64).unwrap_or(0).clamp(0, 5) as i16;
+        sqlx::query("INSERT INTO cards (id, board_id, list_id, title, description, position, due_at, completed_at, priority, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
+            .bind(card_id).bind(board_id).bind(list_id).bind(import_string(card, "name", 500).unwrap_or_else(|| "Без названия".to_owned())).bind(import_string(card, "desc", 20_000).unwrap_or_default()).bind(*position).bind(import_timestamp(card.get("due"))).bind(import_timestamp(card.get("dateCompleted"))).bind(priority).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
         for label_source_id in card.get("idLabels").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) { if let Some(label_id) = label_ids.get(label_source_id) { sqlx::query("INSERT INTO card_labels (card_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING").bind(card_id).bind(label_id).execute(&mut *transaction).await.map_err(ApiError::internal)?; } }
         let cover_source_id = card.get("idAttachmentCover").and_then(Value::as_str);
         let mut cover_attachment_id = None;
@@ -2219,7 +2223,7 @@ async fn export_board(State(state): State<AppState>, current: CurrentUser, Path(
     let board = sqlx::query_as::<_, BoardAccess>("SELECT id, workspace_id, title, background_image_url, background_fit, background_position, visibility::text AS visibility FROM boards WHERE id = $1 AND archived_at IS NULL").bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
     let lists = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', id::text, 'name', title, 'closed', false, 'pos', position) ORDER BY position), '[]'::jsonb) FROM lists WHERE board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     let labels = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', id::text, 'name', name, 'color', color) ORDER BY name), '[]'::jsonb) FROM labels WHERE board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
-    let cards = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', c.id::text, 'name', c.title, 'desc', c.description, 'closed', c.archived_at IS NOT NULL, 'due', c.due_at, 'dateCompleted', c.completed_at, 'idList', c.list_id::text, 'idAttachmentCover', c.cover_attachment_id::text, 'idLabels', COALESCE((SELECT jsonb_agg(label_id::text) FROM card_labels WHERE card_id = c.id), '[]'::jsonb), 'attachments', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', a.id::text, 'name', a.original_name, 'mimeType', a.media_type, 'bytes', a.byte_size, 'url', COALESCE(a.external_url, '/v1/attachments/' || a.id::text || '/content'))) FROM attachments a WHERE a.card_id = c.id), '[]'::jsonb)) ORDER BY c.position), '[]'::jsonb) FROM cards c WHERE c.board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
+    let cards = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', c.id::text, 'name', c.title, 'desc', c.description, 'flowboardPriority', c.priority, 'closed', c.archived_at IS NOT NULL, 'due', c.due_at, 'dateCompleted', c.completed_at, 'idList', c.list_id::text, 'idAttachmentCover', c.cover_attachment_id::text, 'idLabels', COALESCE((SELECT jsonb_agg(label_id::text) FROM card_labels WHERE card_id = c.id), '[]'::jsonb), 'attachments', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', a.id::text, 'name', a.original_name, 'mimeType', a.media_type, 'bytes', a.byte_size, 'url', COALESCE(a.external_url, '/v1/attachments/' || a.id::text || '/content'))) FROM attachments a WHERE a.card_id = c.id), '[]'::jsonb)) ORDER BY c.position), '[]'::jsonb) FROM cards c WHERE c.board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     let checklists = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', cl.id::text, 'name', cl.title, 'idCard', cl.card_id::text, 'pos', cl.position, 'checkItems', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', ci.id::text, 'name', ci.title, 'pos', ci.position, 'state', CASE WHEN ci.is_completed THEN 'complete' ELSE 'incomplete' END) ORDER BY ci.position) FROM checklist_items ci WHERE ci.checklist_id = cl.id), '[]'::jsonb)) ORDER BY cl.position), '[]'::jsonb) FROM checklists cl INNER JOIN cards c ON c.id = cl.card_id WHERE c.board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     let actions = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(payload ORDER BY created_at DESC), '[]'::jsonb) FROM (SELECT a.created_at, jsonb_build_object('id', a.id::text, 'type', a.action, 'date', a.created_at, 'data', jsonb_build_object('text', a.detail, 'card', jsonb_build_object('id', a.card_id::text)), 'memberCreator', CASE WHEN u.id IS NULL THEN NULL ELSE jsonb_build_object('id', u.id::text, 'username', u.username) END) AS payload FROM card_activity a INNER JOIN cards c ON c.id = a.card_id LEFT JOIN users u ON u.id = a.actor_id WHERE c.board_id = $1 AND a.action <> 'Добавлен комментарий' UNION ALL SELECT cm.created_at, jsonb_build_object('id', cm.id::text, 'type', 'commentCard', 'date', cm.created_at, 'data', jsonb_build_object('text', cm.body, 'card', jsonb_build_object('id', cm.card_id::text)), 'memberCreator', CASE WHEN u.id IS NULL THEN NULL ELSE jsonb_build_object('id', u.id::text, 'username', u.username) END) AS payload FROM comments cm INNER JOIN cards c ON c.id = cm.card_id LEFT JOIN users u ON u.id = cm.author_id WHERE c.board_id = $1) exported_actions").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     Ok(Json(json!({ "format": "flowboard-trello-compatible/v1", "name": board.title, "prefs": { "backgroundImage": board.background_image_url }, "lists": lists, "cards": cards, "labels": labels, "checklists": checklists, "actions": actions, "members": [] })))
@@ -3132,6 +3136,7 @@ async fn update_comment(State(state): State<AppState>, current: CurrentUser, Pat
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError::forbidden("Only the comment author can edit it."))?;
     replace_card_mentions(database(&state)?, card_id, current.id, "comment", comment_id, &body).await?;
+    record_card_activity(database(&state)?, card_id, current.id, "Изменён комментарий", "").await;
     let comment = load_card_comments(database(&state)?, card_id, Some(current.id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     let _ = state.events.send(());
@@ -3154,20 +3159,22 @@ async fn toggle_comment_reaction(State(state): State<AppState>, current: Current
     }
     let comment = load_card_comments(pool, card_id, Some(current.id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
+    record_card_activity(pool, card_id, current.id, "Изменена реакция на комментарий", emoji).await;
     let _ = state.events.send(());
     Ok(Json(comment.reactions))
 }
 
 async fn delete_comment(State(state): State<AppState>, current: CurrentUser, Path(comment_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
-    let result = sqlx::query(
-        "DELETE FROM comments c USING cards card, boards b, board_members m WHERE c.id = $1 AND c.card_id = card.id AND card.board_id = b.id AND m.board_id = b.id AND m.user_id = $2 AND c.author_id = $2",
+    let card_id = sqlx::query_scalar::<_, Uuid>(
+        "DELETE FROM comments c USING cards card, boards b, board_members m WHERE c.id = $1 AND c.card_id = card.id AND card.board_id = b.id AND m.board_id = b.id AND m.user_id = $2 AND c.author_id = $2 RETURNING c.card_id",
     )
     .bind(comment_id)
     .bind(current.id)
-    .execute(database(&state)?)
+    .fetch_optional(database(&state)?)
     .await
-    .map_err(ApiError::internal)?;
-    if result.rows_affected() == 0 { return Err(ApiError::forbidden("You cannot delete this comment.")); }
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError::forbidden("You cannot delete this comment."))?;
+    record_card_activity(database(&state)?, card_id, current.id, "Удалён комментарий", "").await;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }

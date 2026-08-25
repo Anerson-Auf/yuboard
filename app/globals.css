@@ -321,6 +321,13 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .mention-highlight { border-radius: 4px; background: color-mix(in srgb, #ef5b68 28%, transparent); color: var(--text); padding: 1px 3px; font-weight: 750; }
 textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--surface-raised)); box-shadow: inset 2px 0 0 #ef5b68; }
 
+.filter-control, .board-sort-control { position: relative; }
+.filter-popover { position: absolute; z-index: 35; top: calc(100% + 7px); right: 0; display: grid; min-width: 205px; gap: 3px; padding: 8px; border: 1px solid var(--line); border-radius: 11px; background: color-mix(in srgb, var(--surface-raised) 96%, var(--surface)); box-shadow: 0 18px 42px rgb(0 0 0 / 32%); backdrop-filter: blur(16px); }
+.filter-popover p { margin: 3px 5px 5px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }.filter-popover button { display: flex; align-items: center; justify-content: space-between; min-height: 33px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left; font-size: 12px; font-weight: 700; }.filter-popover button:hover, .filter-popover button.active { background: var(--surface-soft); color: var(--primary); }.filter-popover button b { color: var(--primary); }
+.active-filter { border-color: color-mix(in srgb, var(--primary) 55%, var(--line)); color: var(--primary); background: color-mix(in srgb, var(--primary) 13%, var(--surface)); }
+.board-sort-control { z-index: 7; display: flex; justify-content: flex-end; margin: -10px 34px 12px; }.board-sort-control .sort-popover { top: calc(100% + 7px); }
+@media (max-width: 760px) { .board-sort-control { margin: -5px 16px 10px; } }
+
 /* Saved card priority: a compact five-bar signal, from calm to critical. */
 .priority-signal { --priority-color: #78aee0; display: inline-flex; align-items: end; gap: 2px; width: 31px; height: 17px; vertical-align: middle; }
 .priority-signal i { display: block; width: 4px; flex: 0 0 4px; border-radius: 2px 2px 1px 1px; background: #64707b; opacity: .35; }

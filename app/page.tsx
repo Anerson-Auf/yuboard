@@ -7,14 +7,14 @@ import './auth.css';
 type EntityId = number | string;
 type Member = { id: EntityId; initials: string; color: string; name: string; avatarUrl?: string | null };
 type Label = { id: string; name: string; color: string };
-type Card = { id: EntityId; title: string; description?: string; priority?: number; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; labels: Label[]; checklist?: string; comments?: number; attachments?: number; members: Member[] };
+type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; labels: Label[]; checklist?: string; comments?: number; attachments?: number; members: Member[] };
 type Column = { id: EntityId; title: string; cards: Card[] };
 type View = 'home' | 'board';
 type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
 type BoardBackgroundPosition = 'center' | 'top' | 'bottom';
 type ApiMember = { id: string; username: string; avatar_url?: string | null };
-type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; labels: Label[]; members: ApiMember[]; lists: { id: string; title: string; cards: { id: string; title: string; description: string; priority: number; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; labels: Label[]; assignees: ApiMember[] }[] }[] };
+type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; labels: Label[]; members: ApiMember[]; lists: { id: string; title: string; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; labels: Label[]; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
@@ -28,6 +28,7 @@ type AuthState = 'checking' | 'signed-out' | 'signed-in' | 'public';
 type Workspace = { id: string; name: string };
 type BoardSummary = { id: string; title: string; visibility: string };
 type FilterMode = 'all' | 'assigned' | 'due' | 'overdue';
+type CardSort = 'manual' | 'priority' | 'activity';
 type ArchivedCard = { id: string; list_id: string; title: string; description: string; archived_at: string };
 type TeamMember = { id: string; username: string; preset: 'owner' | 'viewer' | 'contributor' | 'editor' | 'full_access'; avatar_url?: string | null };
 const roleLabels: Record<TeamMember['preset'], string> = { owner: 'Владелец', viewer: 'Наблюдатель', contributor: 'Участник', editor: 'Редактор', full_access: 'Полный доступ' };
@@ -347,8 +348,10 @@ export default function Home() {
   const [toast, setToast] = useState('');
   const [query, setQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [cardSort, setCardSort] = useState<CardSort>('manual');
   const [labelsCollapsed, setLabelsCollapsed] = useState(false);
   const [isFilterOpen, setFilterOpen] = useState(false);
+  const [isSortOpen, setSortOpen] = useState(false);
   const [nextCardId, setNextCardId] = useState(100);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [checklistNameDraft, setChecklistNameDraft] = useState('');
@@ -504,16 +507,20 @@ export default function Home() {
   const currentMember = account ? memberFromApi({ id: account.user.id, username: account.user.username, avatar_url: account.user.avatar_url }) : { id: '', initials: '—', color: 'violet', name: 'Пользователь' };
   const boardBackgroundStyle = view === 'board' && boardBackgroundUrl ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${assetUrl(boardBackgroundUrl)}")`, backgroundSize: boardBackgroundFit === 'fill' ? '100% 100%' : boardBackgroundFit, backgroundPosition: boardBackgroundPosition === 'top' ? 'center top' : boardBackgroundPosition === 'bottom' ? 'center bottom' : 'center', backgroundRepeat: 'no-repeat' } : undefined;
 
-  const visibleColumns = useMemo(() => columns.map((column) => ({
-    ...column,
-    cards: column.cards.filter((card) => {
+  const visibleColumns = useMemo(() => columns.map((column) => {
+    const cards = column.cards.filter((card) => {
       if (!card.title.toLowerCase().includes(query.toLowerCase())) return false;
       if (filterMode === 'assigned') return card.members.some((member) => member.id === currentMember.id);
       if (filterMode === 'due') return Boolean(card.dueAt);
       if (filterMode === 'overdue') return Boolean(card.dueAt && new Date(card.dueAt).getTime() < Date.now());
       return true;
-    }),
-  })), [columns, currentMember.id, filterMode, query]);
+    });
+    if (cardSort === 'manual') return { ...column, cards };
+    const activityTime = (card: Card) => card.lastActivityAt ? new Date(card.lastActivityAt).getTime() || 0 : 0;
+    return { ...column, cards: [...cards].sort((left, right) => cardSort === 'priority'
+      ? (right.priority ?? 0) - (left.priority ?? 0) || activityTime(right) - activityTime(left)
+      : activityTime(right) - activityTime(left)) };
+  }), [cardSort, columns, currentMember.id, filterMode, query]);
 
   useEffect(() => {
     async function connectToApi() {
@@ -1608,7 +1615,7 @@ export default function Home() {
   }
 
   function applyBoard(data: ApiBoard) {
-    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, members: card.assignees.map(memberFromApi) })) })));
+    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, members: card.assignees.map(memberFromApi) })) })));
     setBoardLabels(data.labels);
     setWorkspaceMembers(data.members.map(memberFromApi));
     setWorkspaceId(data.workspace_id);
@@ -1897,6 +1904,7 @@ export default function Home() {
         </div>}
       </div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
+      <div className="board-sort-control"><button className={`secondary-button ${cardSort !== 'manual' ? 'active-filter' : ''}`} onClick={() => setSortOpen((current) => !current)} aria-expanded={isSortOpen}>⇅ Сортировка</button>{isSortOpen && <div className="filter-popover sort-popover"><p>Порядок в колонках</p>{([['manual', 'Как на доске'], ['priority', 'Сначала важные'], ['activity', 'Недавно обновлённые']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => { setCardSort(mode); setSortOpen(false); }}>{label}{cardSort === mode && <b>✓</b>}</button>)}</div>}</div>
       <section className={`board ${isBoardPanning ? 'board-panning' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={moveBoardPan} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan}>
         {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <>{visibleColumns.map((column) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${draggingColumnId === column.id ? 'column-dragging' : ''} ${columnDropTarget?.visualColumnId === column.id ? `column-drop-${columnDropTarget.edge}` : ''}`} key={column.id} aria-label={column.title} onContextMenu={(event) => { if (isPublicViewer || (event.target instanceof Element && event.target.closest('.task-card'))) return; event.preventDefault(); event.stopPropagation(); setColumnContextMenu({ column, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 150) }); }} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId) { const bounds = event.currentTarget.getBoundingClientRect(); const after = event.clientX > bounds.left + bounds.width / 2; const index = columns.findIndex((item) => item.id === column.id); const next = after ? columns[index + 1] : undefined; setColumnDropTarget({ beforeColumnId: after ? next?.id ?? null : column.id, visualColumnId: column.id, edge: after ? 'after' : 'before' }); updateBoardAutoScroll(event); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { if (draggingColumnId) { setColumnDropTarget(null); stopBoardAutoScroll(); } else { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId) { const target = columnDropTarget?.visualColumnId === column.id ? columnDropTarget.beforeColumnId ?? undefined : column.id; moveColumn(draggingColumnId, target); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>
           <div className="column-head column-drag-handle" draggable={!isPublicViewer} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData('application/x-flowboard-column', String(column.id)); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setDragImage(event.currentTarget, 30, 22); setDraggingColumnId(column.id); setColumnDropTarget(null); }} onDragEnd={clearColumnDragState}><span className="column-drag-icon" aria-hidden="true">⠿</span><div>{editingColumnId === column.id ? <form className="column-rename" onSubmit={(event) => { event.preventDefault(); saveColumnTitle(column.id); }}><input autoFocus maxLength={200} value={columnTitleDraft} onChange={(event) => setColumnTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setEditingColumnId(null); }} aria-label="Название колонки" /><button type="submit" disabled={isSavingColumn}>✓</button></form> : <><h2>{column.title}</h2><span>{column.cards.length}</span></>}</div><div className="column-actions"><button className="column-menu" aria-label={`Меню колонки ${column.title}`} onClick={() => setColumnMenuId((current) => current === column.id ? null : column.id)}>•••</button>{columnMenuId === column.id && <div className="column-popover"><button onClick={() => beginColumnRename(column)}>Переименовать</button><button className="danger-action" onClick={() => deleteColumn(column)}>Удалить пустую</button></div>}</div></div>
