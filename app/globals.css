@@ -210,7 +210,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 /* Keep metadata compact while making its controls readable at a glance. */
 .card-meta { align-items: center; font-size: 12px; }
 .card-meta > span { display: inline-flex; align-items: center; gap: 3px; }
-.card-meta-icon { display: inline-grid; width: 15px; place-items: center; font-style: normal; font-size: 15px; line-height: 1; }
+.card-meta-icon { display: block; width: 16px; height: 16px; flex: 0 0 16px; }
 
 /* Leave a deliberate gutter between cards and a column's vertical scrollbar. */
 .card-list { padding-right: 10px; }
