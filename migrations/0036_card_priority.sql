@@ -1,0 +1,3 @@
+ALTER TABLE cards
+    ADD COLUMN priority SMALLINT NOT NULL DEFAULT 0
+        CHECK (priority BETWEEN 0 AND 5);

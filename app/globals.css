@@ -284,7 +284,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .public-board-notice { margin: 0 34px 12px; color: #cecfd2; font-size: 12px; font-weight: 700; }
 .public-viewer .share-button, .public-viewer .board-menu-control, .public-viewer .board-tools > .secondary-button, .public-viewer .title-edit, .public-viewer .column-actions, .public-viewer .add-task, .public-viewer .add-column, .public-viewer .card-complete { display: none; }
 .public-viewer .task-card { cursor: pointer; }
-.public-viewer .task-modal .quick-action, .public-viewer .task-modal .member-plus, .public-viewer .task-modal .label-plus, .public-viewer .task-modal .text-action, .public-viewer .task-modal .archive-button, .public-viewer .task-modal .comment-composer, .public-viewer .task-modal .attachment-remove, .public-viewer .task-modal .upload-button { display: none; }
+.public-viewer .task-modal .quick-action, .public-viewer .task-modal .member-plus, .public-viewer .task-modal .label-plus, .public-viewer .task-modal .text-action, .public-viewer .task-modal .archive-button, .public-viewer .task-modal .comment-composer, .public-viewer .task-modal .attachment-remove, .public-viewer .task-modal .upload-button, .public-viewer .task-modal .card-priority-editor { display: none; }
 .public-viewer .task-modal .card-title-input, .public-viewer .task-modal .card-description-input { pointer-events: none; }
 .card-context-menu { position: fixed; z-index: 60; display: grid; min-width: 196px; gap: 3px; padding: 6px; border: 1px solid #4b5056; border-radius: 10px; background: #303134; box-shadow: 0 16px 42px rgb(0 0 0 / 42%); }
 .card-context-menu button { min-height: 33px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: #cecfd2; text-align: left; font-size: 12px; font-weight: 700; }
@@ -320,3 +320,18 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .mention-suggestions .avatar { width: 24px; height: 24px; flex: 0 0 24px; font-size: 7px; }
 .mention-highlight { border-radius: 4px; background: color-mix(in srgb, #ef5b68 28%, transparent); color: var(--text); padding: 1px 3px; font-weight: 750; }
 textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--surface-raised)); box-shadow: inset 2px 0 0 #ef5b68; }
+
+/* Saved card priority: a compact five-bar signal, from calm to critical. */
+.priority-signal { --priority-color: #78aee0; display: inline-flex; align-items: end; gap: 2px; width: 31px; height: 17px; vertical-align: middle; }
+.priority-signal i { display: block; width: 4px; flex: 0 0 4px; border-radius: 2px 2px 1px 1px; background: #64707b; opacity: .35; }
+.priority-signal i:nth-child(1) { height: 5px; }.priority-signal i:nth-child(2) { height: 7px; }.priority-signal i:nth-child(3) { height: 10px; }.priority-signal i:nth-child(4) { height: 13px; }.priority-signal i:nth-child(5) { height: 16px; }
+.priority-signal i.active { background: var(--priority-color); opacity: 1; box-shadow: 0 0 7px color-mix(in srgb, var(--priority-color) 42%, transparent); }
+.priority-signal.level-1 { --priority-color: #7caee0; }.priority-signal.level-2 { --priority-color: #5fc49b; }.priority-signal.level-3 { --priority-color: #dfc45b; }.priority-signal.level-4 { --priority-color: #e99a4b; }.priority-signal.level-5 { --priority-color: #ed6377; }
+.card-priority-corner { position: absolute; z-index: 4; bottom: 12px; display: grid; min-width: 30px; min-height: 24px; place-items: center; padding: 3px 5px; border: 1px solid color-mix(in srgb, var(--line) 78%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--surface-raised) 84%, transparent); backdrop-filter: blur(6px); }
+.task-card:has(.card-priority-corner) .card-footer { padding-right: 43px; }
+.card-priority-editor { display: flex; align-items: center; gap: 10px; margin: 11px 0 2px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.card-priority-editor > div { display: inline-flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.card-priority-editor button { display: grid; min-width: 35px; min-height: 28px; place-items: center; padding: 0 7px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 10px; font-weight: 800; }
+.card-priority-editor button:hover { background: var(--surface-raised); color: var(--text); }.card-priority-editor button.selected { border-color: color-mix(in srgb, var(--primary) 55%, var(--line)); background: color-mix(in srgb, var(--primary) 16%, var(--surface-raised)); color: var(--text); }
+.card-priority-editor button:has(.priority-signal) { min-width: 37px; }.card-priority-editor .priority-signal { pointer-events: none; }
+@media (max-width: 620px) { .card-priority-editor { align-items: flex-start; flex-direction: column; gap: 5px; }.card-priority-editor > div { max-width: 100%; }.card-priority-editor button { min-width: 31px; padding: 0 4px; } }
