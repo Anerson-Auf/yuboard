@@ -384,6 +384,13 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .board-header { flex-wrap: wrap; }
 .board-header > :first-child { margin-right: auto; }
 .board-tools { position: relative; z-index: 30; flex-wrap: wrap; justify-content: flex-end; }
+.secondary-button.more { padding: 8px 7px; border: 0; background: transparent; box-shadow: none; }
+.secondary-button.more:hover { background: transparent; color: var(--text); }
+.board-members-control { position: relative; z-index: 32; flex: 0 0 auto; }
+.more-members { cursor: pointer; transition: color .16s, background .16s, transform .16s; }
+.more-members:hover { color: var(--text); background: var(--surface); transform: translateY(-1px); }
+.board-members-popover { position: absolute; z-index: 50; top: calc(100% + 8px); right: 0; width: 220px; max-height: min(420px, calc(100vh - 130px)); overflow-y: auto; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--surface-raised) 97%, var(--surface)); box-shadow: 0 20px 48px rgb(0 0 0 / 38%); backdrop-filter: blur(16px); }
+.board-members-popover .popover-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 1px 2px 8px; border-bottom: 1px solid var(--line); color: var(--text); font-size: 12px; }.board-members-popover .popover-heading span { color: var(--faint); font-size: 11px; font-weight: 700; }.board-members-list { display: grid; gap: 4px; margin-top: 8px; }.board-members-list > div { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 4px; border-radius: 8px; }.board-members-list > div:hover { background: var(--surface-soft); }.board-members-list .avatar { width: 28px; height: 28px; flex: 0 0 28px; font-size: 8px; }.board-members-list span { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .board-menu-control { z-index: 40; }
 .filter-popover, .board-labels-popover { z-index: 50; }
 .board-menu { z-index: 60; }

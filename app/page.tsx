@@ -398,6 +398,7 @@ export default function Home() {
   const [labelsCollapsed, setLabelsCollapsed] = useState(false);
   const [isFilterOpen, setFilterOpen] = useState(false);
   const [isBoardLabelsOpen, setBoardLabelsOpen] = useState(false);
+  const [isMembersPopoverOpen, setMembersPopoverOpen] = useState(false);
   const [nextCardId, setNextCardId] = useState(100);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [checklistNameDraft, setChecklistNameDraft] = useState('');
@@ -796,23 +797,24 @@ export default function Home() {
   }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
-    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !sidebarPanel && !columnMenuId) return;
+    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isMembersPopoverOpen && !sidebarPanel && !columnMenuId) return;
     const closePopovers = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
       if (isBoardMenuOpen && !event.target.closest('.board-menu-control')) setBoardMenuOpen(false);
       if (isFilterOpen && !event.target.closest('.filter-control')) setFilterOpen(false);
       if (isBoardLabelsOpen && !event.target.closest('.board-labels-control')) { setBoardLabelsOpen(false); setEditingBoardLabel(null); }
+      if (isMembersPopoverOpen && !event.target.closest('.board-members-control')) setMembersPopoverOpen(false);
       if (columnMenuId && !event.target.closest('.column-actions')) setColumnMenuId(null);
       if (sidebarPanel && !event.target.closest('.property-popover, .quick-action, .member-plus, .label-plus')) setSidebarPanel(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setColumnMenuId(null); setSidebarPanel(null);
+      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMembersPopoverOpen(false); setColumnMenuId(null); setSidebarPanel(null);
     };
     window.addEventListener('pointerdown', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
-  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isFilterOpen, sidebarPanel]);
+  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isFilterOpen, isMembersPopoverOpen, sidebarPanel]);
 
   useEffect(() => {
     if (!cardContextMenu && !columnContextMenu && !freeformContextMenu) return;
@@ -2443,7 +2445,7 @@ export default function Home() {
       <section className="board-header">
         <div><button className="breadcrumbs" onClick={openHome}>{workspaceName} <span>/</span> {boardTitle}</button><div className="board-title-row">{isEditingBoardTitle ? <form className="board-title-form" onSubmit={(event) => { event.preventDefault(); saveBoardTitle(); }}><input autoFocus value={boardTitleDraft} onChange={(event) => setBoardTitleDraft(event.target.value)} maxLength={200} onKeyDown={(event) => { if (event.key === 'Escape') setEditingBoardTitle(false); }} /><button type="submit" disabled={isSavingBoardTitle}>✓</button></form> : <h1>{boardTitle}</h1>}<span className={`sync-status ${persistence}`}>{persistence === 'connected' ? 'Сохранено' : persistence === 'connecting' ? 'Подключение…' : 'Нет подключения'}</span><button className="title-edit" onClick={beginBoardRename} aria-label="Переименовать доску">✎</button></div></div>
         <div className="board-tools">
-          <div className="avatars">{workspaceMembers.slice(0, 3).map((person) => <Avatar key={person.name} member={person} />)}{workspaceMembers.length > 3 && <span className="more-members">+{workspaceMembers.length - 3}</span>}</div>
+          <div className="board-members-control"><div className="avatars">{workspaceMembers.slice(0, 3).map((person) => <Avatar key={person.name} member={person} />)}{workspaceMembers.length > 3 && <button className="more-members" type="button" aria-label={`Показать всех участников: ${workspaceMembers.length}`} aria-expanded={isMembersPopoverOpen} onClick={() => setMembersPopoverOpen((current) => !current)}>+{workspaceMembers.length - 3}</button>}</div>{isMembersPopoverOpen && <div className="board-members-popover"><div className="popover-heading"><b>Участники проекта</b><span>{workspaceMembers.length}</span></div><div className="board-members-list">{workspaceMembers.map((person) => <div key={person.id}><Avatar member={person} /><span>@{person.name}</span></div>)}</div></div>}</div>
           {!isPublicViewer && <div className="board-view-toggle" role="group" aria-label="Режим расположения колонок"><button type="button" className={boardViewMode === 'standard' ? 'active' : ''} onClick={() => changeBoardViewMode('standard')}>Ряд</button><button type="button" className={boardViewMode === 'freeform' ? 'active' : ''} onClick={() => changeBoardViewMode('freeform')} title="Колонки можно свободно двигать; Shift включает привязку к сетке">Свободно</button></div>}
           <div className="filter-control">
             <button className={`board-icon-button ${filterMode !== 'all' || cardSort !== 'manual' ? 'active-filter' : ''}`} type="button" title="Фильтры и сортировка" aria-label="Фильтры и сортировка" aria-expanded={isFilterOpen} onClick={() => setFilterOpen((current) => !current)}><BoardToolbarIcon type="filter" /></button>
