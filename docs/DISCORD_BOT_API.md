@@ -222,6 +222,26 @@ const avatarUrl = comment.author_avatar_url
 
 The URL stops working as soon as the integration token is revoked; it does not expose the general Flowboard avatar endpoint.
 
+### Forward files uploaded from Flowboard
+
+When a user inserts or drops JPEG, PNG, GIF, WebP, MP4, WebM, or MOV into a Flowboard comment and sends it, the comment response includes an `attachments` array:
+
+```json
+{
+  "id": "comment-uuid",
+  "body": "Скриншот:\n![screen.png](/v1/attachments/attachment-uuid/content)",
+  "attachments": [{
+    "id": "attachment-uuid",
+    "original_name": "screen.png",
+    "media_type": "image/png",
+    "byte_size": 123456,
+    "download_url": "/v1/integrations/discord/cards/card-uuid/attachments/attachment-uuid"
+  }]
+}
+```
+
+`download_url` is relative to the API base and requires the same `Authorization: Bearer fb_discord_…` header. Download its bytes and send them to Discord as a file, using `original_name` as the Discord filename. The URL is scoped to this token's board and this card; it cannot download unrelated Flowboard uploads.
+
 ## Add a player comment, screenshot, or video
 
 `message_id` makes the operation idempotent. Discord avatars and media must use Discord CDN HTTPS URLs. Supported attachments are JPEG, PNG, GIF, WebP, MP4, WebM, and MOV, up to 50 MiB each.

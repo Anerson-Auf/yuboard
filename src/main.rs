@@ -851,6 +851,16 @@ struct CommentResponse {
     created_at: String,
     edited_at: Option<String>,
     reactions: Vec<CommentReactionResponse>,
+    attachments: Vec<CommentAttachmentResponse>,
+}
+
+#[derive(Clone, Serialize, FromRow)]
+struct CommentAttachmentResponse {
+    id: Uuid,
+    original_name: String,
+    media_type: String,
+    byte_size: i64,
+    download_url: String,
 }
 
 #[derive(FromRow)]
@@ -1048,6 +1058,7 @@ async fn main() {
         .route("/v1/integrations/discord/cards/{card_id}/completion", patch(set_discord_card_completion))
         .route("/v1/integrations/discord/cards/{card_id}/priority", patch(set_discord_card_priority))
         .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
+        .route("/v1/integrations/discord/cards/{card_id}/attachments/{attachment_id}", get(download_discord_card_attachment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
@@ -2574,13 +2585,15 @@ async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Optio
     .fetch_all(pool)
     .await
     .map_err(ApiError::internal)?;
-    comment_responses(pool, rows, current_user_id).await
+    let mut comments = comment_responses(pool, rows, current_user_id).await?;
+    load_comment_attachments(pool, card_id, &mut comments).await?;
+    Ok(comments)
 }
 
 async fn comment_responses(pool: &PgPool, rows: Vec<CommentRow>, current_user_id: Option<Uuid>) -> Result<Vec<CommentResponse>, ApiError> {
     let mut comments: Vec<CommentResponse> = rows.into_iter().map(|row| CommentResponse {
         id: row.id, body: row.body, author_id: row.author_id, author_name: row.author_name, author_avatar_url: row.author_avatar_url, parent_comment_id: row.parent_comment_id,
-        created_at: row.created_at, edited_at: row.edited_at, reactions: vec![],
+        created_at: row.created_at, edited_at: row.edited_at, reactions: vec![], attachments: vec![],
     }).collect();
     if comments.is_empty() { return Ok(comments); }
 
@@ -2599,6 +2612,26 @@ async fn comment_responses(pool: &PgPool, rows: Vec<CommentRow>, current_user_id
         }).collect();
     }
     Ok(comments)
+}
+
+fn attachment_ids_in_comment(body: &str) -> Vec<Uuid> {
+    body.split("/v1/attachments/").skip(1)
+        .filter_map(|suffix| suffix.split('/').next().and_then(|value| Uuid::parse_str(value).ok()))
+        .collect::<HashSet<_>>().into_iter().collect()
+}
+
+async fn load_comment_attachments(pool: &PgPool, card_id: Uuid, comments: &mut [CommentResponse]) -> Result<(), ApiError> {
+    let attachment_ids: Vec<Uuid> = comments.iter().flat_map(|comment| attachment_ids_in_comment(&comment.body)).collect::<HashSet<_>>().into_iter().collect();
+    if attachment_ids.is_empty() { return Ok(()); }
+    let attachments = sqlx::query_as::<_, CommentAttachmentResponse>(
+        "SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS download_url FROM attachments WHERE card_id = $1 AND checklist_item_id IS NULL AND id = ANY($2)",
+    )
+    .bind(card_id).bind(&attachment_ids).fetch_all(pool).await.map_err(ApiError::internal)?;
+    for comment in comments {
+        let ids: HashSet<Uuid> = attachment_ids_in_comment(&comment.body).into_iter().collect();
+        comment.attachments = attachments.iter().filter(|attachment| ids.contains(&attachment.id)).cloned().collect();
+    }
+    Ok(())
 }
 
 fn mentioned_usernames(value: &str) -> Vec<String> {
@@ -3222,6 +3255,7 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
     let Some(after) = query.after else {
         let mut comments = load_card_comments(pool, card_id, None).await?;
         rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
+        rewrite_discord_comment_attachment_urls(integration, card_id, &mut comments);
         return Ok(Json(comments));
     };
     let cursor_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2)")
@@ -3234,7 +3268,9 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
     .bind(card_id).bind(after).bind(limit)
     .fetch_all(pool).await.map_err(ApiError::internal)?;
     let mut comments = comment_responses(pool, rows, None).await?;
+    load_comment_attachments(pool, card_id, &mut comments).await?;
     rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
+    rewrite_discord_comment_attachment_urls(integration, card_id, &mut comments);
     Ok(Json(comments))
 }
 
@@ -3766,6 +3802,33 @@ async fn rewrite_discord_comment_avatar_urls(pool: &PgPool, integration: Discord
         }
     }
     Ok(())
+}
+
+fn rewrite_discord_comment_attachment_urls(_integration: DiscordIntegration, card_id: Uuid, comments: &mut [CommentResponse]) {
+    for comment in comments {
+        for attachment in &mut comment.attachments {
+            attachment.download_url = format!("/v1/integrations/discord/cards/{card_id}/attachments/{}", attachment.id);
+        }
+    }
+}
+
+async fn download_discord_card_attachment(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, attachment_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
+    let attachment = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
+        "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN comments cm ON cm.card_id = c.id WHERE a.id = $1 AND c.id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' LIMIT 1",
+    )
+    .bind(attachment_id).bind(card_id).bind(integration.board_id)
+    .fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Comment attachment was not found on this Discord integration board.".to_owned()))?;
+    if let Some(url) = attachment.2 {
+        return proxy_external_attachment(&state.external_http, &url, &attachment.1).await;
+    }
+    let object_key = attachment.0.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()))?;
+    let bytes = tokio::fs::read(state.upload_dir.join(object_key)).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()) }
+        else { tracing::error!(?error, "Discord attachment read failed"); ApiError::storage() }
+    })?;
+    let content_type = HeaderValue::from_str(&attachment.1).map_err(|_| ApiError::storage())?;
+    Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
 }
 
 async fn download_discord_comment_avatar(State(state): State<AppState>, Path((token, card_id, user_id)): Path<(Uuid, Uuid, Uuid)>) -> Result<Response, ApiError> {
