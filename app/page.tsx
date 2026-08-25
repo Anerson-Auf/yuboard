@@ -750,6 +750,7 @@ export default function Home() {
   const freeformDrawingSaveTimerRef = useRef<number | null>(null);
   const pointerCardDragRef = useRef<PointerCardDrag | null>(null);
   const pointerCardDropRef = useRef<{ listId: EntityId; beforeCardId?: EntityId } | null>(null);
+  const cardDragPreviewElementRef = useRef<HTMLDivElement | null>(null);
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
@@ -834,27 +835,27 @@ export default function Home() {
         setDragging({ cardId: pointerDrag.card.id, sourceListId: pointerDrag.sourceListId });
         setCardDragPreview({ card: pointerDrag.card, x: event.clientX, y: event.clientY, width: pointerDrag.width, height: pointerDrag.height });
       }
-      setCardDragPreview((current) => current ? { ...current, x: event.clientX, y: event.clientY } : current);
+      const preview = cardDragPreviewElementRef.current;
+      if (preview) { preview.style.left = `${event.clientX - 28}px`; preview.style.top = `${event.clientY - 20}px`; }
       const target = document.elementFromPoint(event.clientX, event.clientY);
-      const targetCard = target instanceof Element ? target.closest<HTMLElement>('[data-card-id]') : null;
       const targetColumn = target instanceof Element ? target.closest<HTMLElement>('[data-list-id]') : null;
       const targetList = columns.find((column) => String(column.id) === targetColumn?.dataset.listId);
-      if (!targetList || (targetCard?.dataset.cardId === String(pointerDrag.card.id))) {
-        pointerCardDropRef.current = null;
-        setDragOverListId(null);
-        setDragDropTarget(null);
+      if (!targetList || !targetColumn) {
+        if (pointerCardDropRef.current) { pointerCardDropRef.current = null; setDragOverListId(null); setDragDropTarget(null); }
         return;
       }
       let beforeCardId: EntityId | undefined;
-      const cardUnderPointer = targetCard ? targetList.cards.find((card) => String(card.id) === targetCard.dataset.cardId) : undefined;
-      if (cardUnderPointer && targetCard) {
-        const bounds = targetCard.getBoundingClientRect();
-        if (event.clientY <= bounds.top + bounds.height / 2) beforeCardId = cardUnderPointer.id;
-        else beforeCardId = targetList.cards[targetList.cards.findIndex((card) => card.id === cardUnderPointer.id) + 1]?.id;
+      const visibleCards = Array.from(targetColumn.querySelectorAll<HTMLElement>('[data-card-id]')).filter((element) => element.dataset.cardId !== String(pointerDrag.card.id));
+      for (const element of visibleCards) {
+        const bounds = element.getBoundingClientRect();
+        if (event.clientY <= bounds.top + bounds.height / 2) { beforeCardId = targetList.cards.find((card) => String(card.id) === element.dataset.cardId)?.id; break; }
       }
-      pointerCardDropRef.current = { listId: targetList.id, beforeCardId };
-      setDragOverListId(targetList.id);
-      setDragDropTarget({ listId: targetList.id, beforeCardId: beforeCardId ?? null });
+      const previousTarget = pointerCardDropRef.current;
+      if (!previousTarget || previousTarget.listId !== targetList.id || previousTarget.beforeCardId !== beforeCardId) {
+        pointerCardDropRef.current = { listId: targetList.id, beforeCardId };
+        setDragOverListId(targetList.id);
+        setDragDropTarget({ listId: targetList.id, beforeCardId: beforeCardId ?? null });
+      }
       event.preventDefault();
     };
     const endPointerCard = () => {
@@ -3166,7 +3167,7 @@ export default function Home() {
     {imagePreview && <div className="image-preview-backdrop" role="presentation" onMouseDown={() => setImagePreview(null)}><figure className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Просмотр ${imagePreview.name}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" onClick={() => setImagePreview(null)} aria-label="Закрыть просмотр">×</button><img src={imagePreview.url} alt={imagePreview.name} /><figcaption>{imagePreview.name}</figcaption></figure></div>}
     {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button>{!isPublicViewer && <><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button></>}</div>}
     {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); addColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Добавить колонку ниже</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); moveColumn(columnContextMenu.column.id); setColumnContextMenu(null); }}>Вынести в отдельный ряд справа</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}
-    {cardDragPreview && <div className="card-drag-preview" aria-hidden="true" style={{ left: cardDragPreview.x - 28, top: cardDragPreview.y - 20, width: cardDragPreview.width, height: cardDragPreview.height } as CSSProperties}><b>{cardDragPreview.card.title}</b></div>}
+    {cardDragPreview && <div ref={cardDragPreviewElementRef} className="card-drag-preview" aria-hidden="true" style={{ left: cardDragPreview.x - 28, top: cardDragPreview.y - 20, width: cardDragPreview.width, height: cardDragPreview.height } as CSSProperties}>{cardDragPreview.card.coverUrl && <div className={`card-cover ${cardDragPreview.card.coverMode ?? 'full'}`}><img src={assetUrl(cardDragPreview.card.coverUrl)} alt="" /></div>}<div className="card-main">{(cardDragPreview.card.labels.length > 0 || cardDragPreview.card.roles.length > 0) && <div className="card-top"><div className="card-labels">{cardDragPreview.card.labels.map((label) => <LabelChip label={label} key={label.id} />)}{cardDragPreview.card.roles.map((role) => <ProfileRoleChip role={role} key={role.id} compact />)}</div></div>}<div className="card-title-row"><span className={`card-complete ${cardDragPreview.card.completedAt ? 'done' : ''}`}>{cardDragPreview.card.completedAt && '✓'}</span><h3>{cardDragPreview.card.title}</h3></div>{cardDragPreview.card.dueAt && <p className="due">◷ {formatDue(cardDragPreview.card.dueAt)}</p>}</div>{cardDragPreview.card.priority ? <span className="card-priority-corner" style={{ right: cardDragPreview.card.members.length ? 96 : 14 }}><PrioritySignal priority={cardDragPreview.card.priority} /></span> : null}{(cardDragPreview.card.checklist || cardDragPreview.card.comments || cardDragPreview.card.attachments || cardDragPreview.card.members.length > 0) && <footer className="card-footer"><div className="card-meta">{cardDragPreview.card.checklist && <span className={isChecklistComplete(cardDragPreview.card.checklist) ? 'checklist-complete' : ''}><CardMetaIcon type="checklist" />{cardDragPreview.card.checklist}</span>}{cardDragPreview.card.comments && <span><CardMetaIcon type="comments" />{cardDragPreview.card.comments}</span>}{cardDragPreview.card.attachments && <span><CardMetaIcon type="attachments" /></span>}</div><div className="card-avatars">{cardDragPreview.card.members.map((member) => <Avatar key={member.id} member={member} />)}</div></footer>}</div>}
     {cardMoveMotion && <div className="card-move-ghost" aria-hidden="true" style={{ left: cardMoveMotion.from.left, top: cardMoveMotion.from.top, width: cardMoveMotion.from.width, height: cardMoveMotion.from.height, '--card-move-x': `${cardMoveMotion.to.left - cardMoveMotion.from.left}px`, '--card-move-y': `${cardMoveMotion.to.top - cardMoveMotion.from.top}px`, '--card-move-scale-x': String(cardMoveMotion.to.width / cardMoveMotion.from.width), '--card-move-scale-y': String(cardMoveMotion.to.height / cardMoveMotion.from.height) } as CSSProperties}><b>{cardMoveMotion.title}</b></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
