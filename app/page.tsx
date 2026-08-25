@@ -7,14 +7,15 @@ import './auth.css';
 type EntityId = number | string;
 type Member = { id: EntityId; initials: string; color: string; name: string; avatarUrl?: string | null };
 type Label = { id: string; name: string; color: string };
-type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; labels: Label[]; checklist?: string; comments?: number; attachments?: number; members: Member[] };
+type Milestone = { id: string; name: string; description: string; color: string; target_date?: string | null };
+type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; labels: Label[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
 type Column = { id: EntityId; title: string; cards: Card[] };
 type View = 'home' | 'board';
 type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
 type BoardBackgroundPosition = 'center' | 'top' | 'bottom';
 type ApiMember = { id: string; username: string; avatar_url?: string | null };
-type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; labels: Label[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; labels: Label[]; assignees: ApiMember[] }[] }[] };
+type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; labels: Label[]; milestones: Milestone[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; labels: Label[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
@@ -238,10 +239,11 @@ function CardMetaIcon({ type }: { type: 'comments' | 'checklist' | 'attachments'
   return <svg className="card-meta-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" clipRule="evenodd" d={paths[type]} /></svg>;
 }
 
-function BoardToolbarIcon({ type }: { type: 'filter' | 'labels' | 'archive' | 'team' }) {
+function BoardToolbarIcon({ type }: { type: 'filter' | 'labels' | 'milestones' | 'archive' | 'team' }) {
   const paths = {
     filter: ['M11 12v1.5H5V12zm2-4.75v1.5H3v-1.5zm2-4.75V4H1V2.5z'],
     labels: ['M11 4a1 1 0 1 0 0 2 1 1 0 0 0 0-2', 'M9.286 1a3.25 3.25 0 0 0-2.299.952L1.604 7.336a2 2 0 0 0 0 2.828l4.232 4.232a2 2 0 0 0 2.828 0l5.384-5.383A3.25 3.25 0 0 0 15 6.714V3a2 2 0 0 0-2-2zM8.048 3.013A1.75 1.75 0 0 1 9.286 2.5H13a.5.5 0 0 1 .5.5v3.714c0 .465-.184.91-.513 1.238l-5.383 5.384a.5.5 0 0 1-.708 0L2.664 9.104a.5.5 0 0 1 0-.708z'],
+    milestones: ['M8 1.25 14.75 8 8 14.75 1.25 8z'],
     archive: ['M1 1h14v5h-1v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6H1zm2.5 5v7a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5V6zm10-1.5h-11v-2h11zm-3 4.5h-5V7.5h5z'],
     team: ['M1 12.75A3.75 3.75 0 0 1 4.75 9H9v1.5H4.75a2.25 2.25 0 0 0-2.25 2.25V15H1zM9.5 4a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 0-5M11 4a4 4 0 1 1-8 0 4 4 0 0 1 8 0m2.75 6v2.25H16v1.5h-2.25V16h-1.5v-2.25H10v-1.5h2.25V10z'],
   };
@@ -394,10 +396,12 @@ export default function Home() {
   const [toast, setToast] = useState('');
   const [query, setQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [milestoneFilterId, setMilestoneFilterId] = useState<string | null>(null);
   const [cardSort, setCardSort] = useState<CardSort>('manual');
   const [labelsCollapsed, setLabelsCollapsed] = useState(false);
   const [isFilterOpen, setFilterOpen] = useState(false);
   const [isBoardLabelsOpen, setBoardLabelsOpen] = useState(false);
+  const [isMilestonesOpen, setMilestonesOpen] = useState(false);
   const [isMembersPopoverOpen, setMembersPopoverOpen] = useState(false);
   const [nextCardId, setNextCardId] = useState(100);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
@@ -431,6 +435,11 @@ export default function Home() {
   const [existingLabelsOnly, setExistingLabelsOnly] = useState(false);
   const [isUploadingCardBackground, setUploadingCardBackground] = useState(false);
   const [boardLabels, setBoardLabels] = useState<Label[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [milestoneNameDraft, setMilestoneNameDraft] = useState('');
+  const [milestoneColorDraft, setMilestoneColorDraft] = useState('#6ea8fe');
+  const [isSavingMilestone, setSavingMilestone] = useState(false);
+  const [isCardMilestoneOpen, setCardMilestoneOpen] = useState(false);
   const [workspaceMembers, setWorkspaceMembers] = useState<Member[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState('');
@@ -585,6 +594,7 @@ export default function Home() {
   const visibleColumns = useMemo(() => columns.map((column) => {
     const cards = column.cards.filter((card) => {
       if (!card.title.toLowerCase().includes(query.toLowerCase())) return false;
+      if (milestoneFilterId && card.milestone?.id !== milestoneFilterId) return false;
       if (filterMode === 'assigned') return card.members.some((member) => member.id === currentMember.id);
       if (filterMode === 'due') return Boolean(card.dueAt);
       if (filterMode === 'overdue') return Boolean(card.dueAt && new Date(card.dueAt).getTime() < Date.now());
@@ -595,7 +605,7 @@ export default function Home() {
     return { ...column, cards: [...cards].sort((left, right) => cardSort === 'priority'
       ? (right.priority ?? 0) - (left.priority ?? 0)
       : activityTime(right) - activityTime(left)) };
-  }), [cardSort, columns, currentMember.id, filterMode, query]);
+  }), [cardSort, columns, currentMember.id, filterMode, milestoneFilterId, query]);
 
   const renderedColumns = useMemo(() => boardViewMode === 'freeform'
     ? visibleColumns.map((column) => ({ ...column, cards: column.cards.filter((card) => !freeformCardLayout[String(card.id)]) }))
@@ -798,24 +808,26 @@ export default function Home() {
   }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
-    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isMembersPopoverOpen && !sidebarPanel && !columnMenuId) return;
+    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !sidebarPanel && !columnMenuId) return;
     const closePopovers = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
       if (isBoardMenuOpen && !event.target.closest('.board-menu-control')) setBoardMenuOpen(false);
       if (isFilterOpen && !event.target.closest('.filter-control')) setFilterOpen(false);
       if (isBoardLabelsOpen && !event.target.closest('.board-labels-control')) { setBoardLabelsOpen(false); setEditingBoardLabel(null); }
+      if (isMilestonesOpen && !event.target.closest('.board-milestones-control')) setMilestonesOpen(false);
       if (isMembersPopoverOpen && !event.target.closest('.board-members-control')) setMembersPopoverOpen(false);
+      if (isCardMilestoneOpen && !event.target.closest('.card-milestone-control')) setCardMilestoneOpen(false);
       if (columnMenuId && !event.target.closest('.column-actions')) setColumnMenuId(null);
       if (sidebarPanel && !event.target.closest('.property-popover, .quick-action, .member-plus, .label-plus')) setSidebarPanel(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMembersPopoverOpen(false); setColumnMenuId(null); setSidebarPanel(null);
+      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setColumnMenuId(null); setSidebarPanel(null);
     };
     window.addEventListener('pointerdown', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
-  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isFilterOpen, isMembersPopoverOpen, sidebarPanel]);
+  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, sidebarPanel]);
 
   useEffect(() => {
     if (!cardContextMenu && !columnContextMenu && !freeformContextMenu) return;
@@ -889,6 +901,44 @@ export default function Home() {
         {!isPublicViewer && <form className="new-label-form board-label-create" onSubmit={createLabel}><input value={newLabelName} onChange={(event) => setNewLabelName(event.target.value)} maxLength={60} placeholder="Новая метка" aria-label="Название новой метки" /><input type="color" value={newLabelColor} onChange={(event) => setNewLabelColor(event.target.value)} aria-label="Цвет метки" /><button type="submit" disabled={!newLabelName.trim() || isSavingLabel}>{isSavingLabel ? 'Создаём…' : 'Создать'}</button></form>}
       </div>}
     </div>;
+  }
+  function createMilestone(event: FormEvent) {
+    event.preventDefault();
+    const name = milestoneNameDraft.trim();
+    if (!boardId || !name || isSavingMilestone) return;
+    if (persistence !== 'connected') { setMilestones((current) => [...current, { id: `local-milestone-${Date.now()}`, name, description: '', color: milestoneColorDraft }]); setMilestoneNameDraft(''); return; }
+    setSavingMilestone(true);
+    void fetch(`${API_URL}/v1/boards/${boardId}/milestones`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, color: milestoneColorDraft }) })
+      .then(async (response) => { if (!response.ok) throw new Error('milestone save failed'); return response.json() as Promise<Milestone>; })
+      .then((milestone) => { setMilestones((current) => [...current.filter((item) => item.id !== milestone.id), milestone].sort((left, right) => left.name.localeCompare(right.name, 'ru'))); setMilestoneNameDraft(''); showToast('Milestone создан'); })
+      .catch(() => showToast('Не удалось создать milestone'))
+      .finally(() => setSavingMilestone(false));
+  }
+  function deleteMilestone(milestone: Milestone) {
+    setMilestones((current) => current.filter((item) => item.id !== milestone.id));
+    if (milestoneFilterId === milestone.id) setMilestoneFilterId(null);
+    const clearFromCards = (card: Card) => card.milestone?.id === milestone.id ? { ...card, milestone: null } : card;
+    setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map(clearFromCards) })));
+    setSelected((current) => current?.milestone?.id === milestone.id ? { ...current, milestone: null } : current);
+    if (persistence === 'connected' && !milestone.id.startsWith('local-')) void fetch(`${API_URL}/v1/milestones/${milestone.id}`, { method: 'DELETE' }).then((response) => { if (!response.ok) throw new Error('milestone delete failed'); showToast('Milestone удалён'); }).catch(() => showToast('Не удалось удалить milestone'));
+  }
+  function replaceSelectedMilestone(milestone: Milestone | null) {
+    if (!selected) return;
+    updateSelectedCard({ milestone });
+    setCardMilestoneOpen(false);
+    if (persistence === 'connected' && typeof selected.id === 'string') void fetch(`${API_URL}/v1/cards/${selected.id}/milestone`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ milestone_id: milestone?.id ?? null }) })
+      .then(async (response) => { if (!response.ok) throw new Error('milestone assignment failed'); return response.json() as Promise<Milestone | null>; })
+      .then((saved) => updateSelectedCard({ milestone: saved }))
+      .catch(() => showToast('Не удалось сохранить milestone'));
+  }
+  function renderMilestonesControl() {
+    const usage = (milestoneId: string) => columns.reduce((count, column) => count + column.cards.filter((card) => card.milestone?.id === milestoneId).length, 0);
+    return <div className="board-milestones-control"><button className={`board-icon-button ${isMilestonesOpen || milestoneFilterId ? 'active-filter' : ''}`} type="button" title="Milestones" aria-label="Milestones" aria-expanded={isMilestonesOpen} onClick={() => setMilestonesOpen((current) => !current)}><BoardToolbarIcon type="milestones" /></button>{isMilestonesOpen && <div className="board-milestones-popover"><div className="popover-heading"><b>Milestones</b><button type="button" onClick={() => setMilestonesOpen(false)} aria-label="Закрыть">×</button></div><p className="board-labels-copy">Группы задач для релизов и крупных целей.</p><div className="milestone-list">{milestones.length ? milestones.map((milestone) => <article key={milestone.id}><button type="button" className={milestoneFilterId === milestone.id ? 'selected' : ''} onClick={() => setMilestoneFilterId((current) => current === milestone.id ? null : milestone.id)}><i style={{ backgroundColor: milestone.color }} /><span><b>{milestone.name}</b><small>{usage(milestone.id)} задач</small></span>{milestoneFilterId === milestone.id && <em>✓</em>}</button>{!isPublicViewer && <button type="button" className="text-action danger-text" onClick={() => deleteMilestone(milestone)}>Удалить</button>}</article>) : <p className="empty-comments">Milestones пока нет.</p>}</div>{milestoneFilterId && <button type="button" className="text-action milestone-show-all" onClick={() => setMilestoneFilterId(null)}>Показать все задачи</button>}{!isPublicViewer && <form className="new-label-form board-label-create" onSubmit={createMilestone}><input value={milestoneNameDraft} onChange={(event) => setMilestoneNameDraft(event.target.value)} maxLength={120} placeholder="Новый milestone" aria-label="Название milestone" /><input type="color" value={milestoneColorDraft} onChange={(event) => setMilestoneColorDraft(event.target.value)} aria-label="Цвет milestone" /><button type="submit" disabled={isSavingMilestone || !milestoneNameDraft.trim()}>{isSavingMilestone ? 'Создаём…' : 'Создать'}</button></form>}</div>}</div>;
+  }
+  function renderCardMilestoneControl() {
+    if (!selected) return null;
+    if (isPublicViewer) return selected.milestone ? <div className="card-milestone-control"><span className="quick-action"><i style={{ backgroundColor: selected.milestone.color }} />{selected.milestone.name}</span></div> : null;
+    return <div className="card-milestone-control"><button type="button" className={`quick-action ${isCardMilestoneOpen ? 'active' : ''}`} onClick={() => setCardMilestoneOpen((current) => !current)}><i style={{ backgroundColor: selected.milestone?.color ?? 'var(--line)' }} />{selected.milestone?.name ?? 'Milestone'}</button>{isCardMilestoneOpen && <div className="property-popover card-milestone-popover"><div className="popover-heading"><b>Milestone</b><button type="button" onClick={() => setCardMilestoneOpen(false)} aria-label="Закрыть">×</button></div><button type="button" className={!selected.milestone ? 'selected' : ''} onClick={() => replaceSelectedMilestone(null)}>Без milestone {!selected.milestone && <b>✓</b>}</button>{milestones.map((milestone) => <button key={milestone.id} type="button" className={selected.milestone?.id === milestone.id ? 'selected' : ''} onClick={() => replaceSelectedMilestone(milestone)}><i style={{ backgroundColor: milestone.color }} />{milestone.name}{selected.milestone?.id === milestone.id && <b>✓</b>}</button>)}</div>}</div>;
   }
   function renderChecklists() {
     return <section className="checklists checklist-panel">
@@ -2210,8 +2260,9 @@ export default function Home() {
   }
 
   function applyBoard(data: ApiBoard) {
-    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, members: card.assignees.map(memberFromApi) })) })));
+    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, milestone: card.milestone ?? null, members: card.assignees.map(memberFromApi) })) })));
     setBoardLabels(data.labels);
+    setMilestones(data.milestones ?? []);
     setWorkspaceMembers(data.members.map(memberFromApi));
     setWorkspaceId(data.workspace_id);
     setBoardTitle(data.title);
@@ -2488,6 +2539,7 @@ export default function Home() {
             {isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['due', 'С дедлайном'], ['overdue', 'Просроченные']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}<p className="filter-popover-section">Порядок в колонках</p>{([['manual', 'Как на доске'], ['priority', 'Сначала важные'], ['activity', 'Недавно обновлённые']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => setCardSort(mode)}>{label}{cardSort === mode && <b>✓</b>}</button>)}</div>}
           </div>
           {renderBoardLabelsControl()}
+          {renderMilestonesControl()}
           <button className="board-icon-button board-team-button" type="button" title="Команда проекта" aria-label="Команда проекта" onClick={openTeam}><BoardToolbarIcon type="team" /></button>
           <button className="board-icon-button board-archive-button" type="button" title="Архив задач" aria-label="Архив задач" onClick={openArchive}><BoardToolbarIcon type="archive" /></button>
           <div className="board-menu-control"><button className="secondary-button more" onClick={() => setBoardMenuOpen((current) => !current)} aria-expanded={isBoardMenuOpen}>•••</button>{isBoardMenuOpen && <div className="board-menu">{!isPublicViewer && <button onClick={() => { setBoardMenuOpen(false); openDiscordIntegration(); }}>⌁ Discord API</button>}<button onClick={exportCurrentBoard}>⇩ Экспорт JSON</button><button onClick={() => importFileRef.current?.click()}>⇧ Импорт Trello / Flowboard JSON</button><button className="danger-action" onClick={deleteCurrentBoard}>Удалить проект</button><input ref={importFileRef} type="file" accept="application/json,.json" onChange={importBoardFile} /><section className="visibility-control"><b>Доступ к доске</b><p>{boardVisibility === 'public' ? 'Public: любой аккаунт может только смотреть.' : 'Private: видят только участники проекта.'}</p><div><button type="button" className={boardVisibility === 'public' ? 'selected' : ''} onClick={() => changeBoardVisibility('public')}>Public · просмотр всем</button><button type="button" className={boardVisibility === 'private' ? 'selected' : ''} onClick={() => changeBoardVisibility('private')}>Private</button></div>{boardVisibility === 'public' && <button className="copy-public-link" type="button" onClick={copyPublicBoardLink}>Скопировать публичную ссылку</button>}</section><form onSubmit={saveBoardBackground}><label>Фон проекта по ссылке<input value={backgroundDraft} onChange={(event) => setBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" /></label><section className="background-display-control"><b>Отображение фона</b><div className="background-fit-options"><button type="button" className={boardBackgroundFit === 'cover' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('cover')}>Заполнить</button><button type="button" className={boardBackgroundFit === 'contain' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('contain')}>Целиком</button><button type="button" className={boardBackgroundFit === 'fill' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('fill')}>Растянуть</button></div><div className="background-position-options"><button type="button" className={boardBackgroundPosition === 'top' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('top')}>↑ Верх</button><button type="button" className={boardBackgroundPosition === 'center' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('center')}>⊙ Центр</button><button type="button" className={boardBackgroundPosition === 'bottom' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('bottom')}>↓ Низ</button></div><small>«Целиком» сохраняет изображение без обрезки, «Растянуть» подгоняет его под экран.</small></section><div><button type="submit" disabled={isSavingBackground}>{isSavingBackground ? 'Сохраняем…' : 'Сохранить фон'}</button><button type="button" onClick={() => { setBackgroundDraft(''); }}>Снять</button></div></form><input ref={boardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardBackground} /><button type="button" onClick={() => boardBackgroundFileRef.current?.click()} disabled={isUploadingBoardBackground}>{isUploadingBoardBackground ? 'Загружаем фон…' : '▧ Загрузить фон проекта'}</button></div>}</div></div>
@@ -2572,6 +2624,7 @@ export default function Home() {
           <div className="task-content">
             <div className={`card-detail-top ${selected.backgroundImageUrl ? 'has-card-background' : ''}`} style={selected.backgroundImageUrl ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
             <div className="card-property-area">
+              {renderCardMilestoneControl()}
               <div className="card-quick-actions"><button className="quick-action" onClick={openDiagram}>⌁ Схема</button><button className={`quick-action ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(false); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }}>🏷 Метки</button><button className={`quick-action ${sidebarPanel === 'due' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'due' ? null : 'due')}>◷ {selected.dueAt ? formatDue(selected.dueAt) : 'Дедлайн'}</button><button className={`quick-action ${sidebarPanel === 'background' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'background' ? null : 'background')}>▧ Фон</button><button className={`quick-action ${sidebarPanel === 'public-visibility' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'public-visibility' ? null : 'public-visibility')}>◉ Доступ</button></div>
               {sidebarPanel && sidebarPanel !== 'assignees' && <div className="property-popover quick-property-popover" role="dialog" aria-label="Настройки карточки">
                 {sidebarPanel === 'labels' && <><div className="popover-heading"><b>Метки</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="label-options">{boardLabels.map((label) => <button key={label.id} className={`label-option ${selected.labels.some((current) => current.id === label.id) ? 'selected' : ''}`} style={{ borderColor: label.color, backgroundColor: `${label.color}22` }} onClick={() => toggleSelectedLabel(label)}><i style={{ backgroundColor: label.color }} /><span>{label.name}</span>{selected.labels.some((current) => current.id === label.id) && <b>✓</b>}</button>)}</div>{!existingLabelsOnly && <form className="new-label-form" onSubmit={createLabel}><input value={newLabelName} onChange={(event) => setNewLabelName(event.target.value)} maxLength={60} placeholder="Новая метка" aria-label="Название новой метки" /><input type="color" value={newLabelColor} onChange={(event) => setNewLabelColor(event.target.value)} aria-label="Цвет метки" /><button type="submit" disabled={!newLabelName.trim() || isSavingLabel}>{isSavingLabel ? 'Создаём…' : 'Создать метку'}</button></form>}</>}

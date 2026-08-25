@@ -674,6 +674,31 @@ struct ReplaceCardLabelsRequest {
 }
 
 #[derive(Deserialize)]
+struct CreateMilestoneRequest {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateMilestoneRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReplaceCardMilestoneRequest {
+    #[serde(default)]
+    milestone_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
 struct AddExistingWorkspaceMemberRequest { user_id: Uuid }
 
 #[derive(Deserialize)]
@@ -837,6 +862,11 @@ struct BoardCardRow {
     comment_count: i64,
     attachment_count: i64,
     has_unread_mentions: bool,
+    milestone_id: Option<Uuid>,
+    milestone_name: Option<String>,
+    milestone_description: Option<String>,
+    milestone_color: Option<String>,
+    milestone_target_date: Option<String>,
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -844,6 +874,15 @@ struct LabelResponse {
     id: Uuid,
     name: String,
     color: String,
+}
+
+#[derive(Clone, Serialize, FromRow)]
+struct MilestoneResponse {
+    id: Uuid,
+    name: String,
+    description: String,
+    color: String,
+    target_date: Option<String>,
 }
 
 #[derive(FromRow)]
@@ -898,6 +937,7 @@ struct BoardCard {
     comment_count: i64,
     attachment_count: i64,
     has_unread_mentions: bool,
+    milestone: Option<MilestoneResponse>,
     labels: Vec<LabelResponse>,
     assignees: Vec<MemberResponse>,
 }
@@ -1041,6 +1081,7 @@ struct BoardDetail {
     visibility: String,
     can_edit: bool,
     labels: Vec<LabelResponse>,
+    milestones: Vec<MilestoneResponse>,
     members: Vec<MemberResponse>,
     lists: Vec<BoardList>,
 }
@@ -1141,7 +1182,9 @@ async fn main() {
         .route("/v1/boards/{board_id}/archived-cards", get(list_archived_cards))
         .route("/v1/boards/{board_id}/events", get(board_events))
         .route("/v1/boards/{board_id}/labels", post(create_label))
+        .route("/v1/boards/{board_id}/milestones", post(create_milestone))
         .route("/v1/labels/{label_id}", patch(update_label).delete(delete_label))
+        .route("/v1/milestones/{milestone_id}", patch(update_milestone).delete(delete_milestone))
         .route("/v1/boards/{board_id}/lists", post(create_list))
         .route("/v1/lists/{list_id}", patch(update_list).delete(delete_list))
         .route("/v1/lists/{list_id}/move", post(move_list))
@@ -1151,6 +1194,7 @@ async fn main() {
         .route("/v1/cards/{card_id}", axum::routing::patch(update_card).delete(archive_card))
         .route("/v1/cards/{card_id}/due-date", patch(update_due_date).delete(clear_due_date))
         .route("/v1/cards/{card_id}/labels", put(replace_card_labels))
+        .route("/v1/cards/{card_id}/milestone", put(replace_card_milestone))
         .route("/v1/cards/{card_id}/assignees", put(replace_card_assignees))
         .route("/v1/cards/{card_id}/cover", put(update_card_cover))
         .route("/v1/cards/{card_id}/background", put(update_card_background))
@@ -2127,7 +2171,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -2154,6 +2198,11 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
+    let milestones = sqlx::query_as::<_, MilestoneResponse>("SELECT id, name, description, color, target_date::text AS target_date FROM milestones WHERE board_id = $1 ORDER BY target_date NULLS LAST, name")
+        .bind(board_id)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::internal)?;
     let cards: Vec<BoardCard> = cards.into_iter().map(|card| BoardCard {
         id: card.id,
         list_id: card.list_id,
@@ -2173,6 +2222,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         comment_count: card.comment_count,
         attachment_count: card.attachment_count,
         has_unread_mentions: card.has_unread_mentions,
+        milestone: card.milestone_id.map(|id| MilestoneResponse { id, name: card.milestone_name.unwrap_or_default(), description: card.milestone_description.unwrap_or_default(), color: card.milestone_color.unwrap_or_else(|| "#6ea8fe".to_owned()), target_date: card.milestone_target_date }),
         labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone() }).collect(),
         assignees: card_assignees.iter().filter(|member| member.card_id == card.id).map(|member| MemberResponse { id: member.id, display_name: member.display_name.clone(), avatar_url: member.avatar_url.clone() }).collect(),
     }).collect();
@@ -2202,7 +2252,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
             .bind(board.id).bind(board.workspace_id).bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?,
         None => false,
     };
-    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, can_edit, labels, members, lists }))
+    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, can_edit, labels, milestones, members, lists }))
 }
 
 async fn ensure_board_layout_access(pool: &PgPool, board_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
@@ -2789,6 +2839,47 @@ async fn delete_label(State(state): State<AppState>, current: CurrentUser, Path(
     ensure_board_permission(pool, board_id, current.id, "delete_labels").await?;
     let deleted = sqlx::query("DELETE FROM labels WHERE id = $1").bind(label_id).execute(pool).await.map_err(ApiError::internal)?;
     if deleted.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "label_not_found", "Label was not found.".to_owned())); }
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn create_milestone(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateMilestoneRequest>) -> ApiResult<MilestoneResponse> {
+    ensure_board_permission(database(&state)?, board_id, current.id, "create_labels").await?;
+    let name = valid_text(&request.name, "name", 120)?;
+    let description = request.description.trim().chars().take(2_000).collect::<String>();
+    let color = valid_label_color(request.color.as_deref().unwrap_or("#6ea8fe"))?;
+    let milestone = sqlx::query_as::<_, MilestoneResponse>(
+        "INSERT INTO milestones (id, board_id, name, description, color) SELECT $1, b.id, $2, $3, $4 FROM boards b WHERE b.id = $5 AND b.archived_at IS NULL ON CONFLICT (board_id, name) DO UPDATE SET description = EXCLUDED.description, color = EXCLUDED.color, updated_at = now() RETURNING id, name, description, color, target_date::text AS target_date",
+    )
+    .bind(Uuid::new_v4()).bind(name).bind(description).bind(color).bind(board_id)
+    .fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
+    let _ = state.events.send(());
+    Ok(Json(milestone))
+}
+
+async fn update_milestone(State(state): State<AppState>, current: CurrentUser, Path(milestone_id): Path<Uuid>, Json(request): Json<UpdateMilestoneRequest>) -> ApiResult<MilestoneResponse> {
+    let pool = database(&state)?;
+    let current_milestone = sqlx::query_as::<_, (Uuid, String, String, String)>("SELECT board_id, name, description, color FROM milestones WHERE id = $1")
+        .bind(milestone_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "milestone_not_found", "Milestone was not found.".to_owned()))?;
+    ensure_board_permission(pool, current_milestone.0, current.id, "create_labels").await?;
+    let name = request.name.as_deref().map(|value| valid_text(value, "name", 120).map(ToOwned::to_owned)).transpose()?.unwrap_or(current_milestone.1);
+    let description = request.description.unwrap_or(current_milestone.2).trim().chars().take(2_000).collect::<String>();
+    let color = request.color.as_deref().map(valid_label_color).transpose()?.unwrap_or(current_milestone.3);
+    let milestone = sqlx::query_as::<_, MilestoneResponse>("UPDATE milestones SET name = $1, description = $2, color = $3, updated_at = now() WHERE id = $4 RETURNING id, name, description, color, target_date::text AS target_date")
+        .bind(name).bind(description).bind(color).bind(milestone_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    let _ = state.events.send(());
+    Ok(Json(milestone))
+}
+
+async fn delete_milestone(State(state): State<AppState>, current: CurrentUser, Path(milestone_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    let board_id = sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM milestones WHERE id = $1")
+        .bind(milestone_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "milestone_not_found", "Milestone was not found.".to_owned()))?;
+    ensure_board_permission(pool, board_id, current.id, "delete_labels").await?;
+    sqlx::query("DELETE FROM milestones WHERE id = $1").bind(milestone_id).execute(pool).await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
@@ -4255,6 +4346,26 @@ async fn replace_card_labels(State(state): State<AppState>, current: CurrentUser
     transaction.commit().await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(Json(labels))
+}
+
+async fn replace_card_milestone(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<ReplaceCardMilestoneRequest>) -> ApiResult<Option<MilestoneResponse>> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let board_id = sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM cards WHERE id = $1 AND archived_at IS NULL FOR UPDATE")
+        .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
+    let milestone = match request.milestone_id {
+        Some(milestone_id) => Some(sqlx::query_as::<_, MilestoneResponse>("SELECT id, name, description, color, target_date::text AS target_date FROM milestones WHERE id = $1 AND board_id = $2")
+            .bind(milestone_id).bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::bad_request("Milestone must belong to this board."))?),
+        None => None,
+    };
+    let updated = sqlx::query("UPDATE cards SET milestone_id = $1, updated_at = now() WHERE id = $2 AND archived_at IS NULL")
+        .bind(request.milestone_id).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
+    if updated.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
+    record_card_activity(pool, card_id, current.id, if milestone.is_some() { "Назначен milestone" } else { "Milestone снят" }, milestone.as_ref().map(|value| value.name.as_str()).unwrap_or("" )).await;
+    let _ = state.events.send(());
+    Ok(Json(milestone))
 }
 
 async fn replace_card_assignees(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<ReplaceCardAssigneesRequest>) -> ApiResult<Vec<MemberResponse>> {
