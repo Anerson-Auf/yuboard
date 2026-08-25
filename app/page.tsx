@@ -500,7 +500,6 @@ export default function Home() {
   const isDrawingRef = useRef(false);
   const diagramStartRef = useRef<DiagramPoint | null>(null);
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
-  const cardPropertiesRef = useRef<HTMLDivElement | null>(null);
   const selectedCardId = selected?.id;
   const isPublicViewer = authState === 'public';
   const dueDays = useMemo(() => calendarDays(dueCursor), [dueCursor]);
@@ -677,20 +676,23 @@ export default function Home() {
   }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
-    if (!sidebarPanel) return;
-    const closePopover = (event: MouseEvent) => {
-      if (!cardPropertiesRef.current?.contains(event.target as Node)) setSidebarPanel(null);
+    if (!isBoardMenuOpen && !isFilterOpen && !isSortOpen && !sidebarPanel && !columnMenuId) return;
+    const closePopovers = (event: PointerEvent) => {
+      if (!(event.target instanceof Element)) return;
+      if (isBoardMenuOpen && !event.target.closest('.board-menu-control')) setBoardMenuOpen(false);
+      if (isFilterOpen && !event.target.closest('.filter-control')) setFilterOpen(false);
+      if (isSortOpen && !event.target.closest('.board-sort-control')) setSortOpen(false);
+      if (columnMenuId && !event.target.closest('.column-actions')) setColumnMenuId(null);
+      if (sidebarPanel && !event.target.closest('.property-popover, .quick-action, .member-plus, .label-plus')) setSidebarPanel(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSidebarPanel(null);
+      if (event.key !== 'Escape') return;
+      setBoardMenuOpen(false); setFilterOpen(false); setSortOpen(false); setColumnMenuId(null); setSidebarPanel(null);
     };
-    window.addEventListener('mousedown', closePopover);
+    window.addEventListener('pointerdown', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
-    return () => {
-      window.removeEventListener('mousedown', closePopover);
-      window.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [sidebarPanel]);
+    return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
+  }, [columnMenuId, isBoardMenuOpen, isFilterOpen, isSortOpen, sidebarPanel]);
 
   useEffect(() => {
     if (!cardContextMenu && !columnContextMenu) return;
@@ -1960,7 +1962,7 @@ export default function Home() {
         <div className="task-layout">
           <div className="task-content">
             <div className={`card-detail-top ${selected.backgroundImageUrl ? 'has-card-background' : ''}`} style={selected.backgroundImageUrl ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
-            <div className="card-property-area" ref={cardPropertiesRef}>
+            <div className="card-property-area">
               <div className="card-quick-actions"><button className="quick-action" onClick={openDiagram}>⌁ Схема</button><button className={`quick-action ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(false); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }}>🏷 Метки</button><button className={`quick-action ${sidebarPanel === 'due' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'due' ? null : 'due')}>◷ {selected.dueAt ? formatDue(selected.dueAt) : 'Дедлайн'}</button><button className={`quick-action ${sidebarPanel === 'background' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'background' ? null : 'background')}>▧ Фон</button><button className={`quick-action ${sidebarPanel === 'public-visibility' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'public-visibility' ? null : 'public-visibility')}>◉ Доступ</button></div>
               {sidebarPanel && sidebarPanel !== 'assignees' && <div className="property-popover quick-property-popover" role="dialog" aria-label="Настройки карточки">
                 {sidebarPanel === 'labels' && <><div className="popover-heading"><b>Метки</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="label-options">{boardLabels.map((label) => <button key={label.id} className={`label-option ${selected.labels.some((current) => current.id === label.id) ? 'selected' : ''}`} style={{ borderColor: label.color, backgroundColor: `${label.color}22` }} onClick={() => toggleSelectedLabel(label)}><i style={{ backgroundColor: label.color }} /><span>{label.name}</span>{selected.labels.some((current) => current.id === label.id) && <b>✓</b>}</button>)}</div>{!existingLabelsOnly && <form className="new-label-form" onSubmit={createLabel}><input value={newLabelName} onChange={(event) => setNewLabelName(event.target.value)} maxLength={60} placeholder="Новая метка" aria-label="Название новой метки" /><input type="color" value={newLabelColor} onChange={(event) => setNewLabelColor(event.target.value)} aria-label="Цвет метки" /><button type="submit" disabled={!newLabelName.trim() || isSavingLabel}>{isSavingLabel ? 'Создаём…' : 'Создать метку'}</button></form>}</>}
