@@ -81,6 +81,14 @@ function assetUrl(url: string | null | undefined) {
   return /^https?:\/\//i.test(url) ? url : `${API_URL}${url}`;
 }
 
+function homeGreetingForLocalTime(date = new Date()) {
+  const hour = date.getHours();
+  if (hour >= 5 && hour < 12) return 'Доброе утро';
+  if (hour >= 12 && hour < 18) return 'Добрый день';
+  if (hour >= 18 && hour < 23) return 'Добрый вечер';
+  return 'Рад видеть вас в столь поздний час';
+}
+
 function freeformLiveSocketUrl(boardId: string) {
   const base = API_URL || window.location.origin;
   const url = new URL(`/v1/boards/${boardId}/freeform/live/ws`, base);
@@ -393,6 +401,7 @@ export default function Home() {
   const [columns, setColumns] = useState(initialColumns);
   const [view, setView] = useState<View>('home');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [homeGreeting, setHomeGreeting] = useState('Добрый день');
   const [isComposerOpen, setComposerOpen] = useState<EntityId | null>(null);
   const [draft, setDraft] = useState('');
   const [selected, setSelected] = useState<Card | null>(null);
@@ -648,6 +657,13 @@ export default function Home() {
       height: Math.max(3_200, ...positions.map((position) => position.y + 860), ...cardPositions.map((position) => position.y + 260), ...inkPoints.map((point) => point.y + 80)),
     };
   }, [freeformDetachedCards, freeformDrawing, freeformLayout, renderedColumns]);
+
+  useEffect(() => {
+    const syncGreeting = () => setHomeGreeting(homeGreetingForLocalTime());
+    syncGreeting();
+    const timer = window.setInterval(syncGreeting, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     async function connectToApi() {
@@ -2679,7 +2695,7 @@ export default function Home() {
     {isSessionsOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setSessionsOpen(false)}><section className="archive-modal team-modal security-modal" role="dialog" aria-modal="true" aria-label="Сессии" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSessionsOpen(false)} aria-label="Закрыть">×</button><p className="eyebrow">БЕЗОПАСНОСТЬ</p><h2>Активные сессии</h2><button className="secondary-button session-revoke-all" onClick={revokeOtherSessions}>Выйти на других устройствах</button><div className="team-list">{sessions.map((session) => <article key={session.id}><div><b>{session.current ? 'Это устройство' : 'Активная сессия'}</b><small>Последняя активность: {new Date(session.last_seen_at).toLocaleString('ru-RU')}</small></div>{!session.current && <button className="danger-action" onClick={() => revokeSession(session)}>Отозвать</button>}</article>)}</div></section></div>}
 
     {view === 'home' ? <section className="home-screen workspace-cards-screen">
-      <div className="welcome"><p className="eyebrow">МОЯ РАБОТА</p><h1>{workspaces.length ? `Добрый вечер, ${currentMember.name.split(' ')[0]}.` : 'Начните с пространства.'}</h1><p>{workspaces.length ? 'Проекты собраны внутри пространств — выберите нужную карту и продолжайте работу.' : 'Аккаунт существует отдельно от рабочих пространств. Создайте первое пространство или присоединитесь к уже созданному.'}</p>{workspaceId && boards.length > 0 && <button className="create-button" onClick={openBoard}>Открыть последнюю доску <span>→</span></button>}</div>
+      <div className="welcome"><p className="eyebrow">МОЯ РАБОТА</p><h1>{workspaces.length ? `${homeGreeting}, ${currentMember.name.split(' ')[0]}.` : 'Начните с пространства.'}</h1><p>{workspaces.length ? 'Проекты собраны внутри пространств — выберите нужную карту и продолжайте работу.' : 'Аккаунт существует отдельно от рабочих пространств. Создайте первое пространство или присоединитесь к уже созданному.'}</p>{workspaceId && boards.length > 0 && <button className="create-button" onClick={openBoard}>Открыть последнюю доску <span>→</span></button>}</div>
       <section className="workspace-cards-section" aria-label="Ваши пространства"><div className="section-title"><div><p className="eyebrow">ПРОСТРАНСТВА</p><h2>Ваши пространства</h2></div><button className="subtle-button" onClick={openWorkspaceComposer}>＋ Создать пространство</button></div>{workspaces.length ? <div className="workspace-cards">{workspaces.map((workspace) => { const isActive = workspace.id === workspaceId; const cardBoards = workspaceBoards[workspace.id] ?? []; return <article key={workspace.id} className={`workspace-card ${isActive ? 'active' : ''} ${workspace.background_image_url ? 'has-background' : ''}`} style={workspace.background_image_url ? { backgroundImage: `linear-gradient(105deg, rgb(15 19 25 / 70%), rgb(15 19 25 / 46%)), url("${assetUrl(workspace.background_image_url)}")` } : undefined}><header><button type="button" className="workspace-card-title" onClick={() => { if (!isActive) void selectWorkspace(workspace); }}><span className="workspace-option-icon">⌁</span><span><b>{workspace.name}</b><small>{isActive ? 'Открыто сейчас' : 'Открыть пространство'}</small></span></button><span className="workspace-card-actions">{workspace.can_manage && <button type="button" className="subtle-button" title="Фон карты пространства" onClick={() => openWorkspaceBackgroundEditor(workspace)}>▧ Фон</button>}{isActive && <button type="button" className="subtle-button" onClick={() => setNewBoardComposer((current) => !current)}>＋ Проект</button>}</span></header>{workspaceBackgroundEditorId === workspace.id && <form className="workspace-card-background-form" onSubmit={saveWorkspaceBackground}><input autoFocus value={workspaceBackgroundDraft} onChange={(event) => setWorkspaceBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" aria-label="Фон пространства по ссылке" /><button type="submit" disabled={isSavingWorkspaceBackground}>{isSavingWorkspaceBackground ? 'Сохраняем…' : 'Сохранить'}</button><button type="button" onClick={() => { setWorkspaceBackgroundDraft(''); }}>Снять</button><button type="button" onClick={() => setWorkspaceBackgroundEditorId(null)}>×</button></form>}{isActive && isNewBoardComposer && <form className="new-board-form workspace-card-new-board" onSubmit={createBoard}><input autoFocus value={newBoardTitle} onChange={(event) => setNewBoardTitle(event.target.value)} maxLength={200} placeholder="Название проекта" /><button className="create-button" type="submit" disabled={!newBoardTitle.trim() || isCreatingBoard}>{isCreatingBoard ? 'Создаём…' : 'Создать'}</button></form>}<div className="workspace-card-projects">{cardBoards.length ? cardBoards.map((board) => <button className="workspace-card-project" key={board.id} onClick={() => void selectBoard(board.id)}><span>⌁</span><b>{board.title}</b><i>→</i></button>) : <p>Проектов пока нет.</p>}</div>{workspace.can_manage && <button type="button" className="workspace-card-delete" onClick={() => deleteOwnedWorkspace(workspace)}>Удалить пространство</button>}</article>; })}</div> : <div className="empty-board-state"><b>Пространств пока нет.</b><span>Создайте первое пространство, когда будете готовы начать работу.</span></div>}</section>
     </section> : <>
       <section className="board-header">
