@@ -478,6 +478,7 @@ export default function Home() {
   const didDragRef = useRef(false);
   const dragScrollFrameRef = useRef<number | null>(null);
   const previousBackgroundDraftRef = useRef('');
+  const boardBackgroundDisplayRef = useRef<{ fit: BoardBackgroundFit; position: BoardBackgroundPosition }>({ fit: 'cover', position: 'center' });
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1 } | null>(null);
   const boardRef = useRef<HTMLElement | null>(null);
   const boardDragScrollFrameRef = useRef<number | null>(null);
@@ -701,6 +702,17 @@ export default function Home() {
     previousBackgroundDraftRef.current = backgroundDraft;
     if (previous.trim() && !backgroundDraft.trim() && boardBackgroundUrl) clearBoardBackground();
   }, [backgroundDraft, boardBackgroundUrl]);
+
+  useEffect(() => {
+    const previous = boardBackgroundDisplayRef.current;
+    if (!boardId || (previous.fit === boardBackgroundFit && previous.position === boardBackgroundPosition)) return;
+    const next = { fit: boardBackgroundFit, position: boardBackgroundPosition };
+    boardBackgroundDisplayRef.current = next;
+    const background_image_url = backgroundDraft.trim() || boardBackgroundUrl?.replace(/\?v=[^&]+$/, '') || null;
+    void fetch(`${API_URL}/v1/boards/${boardId}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url, background_fit: next.fit, background_position: next.position }) })
+      .then((response) => { if (!response.ok) throw new Error('background display save failed'); })
+      .catch(() => { boardBackgroundDisplayRef.current = previous; setBoardBackgroundFit(previous.fit); setBoardBackgroundPosition(previous.position); showToast('Не удалось сохранить отображение фона'); });
+  }, [backgroundDraft, boardBackgroundFit, boardBackgroundPosition, boardBackgroundUrl, boardId]);
 
   function showToast(message: string) { setToast(message); window.setTimeout(() => setToast(''), 2600); }
   function persistCardDraft(card: Card, updated: { title: string; description: string }) {
@@ -1586,6 +1598,7 @@ export default function Home() {
     setWorkspaceId(data.workspace_id);
     setBoardTitle(data.title);
     setBoardBackgroundUrl(data.background_image_url);
+    boardBackgroundDisplayRef.current = { fit: data.background_fit ?? 'cover', position: data.background_position ?? 'center' };
     setBoardBackgroundFit(data.background_fit ?? 'cover');
     setBoardBackgroundPosition(data.background_position ?? 'center');
     setBoardVisibility(data.visibility === 'public' ? 'public' : 'private');
