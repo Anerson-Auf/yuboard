@@ -405,7 +405,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-milestone-control { position: relative; z-index: 5; margin: 0 0 8px; }.card-milestone-control > .quick-action { display: inline-flex; align-items: center; gap: 6px; }.card-milestone-popover { top: calc(100% + 7px); left: 0; right: auto; display: grid; width: min(290px, calc(100vw - 48px)); gap: 4px; padding: 9px; }.card-milestone-popover .popover-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 3px; }.card-milestone-popover .popover-heading button { border: 0; background: transparent; color: var(--muted); font-size: 18px; }.card-milestone-popover > button { display: flex; align-items: center; gap: 7px; min-height: 33px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left; font-size: 12px; font-weight: 700; }.card-milestone-popover > button:hover, .card-milestone-popover > button.selected { background: var(--surface-soft); color: var(--primary); }.card-milestone-popover > button b { margin-left: auto; color: var(--primary); }
 .filter-popover, .board-labels-popover { z-index: 50; }
 .board-menu { z-index: 60; }
-.topbar { z-index: 70; }
+.topbar, .default-board-background > .topbar, .has-board-background > .topbar { z-index: 70; }
 @media (max-width: 760px) { .board-tools { justify-content: flex-start; } }
 
 /* Saved card priority: a compact five-bar signal, from calm to critical. */
