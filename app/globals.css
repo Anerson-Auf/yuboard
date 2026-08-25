@@ -366,10 +366,9 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 /* Header popovers must outrank the sort control that follows in the DOM. */
 .board-header { position: relative; z-index: 20; }.default-board-background > .board-header { z-index: 20; }
 
-/* Keep the new-card composer inside a constrained column; only its card list scrolls. */
-.column { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
-.column-head, .composer, .add-task { flex: 0 0 auto; }
-.card-list { min-height: 0; max-height: none; flex: 1 1 auto; }
+/* Keep the natural card sizing. When the new-card form is open, reserve room
+   for it inside the column by shortening only the scrollable list. */
+.card-list:has(+ .composer) { max-height: calc(100vh - 400px); }
 
 /* A diagram is opened from a card modal, so it must sit above that modal. */
 .diagram-backdrop { z-index: 140; }
