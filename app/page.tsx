@@ -1950,9 +1950,9 @@ export default function Home() {
     const params = new URLSearchParams({ page: String(page), per_page: '40' });
     if (userId) params.set('user_id', userId);
     void fetch(`${API_URL}/v1/boards/${boardId}/activity?${params}`)
-      .then(async (response) => { if (!response.ok) throw new Error('board activity load failed'); return response.json() as Promise<BoardActivityPage>; })
+      .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось загрузить активность проекта'); return response.json() as Promise<BoardActivityPage>; })
       .then(setBoardActivity)
-      .catch(() => { setBoardActivityOpen(false); showToast('Не удалось загрузить активность проекта'); })
+      .catch((error) => { setBoardActivityOpen(false); showToast(error instanceof Error ? error.message : 'Не удалось загрузить активность проекта'); })
       .finally(() => setBoardActivityLoading(false));
   }
   function openBoardActivity() {
