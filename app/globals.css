@@ -212,6 +212,13 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .card-meta > span { display: inline-flex; align-items: center; gap: 3px; }
 .card-meta-icon { display: block; width: 16px; height: 16px; flex: 0 0 16px; }
 
+/* Descriptions render Markdown by default and become a plain editor only on demand. */
+.markdown-editable-description { min-height: 28px; padding: 3px 0; color: var(--text); cursor: text; }
+.markdown-editable-description .markdown-description { font-size: 13px; line-height: 1.6; }
+.markdown-editable-description .markdown-description > :first-child { margin-top: 0; }
+.markdown-editable-description .markdown-description > :last-child { margin-bottom: 0; }
+.markdown-editable-description .description-empty { margin: 0; color: var(--faint); }
+
 /* Leave a deliberate gutter between cards and a column's vertical scrollbar. */
 .card-list { padding-right: 10px; }
 
