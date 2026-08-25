@@ -389,6 +389,21 @@ struct BoardBackgroundUploadResponse {
     url: String,
 }
 
+#[derive(Clone, Serialize, FromRow)]
+struct BoardStickerRow {
+    id: Uuid,
+    name: String,
+    media_type: String,
+}
+
+#[derive(Clone, Serialize)]
+struct BoardStickerResponse {
+    id: Uuid,
+    name: String,
+    media_type: String,
+    url: String,
+}
+
 #[derive(Deserialize)]
 struct UpdateBoardVisibilityRequest {
     visibility: String,
@@ -1199,6 +1214,7 @@ struct BoardDetail {
     can_admin: bool,
     labels: Vec<LabelResponse>,
     milestones: Vec<MilestoneResponse>,
+    stickers: Vec<BoardStickerResponse>,
     members: Vec<MemberResponse>,
     lists: Vec<BoardList>,
 }
@@ -1297,6 +1313,9 @@ async fn main() {
         .route("/v1/boards/{board_id}/freeform/drawing", get(get_board_freeform_drawing).put(replace_board_freeform_drawing))
         .route("/v1/boards/{board_id}/background", put(update_board_background))
         .route("/v1/boards/{board_id}/background/file", get(download_board_background).post(upload_board_background))
+        .route("/v1/boards/{board_id}/stickers", get(list_board_stickers).post(upload_board_sticker))
+        .route("/v1/boards/{board_id}/stickers/{sticker_id}", axum::routing::delete(delete_board_sticker))
+        .route("/v1/boards/{board_id}/stickers/{sticker_id}/content", get(download_board_sticker))
         .route("/v1/boards/{board_id}/visibility", put(update_board_visibility))
         .route("/v1/boards/{board_id}/integrations/discord", get(list_discord_integrations).post(create_discord_integration))
         .route("/v1/boards/{board_id}/integrations/discord/{integration_id}", axum::routing::delete(revoke_discord_integration))
@@ -2055,7 +2074,7 @@ async fn archive_workspace(State(state): State<AppState>, current: CurrentUser, 
 async fn delete_workspace(State(state): State<AppState>, current: CurrentUser, Path(workspace_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_workspace_owner(pool, workspace_id, current.id).await?;
-    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 UNION ALL SELECT wb.object_key FROM workspace_backgrounds wb WHERE wb.workspace_id = $1")
+    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 UNION ALL SELECT bs.object_key FROM board_stickers bs JOIN boards b ON b.id = bs.board_id WHERE b.workspace_id = $1 UNION ALL SELECT wb.object_key FROM workspace_backgrounds wb WHERE wb.workspace_id = $1")
         .bind(workspace_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let deleted = sqlx::query("DELETE FROM workspaces WHERE id = $1").bind(workspace_id).execute(pool).await.map_err(ApiError::internal)?;
     if deleted.rows_affected() == 0 { return Err(ApiError::bad_request("Workspace is unavailable.")); }
@@ -2583,6 +2602,14 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
+    let stickers = sqlx::query_as::<_, BoardStickerRow>("SELECT id, name, media_type FROM board_stickers WHERE board_id = $1 ORDER BY created_at, id")
+        .bind(board_id)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(|sticker| board_sticker_response(board.id, sticker))
+        .collect();
     let cards: Vec<BoardCard> = cards.into_iter().map(|card| BoardCard {
         id: card.id,
         list_id: card.list_id,
@@ -2640,7 +2667,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
             .bind(board.workspace_id).bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?,
         None => false,
     };
-    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, can_edit, can_admin, labels, milestones, members, lists }))
+    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, can_edit, can_admin, labels, milestones, stickers, members, lists }))
 }
 
 async fn ensure_board_layout_access(pool: &PgPool, board_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
@@ -2971,7 +2998,7 @@ async fn update_board(State(state): State<AppState>, current: CurrentUser, Path(
 async fn delete_board(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_board_full_access(pool, board_id, current.id).await?;
-    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id WHERE c.board_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id WHERE c.board_id = $1")
+    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id WHERE c.board_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id WHERE c.board_id = $1 UNION ALL SELECT object_key FROM board_stickers WHERE board_id = $1")
         .bind(board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let result = sqlx::query("DELETE FROM boards WHERE id = $1 AND archived_at IS NULL")
         .bind(board_id).execute(pool).await.map_err(ApiError::internal)?;
@@ -3050,6 +3077,101 @@ async fn download_board_background(State(state): State<AppState>, current: Viewe
         else { tracing::error!(?error, "board background read failed"); ApiError::storage() }
     })?;
     Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"))], bytes).into_response())
+}
+
+fn board_sticker_response(board_id: Uuid, sticker: BoardStickerRow) -> BoardStickerResponse {
+    BoardStickerResponse {
+        id: sticker.id,
+        name: sticker.name,
+        media_type: sticker.media_type,
+        url: format!("/v1/boards/{board_id}/stickers/{}/content", sticker.id),
+    }
+}
+
+async fn ensure_board_sticker_read_access(pool: &PgPool, board_id: Uuid, actor_id: Option<Uuid>) -> Result<(), ApiError> {
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM boards b LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND (b.visibility = 'public' OR m.user_id IS NOT NULL OR EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))))",
+    )
+    .bind(board_id)
+    .bind(actor_id)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    if allowed { Ok(()) } else { Err(ApiError(StatusCode::NOT_FOUND, "board_not_found", "Project was not found.".to_owned())) }
+}
+
+async fn list_board_stickers(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>) -> ApiResult<Vec<BoardStickerResponse>> {
+    let pool = database(&state)?;
+    ensure_board_sticker_read_access(pool, board_id, current.0.map(|user| user.id)).await?;
+    let stickers = sqlx::query_as::<_, BoardStickerRow>("SELECT id, name, media_type FROM board_stickers WHERE board_id = $1 ORDER BY created_at, id")
+        .bind(board_id)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(|sticker| board_sticker_response(board_id, sticker))
+        .collect();
+    Ok(Json(stickers))
+}
+
+async fn upload_board_sticker(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, mut multipart: Multipart) -> ApiResult<BoardStickerResponse> {
+    let pool = database(&state)?;
+    ensure_board_full_access(pool, board_id, current.id).await?;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM board_stickers WHERE board_id = $1")
+        .bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if count >= 100 { return Err(ApiError::bad_request("A board can contain at most 100 custom stickers.")); }
+    let field = multipart.next_field().await.map_err(|_| ApiError::bad_request("Sticker upload form is invalid."))?
+        .ok_or_else(|| ApiError::bad_request("Sticker image file is required."))?;
+    if field.name() != Some("file") { return Err(ApiError::bad_request("Sticker image field must be named file.")); }
+    let original_name = field.file_name().unwrap_or("sticker").replace(['/', '\\'], "_");
+    let media_type = field.content_type().map(ToString::to_string).unwrap_or_default();
+    if !matches!(media_type.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp") { return Err(ApiError::bad_request("Sticker must be a JPEG, PNG, GIF, or WebP image.")); }
+    let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Sticker image could not be read."))?;
+    if bytes.is_empty() || bytes.len() > 5 * 1024 * 1024 { return Err(ApiError::bad_request("Sticker must be between 1 byte and 5 MiB.")); }
+    let sticker_id = Uuid::new_v4();
+    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Sticker image type is unsupported."))?;
+    let object_key = format!("stickers/{sticker_id}.{extension}");
+    let path = state.upload_dir.join(&object_key);
+    if let Some(parent) = path.parent() { tokio::fs::create_dir_all(parent).await.map_err(|_| ApiError::storage())?; }
+    tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "board sticker write failed"); ApiError::storage() })?;
+    let name = original_name.rsplit_once('.').map(|(name, _)| name).unwrap_or(&original_name).trim();
+    let name = if name.is_empty() { "Sticker" } else { name };
+    let sticker = BoardStickerRow { id: sticker_id, name: valid_text(name, "sticker name", 80)?.to_owned(), media_type: media_type.clone() };
+    if let Err(error) = sqlx::query("INSERT INTO board_stickers (id, board_id, name, object_key, media_type, byte_size, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)")
+        .bind(sticker.id).bind(board_id).bind(&sticker.name).bind(&object_key).bind(&sticker.media_type).bind(bytes.len() as i64).bind(current.id)
+        .execute(pool).await {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err(ApiError::internal(error));
+    }
+    let _ = state.events.send(());
+    Ok(Json(board_sticker_response(board_id, sticker)))
+}
+
+async fn delete_board_sticker(State(state): State<AppState>, current: CurrentUser, Path((board_id, sticker_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_board_full_access(pool, board_id, current.id).await?;
+    let reaction_key = format!("sticker:{sticker_id}");
+    sqlx::query("DELETE FROM comment_reactions r USING comments c, cards card WHERE r.comment_id = c.id AND c.card_id = card.id AND card.board_id = $1 AND r.emoji = $2")
+        .bind(board_id).bind(&reaction_key).execute(pool).await.map_err(ApiError::internal)?;
+    let object_key = sqlx::query_scalar::<_, String>("DELETE FROM board_stickers WHERE id = $1 AND board_id = $2 RETURNING object_key")
+        .bind(sticker_id).bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "sticker_not_found", "Sticker was not found.".to_owned()))?;
+    let _ = tokio::fs::remove_file(state.upload_dir.join(object_key)).await;
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn download_board_sticker(State(state): State<AppState>, current: Viewer, Path((board_id, sticker_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
+    let pool = database(&state)?;
+    ensure_board_sticker_read_access(pool, board_id, current.0.map(|user| user.id)).await?;
+    let sticker = sqlx::query_as::<_, (String, String)>("SELECT object_key, media_type FROM board_stickers WHERE id = $1 AND board_id = $2")
+        .bind(sticker_id).bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "sticker_not_found", "Sticker was not found.".to_owned()))?;
+    let bytes = tokio::fs::read(state.upload_dir.join(sticker.0)).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "sticker_not_found", "Sticker file was not found.".to_owned()) }
+        else { tracing::error!(?error, "board sticker read failed"); ApiError::storage() }
+    })?;
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&sticker.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
 }
 
 async fn update_board_visibility(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardVisibilityRequest>) -> Result<StatusCode, ApiError> {
@@ -4438,12 +4560,20 @@ async fn update_comment(State(state): State<AppState>, current: CurrentUser, Pat
 
 async fn toggle_comment_reaction(State(state): State<AppState>, current: CurrentUser, Path(comment_id): Path<Uuid>, Json(request): Json<ToggleCommentReactionRequest>) -> ApiResult<Vec<CommentReactionResponse>> {
     let emoji = request.emoji.trim();
-    if emoji.is_empty() || emoji.chars().count() > 16 { return Err(ApiError::bad_request("Reaction emoji must be between 1 and 16 characters.")); }
+    if emoji.is_empty() || emoji.chars().count() > 64 { return Err(ApiError::bad_request("Reaction must be between 1 and 64 characters.")); }
     let pool = database(&state)?;
-    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM comments WHERE id = $1")
+    let (card_id, board_id) = sqlx::query_as::<_, (Uuid, Uuid)>("SELECT c.card_id, card.board_id FROM comments c INNER JOIN cards card ON card.id = c.card_id WHERE c.id = $1")
         .bind(comment_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::bad_request("Comment was not found."))?;
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    if let Some(sticker_id) = emoji.strip_prefix("sticker:") {
+        let sticker_id = Uuid::parse_str(sticker_id).map_err(|_| ApiError::bad_request("Sticker reaction id is invalid."))?;
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_stickers WHERE id = $1 AND board_id = $2)")
+            .bind(sticker_id).bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+        if !exists { return Err(ApiError::bad_request("Sticker does not belong to this project.")); }
+    } else if emoji.chars().count() > 16 {
+        return Err(ApiError::bad_request("Reaction emoji must be between 1 and 16 characters."));
+    }
     let removed = sqlx::query("DELETE FROM comment_reactions WHERE comment_id = $1 AND user_id = $2 AND emoji = $3")
         .bind(comment_id).bind(current.id).bind(emoji).execute(pool).await.map_err(ApiError::internal)?;
     if removed.rows_affected() == 0 {

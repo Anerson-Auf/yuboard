@@ -10,6 +10,8 @@ type RoleShape = 'circle' | 'square' | 'diamond' | 'star' | 'triangle' | 'hexago
 type Label = { id: string; name: string; color: string; icon_shape?: RoleShape; icon_color?: string };
 type ProfileRole = { id: string; name: string; color: string; icon_shape: RoleShape; icon_color: string };
 type Milestone = { id: string; name: string; description: string; color: string; target_date?: string | null };
+type BoardSticker = { id: string; name: string; media_type: string; url: string };
+type CommentReaction = { emoji: string; count: number; reacted: boolean };
 type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
 type Column = { id: EntityId; title: string; cards: Card[] };
 type View = 'home' | 'board';
@@ -17,12 +19,12 @@ type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
 type BoardBackgroundPosition = 'center' | 'top' | 'bottom';
 type ApiMember = { id: string; username: string; avatar_url?: string | null };
-type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; can_admin: boolean; labels: Label[]; milestones: Milestone[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_media_type: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; has_unread_comments: boolean; labels: Label[]; roles?: ProfileRole[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
+type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; can_admin: boolean; labels: Label[]; milestones: Milestone[]; stickers?: BoardSticker[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_media_type: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; has_unread_comments: boolean; labels: Label[]; roles?: ProfileRole[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
 type Checklist = { id: string; title: string; items: ChecklistItem[] };
-type Comment = { id: EntityId; body: string; author_id?: string | null; author_name: string; author_avatar_url?: string | null; parent_comment_id?: string | null; created_at?: string; edited_at?: string | null; is_unread?: boolean; has_unread_thread?: boolean };
+type Comment = { id: EntityId; body: string; author_id?: string | null; author_name: string; author_avatar_url?: string | null; parent_comment_id?: string | null; created_at?: string; edited_at?: string | null; is_unread?: boolean; has_unread_thread?: boolean; reactions?: CommentReaction[] };
 type Attachment = { id: string; original_name: string; media_type: string; byte_size: number; url: string };
 type Activity = { id: string; action: string; detail: string; actor_name: string | null; created_at: string };
 type BoardActivityItem = { id: string; card_id: string; card_title: string; action: string; detail: string; actor_id: string | null; actor_name: string; actor_avatar_url: string | null; created_at: string; count: number };
@@ -83,6 +85,7 @@ type PointerCardDrag = { card: Card; sourceListId: EntityId; startX: number; sta
 // Vite forwards /v1 to Rust locally; nginx does the same after deployment.
 const API_URL = process.env.NEXT_PUBLIC_FLOWBOARD_API_URL ?? '';
 const browserFetch = globalThis.fetch.bind(globalThis);
+const DEFAULT_REACTION_EMOJIS = ['👍', '👎', '❤️', '🔥', '🎉', '😂', '😮', '😢', '😡', '🤔', '👀', '🙏', '💯', '✅', '❌', '🚀', '💀', '🤝', '👏', '💪', '⭐', '💫', '⚡', '🎯', '🫡', '🫶', '🥳', '😎', '🤡', '🧠', '💬', '📌'];
 
 function assetUrl(url: string | null | undefined) {
   if (!url) return '';
@@ -413,6 +416,10 @@ function CardMetaIcon({ type }: { type: 'comments' | 'checklist' | 'attachments'
   return <svg className="card-meta-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" clipRule="evenodd" d={paths[type]} /></svg>;
 }
 
+function StickerIcon() {
+  return <svg className="sticker-icon" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" d="M2 1.5h12v9.1a3.9 3.9 0 0 1-3.9 3.9H2zm1.5 1.5v10h6.6A2.4 2.4 0 0 0 12.5 10.6V3zM6 6a1 1 0 1 1-2 0 1 1 0 0 1 2 0m5 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-6.7 2.6h7.4v1.5H4.3z" clipRule="evenodd" /></svg>;
+}
+
 function BoardToolbarIcon({ type }: { type: 'filter' | 'labels' | 'milestones' | 'archive' | 'team' }) {
   const paths = {
     filter: ['M11 12v1.5H5V12zm2-4.75v1.5H3v-1.5zm2-4.75V4H1V2.5z'],
@@ -617,6 +624,9 @@ export default function Home() {
   const [isUploadingAttachment, setUploadingAttachment] = useState(false);
   const [coverModeDraft, setCoverModeDraft] = useState<'full' | 'top'>('full');
   const [commentDraft, setCommentDraft] = useState('');
+  const [boardStickers, setBoardStickers] = useState<BoardSticker[]>([]);
+  const [reactionPickerCommentId, setReactionPickerCommentId] = useState<EntityId | null>(null);
+  const [stickerPickerTarget, setStickerPickerTarget] = useState<'comment' | 'thread' | null>(null);
   const [threadRoot, setThreadRoot] = useState<Comment | null>(null);
   const [threadComments, setThreadComments] = useState<Comment[]>([]);
   const [threadDraft, setThreadDraft] = useState('');
@@ -822,6 +832,7 @@ export default function Home() {
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const workspaceBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const cardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
+  const boardStickerFileRef = useRef<HTMLInputElement | null>(null);
   const isDrawingRef = useRef(false);
   const diagramStartRef = useRef<DiagramPoint | null>(null);
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
@@ -1181,7 +1192,7 @@ export default function Home() {
   }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
-    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId) return;
+    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId && !reactionPickerCommentId && !stickerPickerTarget) return;
     const closePopovers = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
       if (isBoardMenuOpen && !event.target.closest('.board-menu-control')) setBoardMenuOpen(false);
@@ -1193,15 +1204,17 @@ export default function Home() {
       if (isNotificationsOpen && !event.target.closest('.notifications-control')) setNotificationsOpen(false);
       if (columnMenuId && !event.target.closest('.column-actions')) setColumnMenuId(null);
       if (sidebarPanel && !event.target.closest('.property-popover, .quick-action, .member-plus, .label-plus')) setSidebarPanel(null);
+      if (reactionPickerCommentId && !event.target.closest('.reaction-picker-control')) setReactionPickerCommentId(null);
+      if (stickerPickerTarget && !event.target.closest('.sticker-composer-control')) setStickerPickerTarget(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setNotificationsOpen(false); setColumnMenuId(null); setSidebarPanel(null);
+      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setNotificationsOpen(false); setColumnMenuId(null); setSidebarPanel(null); setReactionPickerCommentId(null); setStickerPickerTarget(null);
     };
     window.addEventListener('pointerdown', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
-  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, sidebarPanel]);
+  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, reactionPickerCommentId, sidebarPanel, stickerPickerTarget]);
 
   useEffect(() => {
     if (!cardContextMenu && !columnContextMenu && !freeformContextMenu) return;
@@ -2702,6 +2715,85 @@ export default function Home() {
       .then((response) => { if (!response.ok) throw new Error('comment delete failed'); })
       .catch(() => showToast('Не удалось удалить комментарий'));
   }
+  function patchCommentEverywhere(commentId: EntityId, updater: (comment: Comment) => Comment) {
+    setComments((current) => current.map((comment) => String(comment.id) === String(commentId) ? updater(comment) : comment));
+    setThreadComments((current) => current.map((comment) => String(comment.id) === String(commentId) ? updater(comment) : comment));
+    setThreadRoot((current) => current && String(current.id) === String(commentId) ? updater(current) : current);
+  }
+  function toggleCommentReaction(comment: Comment, emoji: string) {
+    if (isPublicViewer || !canEditBoard || persistence !== 'connected' || typeof comment.id !== 'string') return;
+    const before = comment.reactions ?? [];
+    const existing = before.find((reaction) => reaction.emoji === emoji);
+    const reactions = existing
+      ? existing.reacted
+        ? before.map((reaction) => reaction.emoji === emoji ? { ...reaction, count: reaction.count - 1, reacted: false } : reaction).filter((reaction) => reaction.count > 0)
+        : before.map((reaction) => reaction.emoji === emoji ? { ...reaction, count: reaction.count + 1, reacted: true } : reaction)
+      : [...before, { emoji, count: 1, reacted: true }];
+    patchCommentEverywhere(comment.id, (current) => ({ ...current, reactions }));
+    setReactionPickerCommentId(null);
+    void fetch(`${API_URL}/v1/comments/${comment.id}/reactions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emoji }) })
+      .then(async (response) => { if (!response.ok) throw new Error('reaction save failed'); return response.json() as Promise<CommentReaction[]>; })
+      .then((saved) => patchCommentEverywhere(comment.id, (current) => ({ ...current, reactions: saved })))
+      .catch(() => { patchCommentEverywhere(comment.id, (current) => ({ ...current, reactions: before })); showToast('Не удалось сохранить реакцию'); });
+  }
+  function stickerMarkdown(sticker: BoardSticker) {
+    const name = sticker.name.replace(/[\[\]\r\n]/g, '').trim() || 'Стикер';
+    return `![sticker:${name}](${assetUrl(sticker.url)})`;
+  }
+  function appendStickerToDraft(target: 'comment' | 'thread', sticker: BoardSticker) {
+    const append = (value: string) => value ? `${value}${value.endsWith('\n') ? '' : '\n'}${stickerMarkdown(sticker)}` : stickerMarkdown(sticker);
+    if (target === 'comment') setCommentDraft((current) => append(current));
+    else setThreadDraft((current) => append(current));
+    setStickerPickerTarget(null);
+  }
+  async function uploadBoardSticker(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !boardId || !canManageBoardAdministration) return;
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) { showToast('Стикер — JPEG, PNG, GIF или WebP до 5 МиБ'); return; }
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const response = await fetch(`${API_URL}/v1/boards/${boardId}/stickers`, { method: 'POST', body: form });
+      if (!response.ok) throw new Error('sticker upload failed');
+      const sticker = await response.json() as BoardSticker;
+      setBoardStickers((current) => [...current, sticker]);
+      showToast('Стикер добавлен');
+    } catch { showToast('Не удалось добавить стикер'); }
+  }
+  function deleteBoardSticker(sticker: BoardSticker) {
+    if (!boardId || !canManageBoardAdministration || !window.confirm(`Удалить стикер «${sticker.name}»?`)) return;
+    const before = boardStickers;
+    const commentsBefore = comments;
+    const threadCommentsBefore = threadComments;
+    const threadRootBefore = threadRoot;
+    const reactionKey = `sticker:${sticker.id}`;
+    setBoardStickers((current) => current.filter((item) => item.id !== sticker.id));
+    const withoutSticker = (comment: Comment) => ({ ...comment, reactions: (comment.reactions ?? []).filter((reaction) => reaction.emoji !== reactionKey) });
+    setComments((current) => current.map(withoutSticker));
+    setThreadComments((current) => current.map(withoutSticker));
+    setThreadRoot((current) => current ? withoutSticker(current) : current);
+    void fetch(`${API_URL}/v1/boards/${boardId}/stickers/${sticker.id}`, { method: 'DELETE' })
+      .then((response) => { if (!response.ok) throw new Error('sticker delete failed'); })
+      .catch(() => { setBoardStickers(before); setComments(commentsBefore); setThreadComments(threadCommentsBefore); setThreadRoot(threadRootBefore); showToast('Не удалось удалить стикер'); });
+  }
+  function reactionContent(emoji: string) {
+    const stickerId = emoji.startsWith('sticker:') ? emoji.slice('sticker:'.length) : null;
+    const sticker = stickerId ? boardStickers.find((item) => item.id === stickerId) : null;
+    return sticker ? <img src={assetUrl(sticker.url)} alt={sticker.name} /> : <span>{emoji}</span>;
+  }
+  function renderStickerComposerButton(target: 'comment' | 'thread') {
+    if (isPublicViewer || !canEditBoard) return null;
+    const open = stickerPickerTarget === target;
+    return <span className="sticker-composer-control">
+      <button className={`sticker-composer-button ${open ? 'active' : ''}`} type="button" onClick={() => setStickerPickerTarget(open ? null : target)} aria-label="Отправить стикер" title="Отправить стикер"><StickerIcon /></button>
+      {open && <div className="sticker-picker" role="dialog" aria-label="Стикеры">
+        <b>Стикеры доски</b>
+        <div className="sticker-picker-grid">{boardStickers.length ? boardStickers.map((sticker) => <span key={sticker.id} className="sticker-picker-item"><button type="button" onClick={() => appendStickerToDraft(target, sticker)} title={sticker.name}><img src={assetUrl(sticker.url)} alt={sticker.name} /></button>{canManageBoardAdministration && <button type="button" className="sticker-remove" onClick={() => deleteBoardSticker(sticker)} aria-label={`Удалить стикер ${sticker.name}`}>×</button>}</span>) : <span className="sticker-picker-empty">Пока нет стикеров</span>}</div>
+        {canManageBoardAdministration && <button type="button" className="sticker-upload-button" onClick={() => boardStickerFileRef.current?.click()}><span>＋</span> Добавить стикер</button>}
+      </div>}
+    </span>;
+  }
   function commentMember(comment: Comment): Member {
     return comment.author_id === account?.user.id
       ? currentMember
@@ -2723,6 +2815,10 @@ export default function Home() {
         </form> : <>
           <header><b>@{comment.author_name}</b><time>{commentTime(comment)}{comment.edited_at && ' · изменено'}</time></header>
           <div className="comment-text"><MarkdownDescription value={comment.body} highlightMentions={unreadMentionSourceIds.includes(String(comment.id))} />{comment.is_unread && <i className="comment-unread-dot comment-unread-dot-message" aria-label="Новое непрочитанное сообщение" />}</div>
+          <div className="comment-reactions">
+            {(comment.reactions ?? []).map((reaction) => <button type="button" key={reaction.emoji} className={reaction.reacted ? 'reacted' : ''} onClick={() => toggleCommentReaction(comment, reaction.emoji)} disabled={isPublicViewer || !canEditBoard} title={reaction.emoji}>{reactionContent(reaction.emoji)}<small>{reaction.count}</small></button>)}
+            {!isPublicViewer && canEditBoard && <span className="reaction-picker-control"><button type="button" className="reaction-add" onClick={() => setReactionPickerCommentId((current) => String(current) === String(comment.id) ? null : comment.id)} aria-label="Добавить реакцию" title="Добавить реакцию">☺</button>{String(reactionPickerCommentId) === String(comment.id) && <div className="reaction-picker" role="dialog" aria-label="Выберите реакцию"><div className="reaction-picker-grid">{DEFAULT_REACTION_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => toggleCommentReaction(comment, emoji)} title={emoji}>{emoji}</button>)}</div>{boardStickers.length > 0 && <><b>Стикеры</b><div className="reaction-picker-grid sticker-reaction-grid">{boardStickers.map((sticker) => <button type="button" key={sticker.id} onClick={() => toggleCommentReaction(comment, `sticker:${sticker.id}`)} title={sticker.name}><img src={assetUrl(sticker.url)} alt={sticker.name} /></button>)}</div></>}</div>}</span>}
+          </div>
           <div className="comment-actions">
             {canOpenThread && <button type="button" className={`comment-thread-action ${comment.has_unread_thread ? 'has-unread' : ''}`} onClick={() => openCommentThread(comment)}><CardMetaIcon type="comments" /><span>Обсудить{threadCount ? ` · ${threadCount}` : ''}</span>{comment.has_unread_thread && <i className="comment-unread-dot" aria-label="Новые сообщения в треде" />}</button>}
             {comment.author_id === account?.user.id && <><button type="button" onClick={() => beginCommentEdit(comment)}>Изменить</button><button type="button" onClick={() => removeComment(comment)}>Удалить</button></>}
@@ -3019,6 +3115,7 @@ export default function Home() {
     setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, hasUnreadComments: card.has_unread_comments, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMediaType: card.cover_media_type ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, roles: card.roles ?? [], milestone: card.milestone ?? null, members: card.assignees.map(memberFromApi) })) })));
     setBoardLabels(data.labels);
     setMilestones(data.milestones ?? []);
+    setBoardStickers(data.stickers ?? []);
     setWorkspaceMembers(data.members.map(memberFromApi));
     setWorkspaceId(data.workspace_id);
     setBoardTitle(data.title);
@@ -3455,7 +3552,7 @@ export default function Home() {
                 {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
                 {activity.map((item) => <div className="activity-message" key={item.id}><i>Console</i><p><b>@{item.actor_name ?? 'Deleted user'}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>)}
               </div>}
-              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" /><button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
+              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" />{renderStickerComposerButton('comment')}<button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
             </section>
           </aside>
         </div>
@@ -3470,11 +3567,12 @@ export default function Home() {
           {isThreadLoading ? <p className="detail-loading">Загружаем тред…</p> : threadComments.length ? threadComments.map((comment) => <div className="thread-message comment-arrive" key={comment.id}>{renderCommentMessage(comment, '', false)}</div>) : <p className="empty-comments">Пока никто не ответил.</p>}
         </div>
         {!isPublicViewer && <form className="comment-composer thread-composer" onSubmit={addThreadComment}>
-          <MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} onSubmitShortcut={() => addThreadComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} maxLength={10000} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" />
+          <MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} onSubmitShortcut={() => addThreadComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} maxLength={10000} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" />{renderStickerComposerButton('thread')}
           <button className={`voice-record-button ${voiceRecordingTarget === 'thread' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'thread' ? stopVoiceRecording() : void startVoiceRecording('thread')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'thread') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'thread' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'thread' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingThread || !threadDraft.trim()}>{isSendingThread ? 'Отправка…' : 'Отправить'}</button>
         </form>}
       </section>
     </div>}
+    <input ref={boardStickerFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardSticker} style={{ display: 'none' }} />
     {imagePreview && <div className="image-preview-backdrop" role="presentation" onMouseDown={() => setImagePreview(null)}><figure className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Просмотр ${imagePreview.name}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" onClick={() => setImagePreview(null)} aria-label="Закрыть просмотр">×</button><img src={imagePreview.url} alt={imagePreview.name} /><figcaption>{imagePreview.name}</figcaption></figure></div>}
     {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button>{!isPublicViewer && <><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button></>}</div>}
     {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); addColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Добавить колонку ниже</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); moveColumn(columnContextMenu.column.id); setColumnContextMenu(null); }}>Вынести в отдельный ряд справа</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}

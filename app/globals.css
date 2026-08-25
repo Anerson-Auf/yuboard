@@ -560,3 +560,24 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .comment-thread-action.has-unread { color: var(--text); font-weight: 800; }
 .comment-thread-action.has-unread > span { font-weight: 800; }
 .comment-thread-action.has-unread .comment-unread-dot { border-color: rgb(115 21 31 / 82%); background: #ef5b68; box-shadow: 0 0 0 2px rgb(239 91 104 / 18%); }
+
+/* Compact, legible chips. The same family is used for board labels and the
+   labels rendered on cards, so their proportions no longer change by view. */
+.label.custom-label, .board-label-chip {
+  font-family: "Atlassian Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1.25rem;
+}
+
+.reaction-picker-control, .sticker-composer-control { position: relative; display: inline-flex; }
+.reaction-picker, .sticker-picker { position: absolute; z-index: 220; right: 0; bottom: calc(100% + 7px); width: min(310px, calc(100vw - 32px)); padding: 10px; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 34px rgb(0 0 0 / 34%); background: var(--surface-raised); color: var(--text); }
+.reaction-picker > b, .sticker-picker > b { display: block; margin: 0 0 7px; font-size: 11px; }
+.reaction-picker-grid, .sticker-picker-grid { display: flex; flex-wrap: wrap; gap: 5px; }
+.reaction-picker-grid > button { display: grid; width: 30px; height: 30px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); font-size: 17px; }
+.reaction-picker-grid > button:hover { border-color: var(--line); background: var(--surface-soft); transform: translateY(-1px); }
+.reaction-picker-grid.sticker-reaction-grid { margin-top: 6px; }.reaction-picker-grid.sticker-reaction-grid > button { overflow: hidden; }.reaction-picker-grid.sticker-reaction-grid img { width: 25px; height: 25px; object-fit: contain; }
+.comment-reactions { align-items: center; }.comment-reactions button { display: inline-flex; align-items: center; gap: 3px; }.comment-reactions button img { width: 19px; height: 19px; object-fit: contain; }.comment-reactions button small { font-size: 10px; line-height: 1; }.comment-reactions .reaction-add { display: grid; width: 23px; place-items: center; padding: 0; }
+.sticker-composer-button { display: grid; width: 34px; min-width: 34px; height: 34px; place-items: center; align-self: end; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }.sticker-composer-button:hover, .sticker-composer-button.active { color: var(--primary); background: var(--surface-soft); }.sticker-icon { width: 17px; height: 17px; }
+.sticker-picker { right: -38px; bottom: calc(100% + 8px); }.sticker-picker-grid { max-height: 190px; overflow: auto; padding: 1px; }.sticker-picker-item { position: relative; display: inline-flex; width: 56px; height: 56px; }.sticker-picker-item > button:first-child { display: grid; width: 56px; height: 56px; place-items: center; overflow: hidden; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }.sticker-picker-item > button:first-child:hover { border-color: var(--primary); transform: translateY(-1px); }.sticker-picker-item img { max-width: 100%; max-height: 100%; object-fit: contain; }.sticker-picker-item .sticker-remove { position: absolute; top: -5px; right: -5px; display: grid; width: 17px; height: 17px; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-raised); color: var(--muted); font-size: 13px; line-height: 1; }.sticker-picker-empty { padding: 12px 3px; color: var(--faint); font-size: 11px; }.sticker-upload-button { width: 100%; min-height: 31px; margin-top: 9px; border: 1px dashed color-mix(in srgb, var(--primary) 58%, var(--line)); border-radius: 8px; background: transparent; color: var(--primary); font-size: 11px; font-weight: 700; }
