@@ -1839,7 +1839,7 @@ async fn ensure_system_owner(pool: &PgPool, actor_id: Uuid) -> Result<(), ApiErr
 
 fn valid_profile_role_shape(value: &str) -> Result<&str, ApiError> {
     match value {
-        "circle" | "square" | "diamond" | "star" | "triangle" | "hexagon" | "bolt" | "flag" => Ok(value),
+        "circle" | "square" | "diamond" | "star" | "triangle" | "hexagon" | "bolt" | "flag" | "check" | "cross" => Ok(value),
         _ => Err(ApiError::bad_request("Unsupported role icon shape.")),
     }
 }

@@ -6,7 +6,7 @@ import './auth.css';
 
 type EntityId = number | string;
 type Member = { id: EntityId; initials: string; color: string; name: string; avatarUrl?: string | null };
-type RoleShape = 'circle' | 'square' | 'diamond' | 'star' | 'triangle' | 'hexagon' | 'bolt' | 'flag';
+type RoleShape = 'circle' | 'square' | 'diamond' | 'star' | 'triangle' | 'hexagon' | 'bolt' | 'flag' | 'check' | 'cross';
 type Label = { id: string; name: string; color: string; icon_shape?: RoleShape };
 type ProfileRole = { id: string; name: string; color: string; icon_shape: RoleShape };
 type Milestone = { id: string; name: string; description: string; color: string; target_date?: string | null };
@@ -325,7 +325,7 @@ function PrioritySignal({ priority }: { priority?: number }) {
   return <span className={`priority-signal level-${level}`} title={`Приоритет ${level} из 5`} aria-label={`Приоритет ${level} из 5`}>{[1, 2, 3, 4, 5].map((bar) => <i className={bar <= level ? 'active' : ''} key={bar} />)}</span>;
 }
 
-const roleShapes: RoleShape[] = ['circle', 'square', 'diamond', 'star', 'triangle', 'hexagon', 'bolt', 'flag'];
+const roleShapes: RoleShape[] = ['circle', 'square', 'diamond', 'star', 'triangle', 'hexagon', 'bolt', 'flag', 'check', 'cross'];
 
 function ShapeIcon({ shape = 'circle', color, size = 12 }: { shape?: RoleShape; color?: string; size?: number }) {
   const common = { fill: 'currentColor' };
@@ -338,6 +338,8 @@ function ShapeIcon({ shape = 'circle', color, size = 12 }: { shape?: RoleShape; 
     hexagon: <path d="m8 1.55 5.58 3.22v6.46L8 14.45l-5.58-3.22V4.77z" {...common} />,
     bolt: <path d="M9.15 1 2.8 8.35h4.05L6.2 15 13.2 6.9H9.1z" {...common} />,
     flag: <path d="M3 1.5h1.5v1h7.6l-1.2 2.7 1.2 2.8H4.5v6.5H3z" {...common} />,
+    check: <path d="m2.1 8.2 3.5 3.5 8.3-8.25 1.05 1.05-9.35 9.35-4.55-4.55z" {...common} />,
+    cross: <path d="m3.05 2 4.95 4.95L12.95 2 14 3.05 9.05 8 14 12.95 12.95 14 8 9.05 3.05 14 2 12.95 6.95 8 2 3.05z" {...common} />,
   };
   return <svg className="role-shape-icon" viewBox="0 0 16 16" width={size} height={size} style={color ? { color } : undefined} aria-hidden="true">{glyphs[shape] ?? glyphs.circle}</svg>;
 }
