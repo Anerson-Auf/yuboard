@@ -1361,6 +1361,22 @@ fn is_discord_cdn_url(url: &reqwest::Url) -> bool {
     )
 }
 
+// Imported Trello exports reference the original attachment URL instead of a
+// Flowboard upload.  Those files must pass through the same authorised media
+// endpoint as Discord uploads so private boards do not expose attachment URLs
+// directly.  Keep this deliberately narrow: import data is user supplied and
+// this endpoint must never become an open HTTP proxy.
+fn is_external_attachment_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && (is_discord_cdn_url(url) || matches!(
+        url.host_str(),
+        Some("trello.com")
+            | Some("www.trello.com")
+            | Some("api.trello.com")
+            | Some("trello-attachments.s3.amazonaws.com")
+            | Some("attachments.trello.services")
+    ))
+}
+
 async fn auth_state(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -1438,7 +1454,7 @@ async fn download_comment_avatar(State(state): State<AppState>, current: Viewer,
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "avatar_not_found", "Avatar was not found.".to_owned()))?;
-    proxy_discord_attachment(&state.external_http, &avatar_url, "image/webp").await
+    proxy_external_attachment(&state.external_http, &avatar_url, "image/webp").await
 }
 
 async fn logout(
@@ -3295,7 +3311,7 @@ async fn download_attachment(State(state): State<AppState>, current: Viewer, Pat
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment was not found.".to_owned()))?;
     if let Some(url) = attachment.2 {
-        return proxy_discord_attachment(&state.external_http, &url, &attachment.1).await;
+        return proxy_external_attachment(&state.external_http, &url, &attachment.1).await;
     }
     let object_key = attachment.0.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()))?;
     let bytes = tokio::fs::read(state.upload_dir.join(object_key)).await.map_err(|error| {
@@ -3348,12 +3364,11 @@ async fn upload_checklist_item_attachment(State(state): State<AppState>, current
     }
 }
 
-// Discord CDN URLs may expire or be blocked for one viewer. Keep them behind
-// Flowboard's authorised attachment endpoint; the host allow-list prevents this
-// from becoming a generic server-side request proxy.
-async fn proxy_discord_attachment(client: &reqwest::Client, url: &str, media_type: &str) -> Result<Response, ApiError> {
+// External attachments stay remote: Flowboard streams them only after checking
+// card access. The host allow-list prevents this from becoming a generic proxy.
+async fn proxy_external_attachment(client: &reqwest::Client, url: &str, media_type: &str) -> Result<Response, ApiError> {
     let parsed = reqwest::Url::parse(url).map_err(|_| ApiError::storage())?;
-    if !is_discord_cdn_url(&parsed) {
+    if !is_external_attachment_url(&parsed) {
         return Err(ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "External attachment was not found.".to_owned()));
     }
     let response = client.get(parsed).send().await.map_err(|error| {
