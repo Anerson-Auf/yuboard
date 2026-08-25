@@ -327,6 +327,8 @@ struct UpdateBoardRequest {
 #[derive(Deserialize)]
 struct UpdateBoardBackgroundRequest {
     background_image_url: Option<String>,
+    background_fit: Option<String>,
+    background_position: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -361,6 +363,8 @@ struct BoardAccess {
     workspace_id: Uuid,
     title: String,
     background_image_url: Option<String>,
+    background_fit: String,
+    background_position: String,
     visibility: String,
 }
 
@@ -864,6 +868,8 @@ struct BoardDetail {
     workspace_id: Uuid,
     title: String,
     background_image_url: Option<String>,
+    background_fit: String,
+    background_position: String,
     visibility: String,
     labels: Vec<LabelResponse>,
     members: Vec<MemberResponse>,
@@ -1855,7 +1861,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     let actor_id = current.0.map(|user| user.id);
     let pool = database(&state)?;
     let board = sqlx::query_as::<_, BoardAccess>(
-        "SELECT b.id, b.workspace_id, b.title, CASE WHEN b.background_image_url = '/v1/boards/' || b.id::text || '/background/file' THEN b.background_image_url || '?v=' || (floor(EXTRACT(EPOCH FROM b.updated_at) * 1000)::bigint)::text ELSE b.background_image_url END AS background_image_url, b.visibility::text AS visibility FROM boards b LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
+        "SELECT b.id, b.workspace_id, b.title, CASE WHEN b.background_image_url = '/v1/boards/' || b.id::text || '/background/file' THEN b.background_image_url || '?v=' || (floor(EXTRACT(EPOCH FROM b.updated_at) * 1000)::bigint)::text ELSE b.background_image_url END AS background_image_url, b.background_fit, b.background_position, b.visibility::text AS visibility FROM boards b LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND (m.user_id IS NOT NULL OR b.visibility = 'public')",
     )
     .bind(board_id)
     .bind(actor_id)
@@ -1934,7 +1940,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     let background_image_url = if actor_id.is_none() && board.background_image_url.as_deref().is_some_and(|url| url.starts_with(&uploaded_background_url)) {
         Some(format!("/v1/public/boards/{}/background", board.id))
     } else { board.background_image_url };
-    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, visibility: board.visibility, labels, members, lists }))
+    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, labels, members, lists }))
 }
 
 async fn board_events(State(state): State<AppState>, viewer: Viewer, Path(board_id): Path<Uuid>) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -2005,8 +2011,18 @@ async fn update_board_background(State(state): State<AppState>, current: Current
         }
         _ => None,
     };
-    let result = sqlx::query("UPDATE boards b SET background_image_url = $1, updated_at = now() FROM board_members m WHERE b.id = $2 AND m.board_id = b.id AND m.user_id = $3 AND b.archived_at IS NULL")
-        .bind(url).bind(board_id).bind(current.id).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    let fit = match request.background_fit.as_deref() {
+        Some("cover") | Some("contain") | Some("fill") => request.background_fit,
+        Some(_) => return Err(ApiError::bad_request("Background fit must be cover, contain, or fill.")),
+        None => None,
+    };
+    let position = match request.background_position.as_deref() {
+        Some("top") | Some("center") | Some("bottom") => request.background_position,
+        Some(_) => return Err(ApiError::bad_request("Background position must be top, center, or bottom.")),
+        None => None,
+    };
+    let result = sqlx::query("UPDATE boards b SET background_image_url = $1, background_fit = COALESCE($2, b.background_fit), background_position = COALESCE($3, b.background_position), updated_at = now() FROM board_members m WHERE b.id = $4 AND m.board_id = b.id AND m.user_id = $5 AND b.archived_at IS NULL")
+        .bind(url).bind(fit).bind(position).bind(board_id).bind(current.id).execute(database(&state)?).await.map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned())); }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
