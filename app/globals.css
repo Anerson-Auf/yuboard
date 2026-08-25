@@ -553,3 +553,5 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .comment-thread-action { display: inline-flex; align-items: center; gap: 4px; }
 .comment-thread-action .card-meta-icon { width: 13px; height: 13px; }
 .comment-thread-action.has-unread { color: var(--text); font-weight: 800; }
+.comment-thread-action.has-unread > span { font-weight: 800; }
+.comment-thread-action.has-unread .comment-unread-dot { border-color: rgb(115 21 31 / 82%); background: #ef5b68; box-shadow: 0 0 0 2px rgb(239 91 104 / 18%); }
