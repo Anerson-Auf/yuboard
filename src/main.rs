@@ -320,6 +320,8 @@ struct AdminWorkspaceResponse {
 struct WorkspaceResponse {
     id: Uuid,
     name: String,
+    background_image_url: Option<String>,
+    can_manage: bool,
 }
 
 #[derive(Deserialize)]
@@ -1166,6 +1168,7 @@ async fn main() {
         .route("/v1/public/boards/{board_id}/avatars/{user_id}", get(download_public_board_avatar))
         .route("/v1/workspaces", get(list_workspaces).post(create_workspace))
         .route("/v1/workspaces/{workspace_id}", axum::routing::delete(delete_workspace))
+        .route("/v1/workspaces/{workspace_id}/background", put(update_workspace_background))
         .route("/v1/workspaces/{workspace_id}/members", get(list_workspace_members))
         .route("/v1/workspaces/{workspace_id}/available-accounts", get(list_available_workspace_accounts))
         .route("/v1/workspaces/{workspace_id}/members/existing", post(add_existing_workspace_member))
@@ -1886,10 +1889,30 @@ async fn delete_workspace(State(state): State<AppState>, current: CurrentUser, P
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn update_workspace_background(State(state): State<AppState>, current: CurrentUser, Path(workspace_id): Path<Uuid>, Json(request): Json<UpdateBoardBackgroundRequest>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    let is_owner: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.role = 'owner')")
+        .bind(workspace_id).bind(current.id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if !is_owner { return Err(ApiError::forbidden("Only the workspace owner can change its card background.")); }
+    let url = match request.background_image_url {
+        Some(value) if !value.trim().is_empty() => {
+            let value = value.trim();
+            if value.len() > 2_000 || !value.starts_with("https://") { return Err(ApiError::bad_request("Workspace background must be an HTTPS image URL.")); }
+            Some(value.to_owned())
+        }
+        _ => None,
+    };
+    let updated = sqlx::query("UPDATE workspaces SET background_image_url = $1 WHERE id = $2 AND archived_at IS NULL")
+        .bind(url).bind(workspace_id).execute(pool).await.map_err(ApiError::internal)?;
+    if updated.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "workspace_not_found", "Workspace was not found.".to_owned())); }
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn list_workspaces(State(state): State<AppState>, current: CurrentUser) -> ApiResult<Vec<WorkspaceResponse>> {
     let actor_id = current.id;
     let rows = sqlx::query_as::<_, WorkspaceResponse>(
-        "SELECT w.id, w.name FROM workspaces w WHERE w.archived_at IS NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $1 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = $1) OR EXISTS (SELECT 1 FROM boards b JOIN board_members bm ON bm.board_id = b.id WHERE b.workspace_id = w.id AND b.archived_at IS NULL AND bm.user_id = $1)) ORDER BY w.created_at DESC",
+        "SELECT w.id, w.name, w.background_image_url, (EXISTS (SELECT 1 FROM users u WHERE u.id = $1 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members owner_member WHERE owner_member.workspace_id = w.id AND owner_member.user_id = $1 AND owner_member.role = 'owner')) AS can_manage FROM workspaces w WHERE w.archived_at IS NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $1 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = $1) OR EXISTS (SELECT 1 FROM boards b JOIN board_members bm ON bm.board_id = b.id WHERE b.workspace_id = w.id AND b.archived_at IS NULL AND bm.user_id = $1)) ORDER BY w.created_at DESC",
     )
     .bind(actor_id)
     .fetch_all(database(&state)?)
@@ -2118,7 +2141,7 @@ async fn create_workspace(State(state): State<AppState>, current: CurrentUser, J
     let pool = database(&state)?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
     let workspace = sqlx::query_as::<_, WorkspaceResponse>(
-        "INSERT INTO workspaces (id, name, created_by) VALUES ($1, $2, $3) RETURNING id, name",
+        "INSERT INTO workspaces (id, name, created_by) VALUES ($1, $2, $3) RETURNING id, name, background_image_url, TRUE AS can_manage",
     )
     .bind(Uuid::new_v4())
     .bind(name)

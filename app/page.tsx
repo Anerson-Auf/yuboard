@@ -27,7 +27,7 @@ type CardDetail = { checklists: Checklist[]; comments: Comment[]; attachments: A
 type CardNotification = { id: string; card_id: string; board_id: string; card_title: string; board_title: string; actor_name: string | null; action: string; detail: string; is_read: boolean; created_at: string };
 type AuthAccount = { user: { id: string; username: string; avatar_url: string | null; is_system_owner: boolean } };
 type AuthState = 'checking' | 'signed-out' | 'signed-in' | 'public';
-type Workspace = { id: string; name: string };
+type Workspace = { id: string; name: string; background_image_url?: string | null; can_manage?: boolean };
 type BoardSummary = { id: string; title: string; visibility: string };
 type FilterMode = 'all' | 'assigned' | 'due' | 'overdue';
 type CardSort = 'manual' | 'priority' | 'activity';
@@ -449,6 +449,10 @@ export default function Home() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState('');
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaceBoards, setWorkspaceBoards] = useState<Record<string, BoardSummary[]>>({});
+  const [workspaceBackgroundEditorId, setWorkspaceBackgroundEditorId] = useState<string | null>(null);
+  const [workspaceBackgroundDraft, setWorkspaceBackgroundDraft] = useState('');
+  const [isSavingWorkspaceBackground, setSavingWorkspaceBackground] = useState(false);
   const [isWorkspaceComposerOpen, setWorkspaceComposerOpen] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [workspaceCreateError, setWorkspaceCreateError] = useState('');
@@ -572,6 +576,7 @@ export default function Home() {
   const didDragRef = useRef(false);
   const dragScrollFrameRef = useRef<number | null>(null);
   const previousBackgroundDraftRef = useRef('');
+  const previousWorkspaceBackgroundDraftRef = useRef('');
   const boardBackgroundDisplayRef = useRef<{ fit: BoardBackgroundFit; position: BoardBackgroundPosition }>({ fit: 'cover', position: 'center' });
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1 } | null>(null);
   const boardRef = useRef<HTMLElement | null>(null);
@@ -677,14 +682,18 @@ export default function Home() {
         if (!spacesResponse.ok) throw new Error('workspaces could not be loaded');
         const spaces = await spacesResponse.json() as Workspace[];
         setWorkspaces(spaces);
+        const boardEntries = await Promise.all(spaces.map(async (space) => {
+          const response = await fetch(`${API_URL}/v1/workspaces/${space.id}/boards`);
+          if (!response.ok) throw new Error('boards could not be loaded');
+          return [space.id, await response.json() as BoardSummary[]] as const;
+        }));
+        const boardsByWorkspace = Object.fromEntries(boardEntries) as Record<string, BoardSummary[]>;
+        setWorkspaceBoards(boardsByWorkspace);
         const rememberedWorkspaceId = typeof window === 'undefined' ? null : window.localStorage.getItem('flowboard.workspace_id');
         const workspace = spaces.find((item) => item.id === rememberedWorkspaceId) ?? spaces[0];
         if (!workspace) { setWorkspaceId(null); setWorkspaceName(''); setBoards([]); setBoardId(null); setColumns([]); setView('home'); setPersistence('connected'); return; }
         setWorkspaceId(workspace.id); setWorkspaceName(workspace.name);
-        const boardsResponse = await fetch(`${API_URL}/v1/workspaces/${workspace.id}/boards`);
-        if (!boardsResponse.ok) throw new Error('boards could not be loaded');
-        const availableBoards = await boardsResponse.json() as BoardSummary[];
-        setBoards(availableBoards);
+        setBoards(boardsByWorkspace[workspace.id] ?? []);
         setBoardId(null); setColumns([]); setBoardTitle(''); setView('home'); setPersistence('connected');
       } catch {
         setPersistence('connecting');
@@ -889,6 +898,12 @@ export default function Home() {
     previousBackgroundDraftRef.current = backgroundDraft;
     if (previous.trim() && !backgroundDraft.trim() && boardBackgroundUrl) clearBoardBackground();
   }, [backgroundDraft, boardBackgroundUrl]);
+
+  useEffect(() => {
+    const previous = previousWorkspaceBackgroundDraftRef.current;
+    previousWorkspaceBackgroundDraftRef.current = workspaceBackgroundDraft;
+    if (workspaceBackgroundEditorId && previous.trim() && !workspaceBackgroundDraft.trim()) clearWorkspaceBackground();
+  }, [workspaceBackgroundDraft, workspaceBackgroundEditorId]);
 
   useEffect(() => {
     const previous = boardBackgroundDisplayRef.current;
@@ -1664,7 +1679,7 @@ export default function Home() {
     setWorkspaceCreateError('');
     void fetch(`${API_URL}/v1/workspaces`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
       .then(async (response) => { if (!response.ok) throw new Error('workspace create failed'); return response.json() as Promise<Workspace>; })
-      .then((workspace) => { setWorkspaces((current) => [workspace, ...current]); setAdminWorkspaces((current) => [{ id: workspace.id, name: workspace.name, owner_username: account?.user.username ?? 'owner', member_count: 1, archived_at: null }, ...current]); setWorkspaceComposerOpen(false); void selectWorkspace(workspace); showToast(`Пространство «${workspace.name}» создано`); })
+      .then((workspace) => { setWorkspaces((current) => [workspace, ...current]); setWorkspaceBoards((current) => ({ ...current, [workspace.id]: [] })); setAdminWorkspaces((current) => [{ id: workspace.id, name: workspace.name, owner_username: account?.user.username ?? 'owner', member_count: 1, archived_at: null }, ...current]); setWorkspaceComposerOpen(false); void selectWorkspace(workspace); showToast(`Пространство «${workspace.name}» создано`); })
       .catch(() => setWorkspaceCreateError('Не удалось создать пространство. Проверьте подключение и повторите.'))
       .finally(() => setCreatingWorkspace(false));
   }
@@ -2380,7 +2395,10 @@ export default function Home() {
     try {
       const response = await fetch(`${API_URL}/v1/boards/${nextBoardId}`);
       if (!response.ok) throw new Error('board load failed');
-      applyBoard(await response.json() as ApiBoard);
+      const board = await response.json() as ApiBoard;
+      applyBoard(board);
+      const workspace = workspaces.find((item) => item.id === board.workspace_id);
+      if (workspace) { setWorkspaceName(workspace.name); if (typeof window !== 'undefined') window.localStorage.setItem('flowboard.workspace_id', workspace.id); setBoards(workspaceBoards[workspace.id] ?? []); }
       updateBoardRoute(nextBoardId);
       setView('board');
     } catch { showToast('Не удалось открыть проект'); }
@@ -2394,6 +2412,7 @@ export default function Home() {
       if (!response.ok) throw new Error('boards load failed');
       const nextBoards = await response.json() as BoardSummary[];
       setBoards(nextBoards);
+      setWorkspaceBoards((current) => ({ ...current, [nextWorkspace.id]: nextBoards }));
       setBoardId(null); setBoardTitle(''); setColumns([]);
     } catch { showToast('Не удалось переключить пространство'); }
   }
@@ -2406,7 +2425,7 @@ export default function Home() {
     setCreatingBoard(true);
     void fetch(`${API_URL}/v1/workspaces/${workspaceId}/boards`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })
       .then(async (response) => { if (!response.ok) throw new Error('board create failed'); return response.json() as Promise<BoardSummary>; })
-      .then((board) => { setBoards((current) => [board, ...current]); setNewBoardTitle(''); setNewBoardComposer(false); void selectBoard(board.id); })
+      .then((board) => { setBoards((current) => [board, ...current]); setWorkspaceBoards((current) => ({ ...current, [workspaceId]: [board, ...(current[workspaceId] ?? [])] })); setNewBoardTitle(''); setNewBoardComposer(false); void selectBoard(board.id); })
       .catch(() => showToast('Не удалось создать проект'))
       .finally(() => setCreatingBoard(false));
   }
@@ -2440,6 +2459,29 @@ export default function Home() {
     void fetch(`${API_URL}/v1/workspaces/${workspace.id}`, { method: 'DELETE' })
       .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'delete failed'); const remaining = workspaces.filter((item) => item.id !== workspace.id); setWorkspaces(remaining); if (workspaceId === workspace.id) { const next = remaining[0]; setWorkspaceId(next?.id ?? null); setWorkspaceName(next?.name ?? ''); setBoards([]); setBoardId(null); setColumns([]); } showToast('Пространство удалено'); })
       .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось удалить пространство'));
+  }
+  function openWorkspaceBackgroundEditor(workspace: Workspace) {
+    setWorkspaceBackgroundEditorId(workspace.id);
+    setWorkspaceBackgroundDraft(workspace.background_image_url ?? '');
+  }
+  function saveWorkspaceBackground(event: FormEvent) {
+    event.preventDefault();
+    if (!workspaceBackgroundEditorId || isSavingWorkspaceBackground) return;
+    const background_image_url = workspaceBackgroundDraft.trim() || null;
+    setSavingWorkspaceBackground(true);
+    void fetch(`${API_URL}/v1/workspaces/${workspaceBackgroundEditorId}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url }) })
+      .then((response) => { if (!response.ok) throw new Error('workspace background save failed'); setWorkspaces((current) => current.map((workspace) => workspace.id === workspaceBackgroundEditorId ? { ...workspace, background_image_url } : workspace)); setWorkspaceBackgroundEditorId(null); showToast(background_image_url ? 'Фон карты пространства установлен' : 'Фон карты пространства снят'); })
+      .catch(() => showToast('Не удалось сохранить фон: нужен HTTPS-адрес изображения'))
+      .finally(() => setSavingWorkspaceBackground(false));
+  }
+  function clearWorkspaceBackground() {
+    if (!workspaceBackgroundEditorId || isSavingWorkspaceBackground) return;
+    const workspaceIdToClear = workspaceBackgroundEditorId;
+    setSavingWorkspaceBackground(true);
+    void fetch(`${API_URL}/v1/workspaces/${workspaceIdToClear}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url: null }) })
+      .then((response) => { if (!response.ok) throw new Error('workspace background clear failed'); setWorkspaces((current) => current.map((workspace) => workspace.id === workspaceIdToClear ? { ...workspace, background_image_url: null } : workspace)); setWorkspaceBackgroundDraft(''); showToast('Фон карты пространства снят'); })
+      .catch(() => showToast('Не удалось снять фон карты пространства'))
+      .finally(() => setSavingWorkspaceBackground(false));
   }
 
   function saveBoardBackground(event: FormEvent) {
@@ -2625,11 +2667,10 @@ export default function Home() {
     {isAdminOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setAdminOpen(false)}><section className="archive-modal team-modal admin-modal" role="dialog" aria-modal="true" aria-label="Администрирование" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setAdminOpen(false)} aria-label="Закрыть">×</button><p className="eyebrow">SYSTEM OWNER</p><h2>Администрирование</h2><button className="create-button admin-invite-button" type="button" onClick={createAccountInvite}>Создать account-invite</button>{isAdminLoading ? <p className="detail-loading">Загружаем данные…</p> : <><section className="admin-section"><h3>Аккаунты</h3><div className="team-list">{adminAccounts.map((item) => <article key={item.id}><Avatar member={memberFromApi({ id: item.id, username: item.username, avatar_url: item.avatar_url })} /><div><b>@{item.username}</b><small>{item.is_system_owner ? 'System owner' : 'Активен'}</small></div>{!item.is_system_owner && <button className="danger-action" onClick={() => deleteAccount(item)}>Удалить</button>}</article>)}</div></section><section className="admin-section"><h3>Пространства</h3><div className="team-list">{adminWorkspaces.map((item) => <article key={item.id}><div><b>{item.name}</b><small>Owner: @{item.owner_username} · {item.member_count} уч.</small></div><span className="workspace-admin-actions"><button onClick={() => archiveWorkspace(item)}>{item.archived_at ? 'Восстановить' : 'Архивировать'}</button><button className="danger-action" onClick={() => deleteWorkspace(item)}>Удалить</button></span></article>)}</div></section><section className="admin-section"><h3>Активные invite</h3><div className="team-list">{adminInvites.length ? adminInvites.map((item) => <article key={item.id}><div><b>Invite</b><small>до {new Date(item.expires_at).toLocaleString('ru-RU')}</small></div></article>) : <p className="empty-comments">Нет активных invite.</p>}</div></section></>}</section></div>}
     {isSessionsOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setSessionsOpen(false)}><section className="archive-modal team-modal security-modal" role="dialog" aria-modal="true" aria-label="Сессии" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSessionsOpen(false)} aria-label="Закрыть">×</button><p className="eyebrow">БЕЗОПАСНОСТЬ</p><h2>Активные сессии</h2><button className="secondary-button session-revoke-all" onClick={revokeOtherSessions}>Выйти на других устройствах</button><div className="team-list">{sessions.map((session) => <article key={session.id}><div><b>{session.current ? 'Это устройство' : 'Активная сессия'}</b><small>Последняя активность: {new Date(session.last_seen_at).toLocaleString('ru-RU')}</small></div>{!session.current && <button className="danger-action" onClick={() => revokeSession(session)}>Отозвать</button>}</article>)}</div></section></div>}
 
-    {view === 'home' ? (!workspaceId ? <section className="home-screen empty-workspaces"><div className="welcome"><p className="eyebrow">ПРОСТРАНСТВ ПОКА НЕТ</p><h1>Начните с пространства.</h1><p>Аккаунт существует отдельно от рабочих пространств. Создайте своё первое пространство или присоединитесь к уже созданному.</p><button className="create-button" onClick={openWorkspaceComposer}>Создать пространство</button></div></section> : <section className="home-screen">
-      <div className="welcome"><p className="eyebrow">МОЯ РАБОТА</p><h1>Добрый вечер, {currentMember.name.split(' ')[0]}.</h1><p>Всё важное для команды — спокойно, в одном ритме.</p><button className="create-button" onClick={openBoard}>Открыть последнюю доску <span>→</span></button></div>
-      <section className="workspace-picker" aria-label="Выбор пространства"><div className="section-title"><div><p className="eyebrow">ПРОСТРАНСТВА</p><h2>Ваши пространства</h2></div><button className="subtle-button" onClick={openWorkspaceComposer}>＋ Создать пространство</button></div><div className="workspace-options">{workspaces.map((item) => <button className={item.id === workspaceId ? 'selected' : ''} key={item.id} onClick={() => { if (item.id !== workspaceId) void selectWorkspace(item); }}><span className="workspace-option-icon">⌁</span><span><b>{item.name}</b><small>{item.id === workspaceId ? 'Открыто сейчас' : 'Открыть пространство'}</small></span>{item.id === workspaceId && <i>✓</i>}</button>)}</div></section>
-      <section className="workspace-section"><div className="section-title"><div><p className="eyebrow">ПРОСТРАНСТВО</p><h2>{workspaceName}</h2></div><span className="workspace-actions"><button className="subtle-button" onClick={() => setNewBoardComposer((current) => !current)}>＋ Новый проект</button><button className="subtle-button danger-text" onClick={() => { const workspace = workspaces.find((item) => item.id === workspaceId); if (workspace) deleteOwnedWorkspace(workspace); }}>Удалить пространство</button></span></div>{isNewBoardComposer && <form className="new-board-form" onSubmit={createBoard}><input autoFocus value={newBoardTitle} onChange={(event) => setNewBoardTitle(event.target.value)} maxLength={200} placeholder="Название проекта" /><button className="create-button" type="submit" disabled={!newBoardTitle.trim() || isCreatingBoard}>{isCreatingBoard ? 'Создаём…' : 'Создать'}</button></form>}{boards.length ? boards.map((board) => <button className="board-tile" key={board.id} onClick={() => void selectBoard(board.id)}><span className="board-tile-icon">⌁</span><span><b>{board.title}</b><small>{board.id === boardId ? `${columns.length} колонки · ${columns.reduce((sum, column) => sum + column.cards.length, 0)} задач` : 'Открыть проект'}</small></span><span className="board-tile-arrow">→</span></button>) : <div className="empty-board-state"><b>В этом пространстве пока нет досок.</b><span>Создайте первую доску, когда будете готовы начать работу.</span></div>}</section>
-    </section>) : <>
+    {view === 'home' ? <section className="home-screen workspace-cards-screen">
+      <div className="welcome"><p className="eyebrow">МОЯ РАБОТА</p><h1>{workspaces.length ? `Добрый вечер, ${currentMember.name.split(' ')[0]}.` : 'Начните с пространства.'}</h1><p>{workspaces.length ? 'Проекты собраны внутри пространств — выберите нужную карту и продолжайте работу.' : 'Аккаунт существует отдельно от рабочих пространств. Создайте первое пространство или присоединитесь к уже созданному.'}</p>{workspaceId && boards.length > 0 && <button className="create-button" onClick={openBoard}>Открыть последнюю доску <span>→</span></button>}</div>
+      <section className="workspace-cards-section" aria-label="Ваши пространства"><div className="section-title"><div><p className="eyebrow">ПРОСТРАНСТВА</p><h2>Ваши пространства</h2></div><button className="subtle-button" onClick={openWorkspaceComposer}>＋ Создать пространство</button></div>{workspaces.length ? <div className="workspace-cards">{workspaces.map((workspace) => { const isActive = workspace.id === workspaceId; const cardBoards = workspaceBoards[workspace.id] ?? []; return <article key={workspace.id} className={`workspace-card ${isActive ? 'active' : ''} ${workspace.background_image_url ? 'has-background' : ''}`} style={workspace.background_image_url ? { backgroundImage: `linear-gradient(105deg, rgb(15 19 25 / 84%), rgb(15 19 25 / 62%)), url("${assetUrl(workspace.background_image_url)}")` } : undefined}><header><button type="button" className="workspace-card-title" onClick={() => { if (!isActive) void selectWorkspace(workspace); }}><span className="workspace-option-icon">⌁</span><span><b>{workspace.name}</b><small>{isActive ? 'Открыто сейчас' : 'Открыть пространство'}</small></span></button><span className="workspace-card-actions">{workspace.can_manage && <button type="button" className="subtle-button" title="Фон карты пространства" onClick={() => openWorkspaceBackgroundEditor(workspace)}>▧ Фон</button>}{isActive && <button type="button" className="subtle-button" onClick={() => setNewBoardComposer((current) => !current)}>＋ Проект</button>}</span></header>{workspaceBackgroundEditorId === workspace.id && <form className="workspace-card-background-form" onSubmit={saveWorkspaceBackground}><input autoFocus value={workspaceBackgroundDraft} onChange={(event) => setWorkspaceBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" aria-label="Фон пространства по ссылке" /><button type="submit" disabled={isSavingWorkspaceBackground}>{isSavingWorkspaceBackground ? 'Сохраняем…' : 'Сохранить'}</button><button type="button" onClick={() => { setWorkspaceBackgroundDraft(''); }}>Снять</button><button type="button" onClick={() => setWorkspaceBackgroundEditorId(null)}>×</button></form>}{isActive && isNewBoardComposer && <form className="new-board-form workspace-card-new-board" onSubmit={createBoard}><input autoFocus value={newBoardTitle} onChange={(event) => setNewBoardTitle(event.target.value)} maxLength={200} placeholder="Название проекта" /><button className="create-button" type="submit" disabled={!newBoardTitle.trim() || isCreatingBoard}>{isCreatingBoard ? 'Создаём…' : 'Создать'}</button></form>}<div className="workspace-card-projects">{cardBoards.length ? cardBoards.map((board) => <button className="workspace-card-project" key={board.id} onClick={() => void selectBoard(board.id)}><span>⌁</span><b>{board.title}</b><i>→</i></button>) : <p>Проектов пока нет.</p>}</div>{workspace.can_manage && <button type="button" className="workspace-card-delete" onClick={() => deleteOwnedWorkspace(workspace)}>Удалить пространство</button>}</article>; })}</div> : <div className="empty-board-state"><b>Пространств пока нет.</b><span>Создайте первое пространство, когда будете готовы начать работу.</span></div>}</section>
+    </section> : <>
       <section className="board-header">
         <div><button className="breadcrumbs" onClick={openHome}>{workspaceName} <span>/</span> {boardTitle}</button><div className="board-title-row">{isEditingBoardTitle ? <form className="board-title-form" onSubmit={(event) => { event.preventDefault(); saveBoardTitle(); }}><input autoFocus value={boardTitleDraft} onChange={(event) => setBoardTitleDraft(event.target.value)} maxLength={200} onKeyDown={(event) => { if (event.key === 'Escape') setEditingBoardTitle(false); }} /><button type="submit" disabled={isSavingBoardTitle}>✓</button></form> : <h1>{boardTitle}</h1>}<span className={`sync-status ${persistence}`}>{persistence === 'connected' ? 'Сохранено' : persistence === 'connecting' ? 'Подключение…' : 'Нет подключения'}</span><button className="title-edit" onClick={beginBoardRename} aria-label="Переименовать доску">✎</button></div></div>
         <div className="board-tools">
