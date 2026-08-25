@@ -940,7 +940,17 @@ export default function Home() {
     if (boardViewMode !== 'freeform' || event.target instanceof Element && event.target.closest('.card-list, textarea, input, select')) return;
     event.preventDefault();
     const delta = event.deltaY > 0 ? -0.08 : 0.08;
-    setFreeformZoom((current) => Math.max(0.42, Math.min(1.45, Math.round((current + delta) * 100) / 100)));
+    const board = event.currentTarget;
+    const bounds = board.getBoundingClientRect();
+    const cursorX = (event.clientX - bounds.left + board.scrollLeft) / freeformZoom;
+    const cursorY = (event.clientY - bounds.top + board.scrollTop) / freeformZoom;
+    const nextZoom = Math.max(0.42, Math.min(1.45, Math.round((freeformZoom + delta) * 100) / 100));
+    if (nextZoom === freeformZoom) return;
+    setFreeformZoom(nextZoom);
+    window.requestAnimationFrame(() => {
+      board.scrollLeft = Math.max(0, cursorX * nextZoom - (event.clientX - bounds.left));
+      board.scrollTop = Math.max(0, cursorY * nextZoom - (event.clientY - bounds.top));
+    });
   }
   function startFreeformInk(event: ReactPointerEvent<SVGSVGElement>) {
     if ((!isFreeformDrawing && !isFreeformErasing) || event.button !== 0 || isPublicViewer) return;
