@@ -518,6 +518,14 @@ struct CreateLabelRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateLabelRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct UpdateDiscordLabelRequest {
     #[serde(default)]
     name: Option<String>,
@@ -984,6 +992,7 @@ async fn main() {
         .route("/v1/boards/{board_id}/archived-cards", get(list_archived_cards))
         .route("/v1/boards/{board_id}/events", get(board_events))
         .route("/v1/boards/{board_id}/labels", post(create_label))
+        .route("/v1/labels/{label_id}", patch(update_label).delete(delete_label))
         .route("/v1/boards/{board_id}/lists", post(create_list))
         .route("/v1/lists/{list_id}", patch(update_list).delete(delete_list))
         .route("/v1/lists/{list_id}/move", post(move_list))
@@ -2315,6 +2324,35 @@ async fn create_label(State(state): State<AppState>, current: CurrentUser, Path(
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
     let _ = state.events.send(());
     Ok(Json(label))
+}
+
+async fn update_label(State(state): State<AppState>, current: CurrentUser, Path(label_id): Path<Uuid>, Json(request): Json<UpdateLabelRequest>) -> ApiResult<LabelResponse> {
+    let pool = database(&state)?;
+    let current_label = sqlx::query_as::<_, (Uuid, String, String)>("SELECT board_id, name, color FROM labels WHERE id = $1")
+        .bind(label_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "label_not_found", "Label was not found.".to_owned()))?;
+    ensure_board_permission(pool, current_label.0, current.id, "create_labels").await?;
+    let name = match request.name { Some(value) => valid_text(&value, "name", 60)?.to_owned(), None => current_label.1 };
+    let color = match request.color { Some(value) => valid_label_color(&value)?, None => current_label.2 };
+    let duplicate_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM labels WHERE board_id = $1 AND name = $2 AND id <> $3)")
+        .bind(current_label.0).bind(&name).bind(label_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if duplicate_exists { return Err(ApiError::bad_request("A label with this name already exists on the board.")); }
+    let label = sqlx::query_as::<_, LabelResponse>("UPDATE labels SET name = $1, color = $2 WHERE id = $3 RETURNING id, name, color")
+        .bind(name).bind(color).bind(label_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    let _ = state.events.send(());
+    Ok(Json(label))
+}
+
+async fn delete_label(State(state): State<AppState>, current: CurrentUser, Path(label_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    let board_id = sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM labels WHERE id = $1")
+        .bind(label_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "label_not_found", "Label was not found.".to_owned()))?;
+    ensure_board_permission(pool, board_id, current.id, "delete_labels").await?;
+    let deleted = sqlx::query("DELETE FROM labels WHERE id = $1").bind(label_id).execute(pool).await.map_err(ApiError::internal)?;
+    if deleted.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "label_not_found", "Label was not found.".to_owned())); }
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn update_list(State(state): State<AppState>, current: CurrentUser, Path(list_id): Path<Uuid>, Json(request): Json<UpdateListRequest>) -> ApiResult<ListResponse> {

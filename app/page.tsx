@@ -368,6 +368,7 @@ export default function Home() {
   const [cardSort, setCardSort] = useState<CardSort>('manual');
   const [labelsCollapsed, setLabelsCollapsed] = useState(false);
   const [isFilterOpen, setFilterOpen] = useState(false);
+  const [isBoardLabelsOpen, setBoardLabelsOpen] = useState(false);
   const [isSortOpen, setSortOpen] = useState(false);
   const [nextCardId, setNextCardId] = useState(100);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
@@ -432,6 +433,10 @@ export default function Home() {
   const [newLabelName, setNewLabelName] = useState('');
   const [newLabelColor, setNewLabelColor] = useState('#6B7CFF');
   const [isSavingLabel, setSavingLabel] = useState(false);
+  const [editingBoardLabel, setEditingBoardLabel] = useState<Label | null>(null);
+  const [boardLabelNameDraft, setBoardLabelNameDraft] = useState('');
+  const [boardLabelColorDraft, setBoardLabelColorDraft] = useState('#6B7CFF');
+  const [isSavingBoardLabel, setSavingBoardLabel] = useState(false);
   const [boardTitle, setBoardTitle] = useState('');
   const [boardBackgroundUrl, setBoardBackgroundUrl] = useState<string | null>(null);
   const [boardBackgroundFit, setBoardBackgroundFit] = useState<BoardBackgroundFit>('cover');
@@ -706,23 +711,24 @@ export default function Home() {
   }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
-    if (!isBoardMenuOpen && !isFilterOpen && !isSortOpen && !sidebarPanel && !columnMenuId) return;
+    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isSortOpen && !sidebarPanel && !columnMenuId) return;
     const closePopovers = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
       if (isBoardMenuOpen && !event.target.closest('.board-menu-control')) setBoardMenuOpen(false);
       if (isFilterOpen && !event.target.closest('.filter-control')) setFilterOpen(false);
+      if (isBoardLabelsOpen && !event.target.closest('.board-labels-control')) { setBoardLabelsOpen(false); setEditingBoardLabel(null); }
       if (isSortOpen && !event.target.closest('.board-sort-control')) setSortOpen(false);
       if (columnMenuId && !event.target.closest('.column-actions')) setColumnMenuId(null);
       if (sidebarPanel && !event.target.closest('.property-popover, .quick-action, .member-plus, .label-plus')) setSidebarPanel(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setBoardMenuOpen(false); setFilterOpen(false); setSortOpen(false); setColumnMenuId(null); setSidebarPanel(null);
+      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setSortOpen(false); setColumnMenuId(null); setSidebarPanel(null);
     };
     window.addEventListener('pointerdown', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
-  }, [columnMenuId, isBoardMenuOpen, isFilterOpen, isSortOpen, sidebarPanel]);
+  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isFilterOpen, isSortOpen, sidebarPanel]);
 
   useEffect(() => {
     if (!cardContextMenu && !columnContextMenu) return;
@@ -1167,6 +1173,51 @@ export default function Home() {
       .then((label) => { setBoardLabels((current) => current.some((item) => item.id === label.id) ? current.map((item) => item.id === label.id ? label : item) : [...current, label]); setNewLabelName(''); toggleSelectedLabel(label); })
       .catch(() => showToast('Не удалось создать метку'))
       .finally(() => setSavingLabel(false));
+  }
+  function beginBoardLabelEdit(label: Label) {
+    setEditingBoardLabel(label);
+    setBoardLabelNameDraft(label.name);
+    setBoardLabelColorDraft(label.color);
+  }
+  function saveBoardLabel(event: FormEvent) {
+    event.preventDefault();
+    const label = editingBoardLabel;
+    const name = boardLabelNameDraft.trim();
+    if (!label || !name || isSavingBoardLabel) return;
+    if (persistence !== 'connected') {
+      const saved = { ...label, name, color: boardLabelColorDraft };
+      setBoardLabels((current) => current.map((item) => item.id === saved.id ? saved : item));
+      setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => ({ ...card, labels: card.labels.map((item) => item.id === saved.id ? saved : item) })) })));
+      setSelected((current) => current ? { ...current, labels: current.labels.map((item) => item.id === saved.id ? saved : item) } : current);
+      setEditingBoardLabel(null);
+      return;
+    }
+    setSavingBoardLabel(true);
+    void fetch(`${API_URL}/v1/labels/${label.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, color: boardLabelColorDraft }) })
+      .then(async (response) => { if (!response.ok) throw new Error('label update failed'); return response.json() as Promise<Label>; })
+      .then((saved) => {
+        setBoardLabels((current) => current.map((item) => item.id === saved.id ? saved : item));
+        setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => ({ ...card, labels: card.labels.map((item) => item.id === saved.id ? saved : item) })) })));
+        setSelected((current) => current ? { ...current, labels: current.labels.map((item) => item.id === saved.id ? saved : item) } : current);
+        setEditingBoardLabel(null); showToast('Метка сохранена');
+      })
+      .catch(() => showToast('Не удалось сохранить метку'))
+      .finally(() => setSavingBoardLabel(false));
+  }
+  function removeBoardLabel(label: Label) {
+    if (isSavingBoardLabel) return;
+    if (persistence !== 'connected') {
+      setBoardLabels((current) => current.filter((item) => item.id !== label.id));
+      setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => ({ ...card, labels: card.labels.filter((item) => item.id !== label.id) })) })));
+      setSelected((current) => current ? { ...current, labels: current.labels.filter((item) => item.id !== label.id) } : current);
+      setEditingBoardLabel(null);
+      return;
+    }
+    setSavingBoardLabel(true);
+    void fetch(`${API_URL}/v1/labels/${label.id}`, { method: 'DELETE' })
+      .then((response) => { if (!response.ok) throw new Error('label delete failed'); setBoardLabels((current) => current.filter((item) => item.id !== label.id)); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => ({ ...card, labels: card.labels.filter((item) => item.id !== label.id) })) }))); setSelected((current) => current ? { ...current, labels: current.labels.filter((item) => item.id !== label.id) } : current); setEditingBoardLabel(null); showToast('Метка удалена'); })
+      .catch(() => showToast('Не удалось удалить метку'))
+      .finally(() => setSavingBoardLabel(false));
   }
   function replaceSelectedMembers(members: Member[]) {
     if (!selected) return;
@@ -1919,6 +1970,16 @@ export default function Home() {
       <section className="board-header">
         <div><button className="breadcrumbs" onClick={openHome}>{workspaceName} <span>/</span> {boardTitle}</button><div className="board-title-row">{isEditingBoardTitle ? <form className="board-title-form" onSubmit={(event) => { event.preventDefault(); saveBoardTitle(); }}><input autoFocus value={boardTitleDraft} onChange={(event) => setBoardTitleDraft(event.target.value)} maxLength={200} onKeyDown={(event) => { if (event.key === 'Escape') setEditingBoardTitle(false); }} /><button type="submit" disabled={isSavingBoardTitle}>✓</button></form> : <h1>{boardTitle}</h1>}<span className={`sync-status ${persistence}`}>{persistence === 'connected' ? 'Сохранено' : persistence === 'connecting' ? 'Подключение…' : 'Нет подключения'}</span><button className="title-edit" onClick={beginBoardRename} aria-label="Переименовать доску">✎</button></div></div>
         <div className="board-tools"><div className="avatars">{workspaceMembers.slice(0, 3).map((person) => <Avatar key={person.name} member={person} />)}{workspaceMembers.length > 3 && <span className="more-members">+{workspaceMembers.length - 3}</span>}</div><div className="filter-control"><button className={`secondary-button ${filterMode !== 'all' ? 'active-filter' : ''}`} onClick={() => setFilterOpen((current) => !current)}>⌘ Фильтры</button>{isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['due', 'С дедлайном'], ['overdue', 'Просроченные']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}</div>}</div><button className="secondary-button" onClick={openArchive}>Архив</button><button className="share-button" onClick={openTeam}>Команда</button><div className="board-menu-control"><button className="secondary-button more" onClick={() => setBoardMenuOpen((current) => !current)} aria-expanded={isBoardMenuOpen}>•••</button>{isBoardMenuOpen && <div className="board-menu">{!isPublicViewer && <button onClick={() => { setBoardMenuOpen(false); openDiscordIntegration(); }}>⌁ Discord API</button>}<button onClick={exportCurrentBoard}>⇩ Экспорт JSON</button><button onClick={() => importFileRef.current?.click()}>⇧ Импорт Trello / Flowboard JSON</button><button className="danger-action" onClick={deleteCurrentBoard}>Удалить проект</button><input ref={importFileRef} type="file" accept="application/json,.json" onChange={importBoardFile} /><section className="visibility-control"><b>Доступ к доске</b><p>{boardVisibility === 'public' ? 'Public: любой аккаунт может только смотреть.' : 'Private: видят только участники проекта.'}</p><div><button type="button" className={boardVisibility === 'public' ? 'selected' : ''} onClick={() => changeBoardVisibility('public')}>Public · просмотр всем</button><button type="button" className={boardVisibility === 'private' ? 'selected' : ''} onClick={() => changeBoardVisibility('private')}>Private</button></div>{boardVisibility === 'public' && <button className="copy-public-link" type="button" onClick={copyPublicBoardLink}>Скопировать публичную ссылку</button>}</section><form onSubmit={saveBoardBackground}><label>Фон проекта по ссылке<input value={backgroundDraft} onChange={(event) => setBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" /></label><section className="background-display-control"><b>Отображение фона</b><div className="background-fit-options"><button type="button" className={boardBackgroundFit === 'cover' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('cover')}>Заполнить</button><button type="button" className={boardBackgroundFit === 'contain' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('contain')}>Целиком</button><button type="button" className={boardBackgroundFit === 'fill' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('fill')}>Растянуть</button></div><div className="background-position-options"><button type="button" className={boardBackgroundPosition === 'top' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('top')}>↑ Верх</button><button type="button" className={boardBackgroundPosition === 'center' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('center')}>⊙ Центр</button><button type="button" className={boardBackgroundPosition === 'bottom' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('bottom')}>↓ Низ</button></div><small>«Целиком» сохраняет изображение без обрезки, «Растянуть» подгоняет его под экран.</small></section><div><button type="submit" disabled={isSavingBackground}>{isSavingBackground ? 'Сохраняем…' : 'Сохранить фон'}</button><button type="button" onClick={() => { setBackgroundDraft(''); }}>Снять</button></div></form><input ref={boardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardBackground} /><button type="button" onClick={() => boardBackgroundFileRef.current?.click()} disabled={isUploadingBoardBackground}>{isUploadingBoardBackground ? 'Загружаем фон…' : '▧ Загрузить фон проекта'}</button></div>}</div></div>
+        <div className="board-labels-control">
+          <button className={`secondary-button ${isBoardLabelsOpen ? 'active-filter' : ''}`} type="button" onClick={() => { setBoardLabelsOpen((current) => !current); setEditingBoardLabel(null); }}>▰ Метки</button>
+          {isBoardLabelsOpen && <div className="board-labels-popover">
+            <div className="popover-heading"><b>Метки проекта</b><button type="button" onClick={() => { setBoardLabelsOpen(false); setEditingBoardLabel(null); }} aria-label="Закрыть">×</button></div>
+            <p className="board-labels-copy">Метки доступны только внутри этого проекта.</p>
+            <div className="board-labels-list">{boardLabels.length ? boardLabels.map((label) => <article key={label.id}>
+              {editingBoardLabel?.id === label.id ? <form onSubmit={saveBoardLabel}><input autoFocus value={boardLabelNameDraft} onChange={(event) => setBoardLabelNameDraft(event.target.value)} maxLength={60} aria-label="Название метки" /><input type="color" value={boardLabelColorDraft} onChange={(event) => setBoardLabelColorDraft(event.target.value)} aria-label="Цвет метки" /><button type="submit" disabled={!boardLabelNameDraft.trim() || isSavingBoardLabel}>Сохранить</button><button type="button" className="text-action" onClick={() => setEditingBoardLabel(null)}>Отмена</button></form> : <><span className="board-label-chip" style={{ backgroundColor: label.color }}><i />{label.name}</span>{!isPublicViewer && <span><button type="button" className="text-action" onClick={() => beginBoardLabelEdit(label)}>Изменить</button><button type="button" className="text-action danger-text" onClick={() => removeBoardLabel(label)}>Удалить</button></span>}</>}</article>) : <p className="empty-comments">На этой доске пока нет меток.</p>}</div>
+            {!isPublicViewer && <form className="new-label-form board-label-create" onSubmit={createLabel}><input value={newLabelName} onChange={(event) => setNewLabelName(event.target.value)} maxLength={60} placeholder="Новая метка" aria-label="Название новой метки" /><input type="color" value={newLabelColor} onChange={(event) => setNewLabelColor(event.target.value)} aria-label="Цвет метки" /><button type="submit" disabled={!newLabelName.trim() || isSavingLabel}>{isSavingLabel ? 'Создаём…' : 'Создать'}</button></form>}
+          </div>}
+        </div>
       </section>
       {!isPublicViewer && isDiscordIntegrationOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDiscordIntegrationOpen(false)}>
           <section className="archive-modal discord-integration-modal" role="dialog" aria-modal="true" aria-label="Discord API" onMouseDown={(event) => event.stopPropagation()}>
