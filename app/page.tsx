@@ -776,7 +776,10 @@ export default function Home() {
       if (filterMode === 'overdue') return Boolean(card.dueAt && new Date(card.dueAt).getTime() < Date.now());
       return true;
     });
-    if (cardSort === 'manual') return { ...column, cards };
+    // Manual order keeps completed work out of the active queue. The actual
+    // list order is updated at completion time, this is only a safe fallback
+    // for data imported from an older board.
+    if (cardSort === 'manual') return { ...column, cards: [...cards.filter((card) => !card.completedAt), ...cards.filter((card) => card.completedAt)] };
     const activityTime = (card: Card) => card.lastActivityAt ? new Date(card.lastActivityAt).getTime() || 0 : 0;
     return { ...column, cards: [...cards].sort((left, right) => cardSort === 'priority'
       ? (right.priority ?? 0) - (left.priority ?? 0)
@@ -2675,12 +2678,45 @@ export default function Home() {
   function toggleCardCompletion(card: Card, event?: ReactMouseEvent<HTMLButtonElement>) {
     event?.stopPropagation();
     const completedAt = card.completedAt ? undefined : new Date().toISOString();
+    const shouldReorder = cardSort === 'manual';
+    const sourceList = columns.find((column) => column.cards.some((item) => item.id === card.id));
+    const sourceElement = typeof document === 'undefined' ? null : Array.from(document.querySelectorAll<HTMLElement>('[data-card-id]')).find((element) => element.dataset.cardId === String(card.id));
+    const sourceBounds = sourceElement?.getBoundingClientRect();
     updateSelectedCard(card.id === selected?.id ? { completedAt } : {});
-    setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((item) => item.id === card.id ? { ...item, completedAt } : item) })));
+    setColumns((current) => current.map((column) => {
+      const matchingCard = column.cards.find((item) => item.id === card.id);
+      if (!matchingCard) return column;
+      const updatedCard = { ...matchingCard, completedAt };
+      if (!shouldReorder) return { ...column, cards: column.cards.map((item) => item.id === card.id ? updatedCard : item) };
+      const remaining = column.cards.filter((item) => item.id !== card.id);
+      const insertionIndex = completedAt ? remaining.length : Math.max(0, remaining.findIndex((item) => Boolean(item.completedAt)));
+      const cards = [...remaining];
+      cards.splice(insertionIndex, 0, updatedCard);
+      return { ...column, cards };
+    }));
+    if (shouldReorder && sourceList && sourceBounds && typeof window !== 'undefined') {
+      const motionKey = Date.now();
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        const targetElement = Array.from(document.querySelectorAll<HTMLElement>('[data-card-id]')).find((element) => element.dataset.cardId === String(card.id));
+        if (!targetElement) return;
+        const targetBounds = targetElement.getBoundingClientRect();
+        if (Math.abs(targetBounds.top - sourceBounds.top) < 2 && Math.abs(targetBounds.left - sourceBounds.left) < 2) return;
+        setCardMoveMotion({ key: motionKey, cardId: String(card.id), title: card.title, from: sourceBounds, to: targetBounds });
+        window.setTimeout(() => setCardMoveMotion((current) => current?.key === motionKey ? null : current), 480);
+      }));
+    }
     if (persistence !== 'connected' || typeof card.id !== 'string') return;
     void fetch(`${API_URL}/v1/cards/${card.id}/completion`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_completed: !card.completedAt }) })
       .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось сохранить статус задачи'); })
       .catch((error) => { updateSelectedCard(card.id === selected?.id ? { completedAt: card.completedAt } : {}); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((item) => item.id === card.id ? { ...item, completedAt: card.completedAt } : item) }))); showToast(error instanceof Error ? error.message : 'Не удалось сохранить статус задачи'); });
+    if (shouldReorder && typeof sourceList.id === 'string') {
+      const targetColumn = columns.find((column) => column.id === sourceList.id);
+      const remaining = (targetColumn?.cards ?? []).filter((item) => item.id !== card.id);
+      const beforeCard = completedAt ? undefined : remaining.find((item) => Boolean(item.completedAt));
+      void fetch(`${API_URL}/v1/cards/${card.id}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target_list_id: sourceList.id, before_card_id: beforeCard?.id ?? null }) })
+        .then((response) => { if (!response.ok) throw new Error('move failed'); })
+        .catch(() => showToast('Порядок выполненных задач не сохранён: обновите доску'));
+    }
   }
   function setSelectedCardPublicVisibility(isPublic: boolean) {
     if (!selected) return;
