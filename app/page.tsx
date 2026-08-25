@@ -967,6 +967,22 @@ export default function Home() {
         .catch(() => showToast('Порядок колонок не сохранён: обновите доску'));
     }
   }
+  function moveColumnBelow(columnId: EntityId, belowColumnId: EntityId) {
+    if (columnId === belowColumnId) return;
+    setColumns((current) => {
+      const moving = current.find((column) => column.id === columnId);
+      const target = current.find((column) => column.id === belowColumnId);
+      if (!moving || !target) return current;
+      const gridRow = Math.max(0, ...current.filter((column) => column.id !== moving.id && column.gridColumn === target.gridColumn).map((column) => column.gridRow)) + 1;
+      return current.map((column) => column.id === moving.id ? { ...column, gridColumn: target.gridColumn, gridRow } : column);
+    });
+    clearColumnDragState();
+    if (persistence === 'connected' && typeof columnId === 'string' && typeof belowColumnId === 'string') {
+      void fetch(`${API_URL}/v1/lists/${columnId}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ before_list_id: null, below_list_id: belowColumnId }) })
+        .then((response) => { if (!response.ok) throw new Error('vertical list move failed'); showToast('Колонка перемещена ниже'); })
+        .catch(() => showToast('Позиция колонки не сохранена: обновите доску'));
+    }
+  }
   function addColumn(belowColumn?: Column) {
     const title = `Новая колонка ${columns.length + 1}`;
     if (persistence === 'connected' && boardId) {
@@ -982,6 +998,38 @@ export default function Home() {
       return [...current, { id: current.length + 1, title, gridColumn, gridRow, cards: [] }];
     }); showToast(belowColumn ? 'Колонка добавлена ниже' : 'Колонка добавлена');
   }
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board || !draggingColumnId) return;
+    const columnsInBoard = () => Array.from(board.querySelectorAll<HTMLElement>(':scope > .column'));
+    const clearDropHint = () => columnsInBoard().forEach((column) => column.classList.remove('column-drop-below-target'));
+    const targetForEvent = (event: DragEvent) => {
+      const target = event.target instanceof Element ? event.target.closest<HTMLElement>('.column') : null;
+      if (!target || !board.contains(target)) return null;
+      const bounds = target.getBoundingClientRect();
+      return event.clientY >= bounds.bottom - Math.min(76, bounds.height * .28) ? target : null;
+    };
+    const onDragOver = (event: DragEvent) => {
+      const target = targetForEvent(event);
+      if (!target) { clearDropHint(); return; }
+      event.preventDefault(); event.stopPropagation(); clearDropHint(); target.classList.add('column-drop-below-target');
+    };
+    const onDrop = (event: DragEvent) => {
+      const target = targetForEvent(event);
+      if (!target) return;
+      event.preventDefault(); event.stopPropagation();
+      const index = columnsInBoard().indexOf(target);
+      const belowColumn = visibleColumns[index];
+      clearDropHint();
+      if (belowColumn) moveColumnBelow(draggingColumnId, belowColumn.id);
+    };
+    const onDragEnd = () => clearDropHint();
+    board.addEventListener('dragover', onDragOver, true);
+    board.addEventListener('drop', onDrop, true);
+    window.addEventListener('dragend', onDragEnd);
+    return () => { board.removeEventListener('dragover', onDragOver, true); board.removeEventListener('drop', onDrop, true); window.removeEventListener('dragend', onDragEnd); clearDropHint(); };
+  }, [draggingColumnId, visibleColumns]);
+
   function openCard(card: Card) {
     setSelected(card);
     setEditingCardDescription(false);

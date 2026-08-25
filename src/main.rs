@@ -381,7 +381,10 @@ struct CreateListRequest {
 
 #[derive(Deserialize)]
 struct MoveListRequest {
+    #[serde(default)]
     before_list_id: Option<Uuid>,
+    #[serde(default)]
+    below_list_id: Option<Uuid>,
 }
 
 #[derive(Serialize, FromRow)]
@@ -2446,6 +2449,19 @@ async fn move_list(State(state): State<AppState>, current: CurrentUser, Path(lis
     let list = sqlx::query_as::<_, (Uuid, i32)>("SELECT board_id, grid_column FROM lists WHERE id = $1 FOR UPDATE")
         .bind(list_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "list_not_found", "List was not found.".to_owned()))?;
+    if let Some(below_list_id) = request.below_list_id {
+        if below_list_id == list_id { transaction.commit().await.map_err(ApiError::internal)?; return Ok(StatusCode::NO_CONTENT); }
+        let target_column = sqlx::query_scalar::<_, i32>("SELECT grid_column FROM lists WHERE id = $1 AND board_id = $2 FOR UPDATE")
+            .bind(below_list_id).bind(list.0).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::bad_request("Target list is unavailable."))?;
+        let target_row = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_row), 0) + 1 FROM lists WHERE board_id = $1 AND grid_column = $2 AND id <> $3")
+            .bind(list.0).bind(target_column).bind(list_id).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("UPDATE lists SET grid_column = $1, grid_row = $2, updated_at = now() WHERE id = $3")
+            .bind(target_column).bind(target_row).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        transaction.commit().await.map_err(ApiError::internal)?;
+        let _ = state.events.send(());
+        return Ok(StatusCode::NO_CONTENT);
+    }
     let target_column = match request.before_list_id {
         Some(before_list_id) if before_list_id == list_id => { transaction.commit().await.map_err(ApiError::internal)?; return Ok(StatusCode::NO_CONTENT); }
         Some(before_list_id) => sqlx::query_scalar::<_, i32>("SELECT grid_column FROM lists WHERE id = $1 AND board_id = $2 FOR UPDATE")
