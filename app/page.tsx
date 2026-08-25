@@ -596,6 +596,7 @@ export default function Home() {
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
+  const workspaceBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const cardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const isDrawingRef = useRef(false);
   const diagramStartRef = useRef<DiagramPoint | null>(null);
@@ -2467,11 +2468,20 @@ export default function Home() {
   function saveWorkspaceBackground(event: FormEvent) {
     event.preventDefault();
     if (!workspaceBackgroundEditorId || isSavingWorkspaceBackground) return;
-    const background_image_url = workspaceBackgroundDraft.trim() || null;
+    workspaceBackgroundFileRef.current?.click();
+  }
+  function uploadWorkspaceBackground(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !workspaceBackgroundEditorId || isSavingWorkspaceBackground) return;
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 50 * 1024 * 1024) { showToast('Фон должен быть JPEG, PNG, GIF или WebP до 50 МиБ'); return; }
+    const workspaceIdToUpload = workspaceBackgroundEditorId;
+    const form = new FormData(); form.append('file', file);
     setSavingWorkspaceBackground(true);
-    void fetch(`${API_URL}/v1/workspaces/${workspaceBackgroundEditorId}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url }) })
-      .then((response) => { if (!response.ok) throw new Error('workspace background save failed'); setWorkspaces((current) => current.map((workspace) => workspace.id === workspaceBackgroundEditorId ? { ...workspace, background_image_url } : workspace)); setWorkspaceBackgroundEditorId(null); showToast(background_image_url ? 'Фон карты пространства установлен' : 'Фон карты пространства снят'); })
-      .catch(() => showToast('Не удалось сохранить фон: нужен HTTPS-адрес изображения'))
+    void fetch(`${API_URL}/v1/workspaces/${workspaceIdToUpload}/background/file`, { method: 'POST', body: form })
+      .then(async (response) => { if (!response.ok) throw new Error('workspace background upload failed'); return response.json() as Promise<{ url: string }>; })
+      .then(({ url }) => { setWorkspaces((current) => current.map((workspace) => workspace.id === workspaceIdToUpload ? { ...workspace, background_image_url: url } : workspace)); setWorkspaceBackgroundDraft(`/v1/workspaces/${workspaceIdToUpload}/background/file`); setWorkspaceBackgroundEditorId(null); showToast('Фон карты пространства загружен'); })
+      .catch(() => showToast('Не удалось загрузить фон карты пространства'))
       .finally(() => setSavingWorkspaceBackground(false));
   }
   function clearWorkspaceBackground() {
@@ -2658,6 +2668,7 @@ export default function Home() {
         {account?.user.is_system_owner && <button className="top-utility-button" type="button" onClick={openAdmin} aria-label="Открыть администрирование">⚙ <span>Админ</span></button>}
         <button className="theme-button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label="Переключить тему">{theme === 'dark' ? '☾' : '☀'} <span>{theme === 'dark' ? 'Ночь' : 'День'}</span></button>{!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
     </header>
+    <input ref={workspaceBackgroundFileRef} className="workspace-background-file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadWorkspaceBackground} />
 
     {(view === 'home' || (view === 'board' && !boardBackgroundUrl)) && <div className="default-board-ambient" aria-hidden="true">{Array.from({ length: 84 }, (_, index) => <i key={index} />)}</div>}
 

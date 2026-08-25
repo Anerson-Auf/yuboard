@@ -411,6 +411,8 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-priority-corner { border-color: transparent; background: transparent; box-shadow: none; backdrop-filter: none; }.new-checklist-form input, .conversation-panel .comment-composer textarea { background: transparent; }
 @media (max-width: 760px) { .workspace-cards { grid-template-columns: 1fr; }.workspace-card-project { flex-basis: min(160px, 100%); } }
 .card-quick-actions { align-items: center; justify-content: space-between; }.card-quick-actions-left, .card-quick-actions-right { display: inline-flex; align-items: center; gap: 5px; }.card-quick-actions-right { margin-left: auto; }
+.workspace-background-file-input { position: fixed; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }.workspace-card-background-form input:not([type='file']) { display: none; }.workspace-card-background-form button[type='submit'] { font-size: 0; }.workspace-card-background-form button[type='submit']::after { content: '▧ Выбрать файл'; font-size: 11px; }.workspace-cards { grid-template-columns: repeat(auto-fill, minmax(340px, 390px)); }.workspace-card { min-height: 215px; }.workspace-card-projects { max-height: 170px; }.workspace-cards-section > .section-title > .subtle-button { min-height: 38px; padding: 9px 12px; font-size: 13px; font-weight: 800; }
+@media (max-width: 760px) { .workspace-cards { grid-template-columns: 1fr; } }
 .new-checklist-form input { padding-left: 0; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent; }.new-checklist-form input:focus { border-bottom-color: var(--primary); }
 @media (max-width: 760px) { .board-tools { justify-content: flex-start; } }
 

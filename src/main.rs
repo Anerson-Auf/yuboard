@@ -1169,6 +1169,7 @@ async fn main() {
         .route("/v1/workspaces", get(list_workspaces).post(create_workspace))
         .route("/v1/workspaces/{workspace_id}", axum::routing::delete(delete_workspace))
         .route("/v1/workspaces/{workspace_id}/background", put(update_workspace_background))
+        .route("/v1/workspaces/{workspace_id}/background/file", get(download_workspace_background).post(upload_workspace_background))
         .route("/v1/workspaces/{workspace_id}/members", get(list_workspace_members))
         .route("/v1/workspaces/{workspace_id}/available-accounts", get(list_available_workspace_accounts))
         .route("/v1/workspaces/{workspace_id}/members/existing", post(add_existing_workspace_member))
@@ -1879,7 +1880,7 @@ async fn archive_workspace(State(state): State<AppState>, current: CurrentUser, 
 async fn delete_workspace(State(state): State<AppState>, current: CurrentUser, Path(workspace_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_workspace_owner(pool, workspace_id, current.id).await?;
-    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1")
+    let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id JOIN boards b ON b.id = c.board_id WHERE b.workspace_id = $1 UNION ALL SELECT wb.object_key FROM workspace_backgrounds wb WHERE wb.workspace_id = $1")
         .bind(workspace_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let deleted = sqlx::query("DELETE FROM workspaces WHERE id = $1").bind(workspace_id).execute(pool).await.map_err(ApiError::internal)?;
     if deleted.rows_affected() == 0 { return Err(ApiError::bad_request("Workspace is unavailable.")); }
@@ -1891,22 +1892,76 @@ async fn delete_workspace(State(state): State<AppState>, current: CurrentUser, P
 
 async fn update_workspace_background(State(state): State<AppState>, current: CurrentUser, Path(workspace_id): Path<Uuid>, Json(request): Json<UpdateBoardBackgroundRequest>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
-    let is_owner: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.role = 'owner')")
-        .bind(workspace_id).bind(current.id).fetch_one(pool).await.map_err(ApiError::internal)?;
-    if !is_owner { return Err(ApiError::forbidden("Only the workspace owner can change its card background.")); }
+    ensure_workspace_background_owner(pool, workspace_id, current.id).await?;
     let url = match request.background_image_url {
         Some(value) if !value.trim().is_empty() => {
             let value = value.trim();
-            if value.len() > 2_000 || !value.starts_with("https://") { return Err(ApiError::bad_request("Workspace background must be an HTTPS image URL.")); }
+            if value.len() > 2_000 || !(value.starts_with("https://") || value.starts_with("/v1/workspaces/")) { return Err(ApiError::bad_request("Workspace background must be an HTTPS image URL or an uploaded Flowboard file.")); }
             Some(value.to_owned())
         }
         _ => None,
     };
+    let uploaded_url = format!("/v1/workspaces/{workspace_id}/background/file");
+    let previous_key = if url.as_deref() == Some(uploaded_url.as_str()) { None } else {
+        sqlx::query_scalar::<_, Option<String>>("SELECT object_key FROM workspace_backgrounds WHERE workspace_id = $1")
+            .bind(workspace_id).fetch_optional(pool).await.map_err(ApiError::internal)?.flatten()
+    };
     let updated = sqlx::query("UPDATE workspaces SET background_image_url = $1 WHERE id = $2 AND archived_at IS NULL")
         .bind(url).bind(workspace_id).execute(pool).await.map_err(ApiError::internal)?;
     if updated.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "workspace_not_found", "Workspace was not found.".to_owned())); }
+    if let Some(previous_key) = previous_key {
+        sqlx::query("DELETE FROM workspace_backgrounds WHERE workspace_id = $1").bind(workspace_id).execute(pool).await.map_err(ApiError::internal)?;
+        let _ = tokio::fs::remove_file(state.upload_dir.join(previous_key)).await;
+    }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn ensure_workspace_background_owner(pool: &PgPool, workspace_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
+    let is_owner: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.role = 'owner')")
+        .bind(workspace_id).bind(actor_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if is_owner { Ok(()) } else { Err(ApiError::forbidden("Only the workspace owner can change its card background.")) }
+}
+
+async fn upload_workspace_background(State(state): State<AppState>, current: CurrentUser, Path(workspace_id): Path<Uuid>, mut multipart: Multipart) -> ApiResult<BoardBackgroundUploadResponse> {
+    let pool = database(&state)?;
+    ensure_workspace_background_owner(pool, workspace_id, current.id).await?;
+    let field = multipart.next_field().await.map_err(|_| ApiError::bad_request("Workspace background upload form is invalid."))?
+        .ok_or_else(|| ApiError::bad_request("Workspace background image file is required."))?;
+    if field.name() != Some("file") { return Err(ApiError::bad_request("Workspace background image field must be named file.")); }
+    let original_name = field.file_name().unwrap_or("workspace-background").replace(['/', '\\'], "_");
+    let media_type = field.content_type().map(ToString::to_string).unwrap_or_default();
+    if !matches!(media_type.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
+        return Err(ApiError::bad_request("Workspace background must be a JPEG, PNG, GIF, or WebP image."));
+    }
+    let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Workspace background image could not be read."))?;
+    if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Workspace background must be between 1 byte and 50 MiB.")); }
+    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Workspace background image type is unsupported."))?;
+    let object_key = format!("workspace-background-{}.{}", Uuid::new_v4(), extension);
+    let path = state.upload_dir.join(&object_key);
+    tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "workspace background write failed"); ApiError::storage() })?;
+    let previous_key = sqlx::query_scalar::<_, Option<String>>("SELECT object_key FROM workspace_backgrounds WHERE workspace_id = $1")
+        .bind(workspace_id).fetch_optional(pool).await.map_err(ApiError::internal)?.flatten();
+    let url = format!("/v1/workspaces/{workspace_id}/background/file");
+    let result = sqlx::query("INSERT INTO workspace_backgrounds (workspace_id, uploaded_by, object_key, original_name, media_type, byte_size) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (workspace_id) DO UPDATE SET uploaded_by = EXCLUDED.uploaded_by, object_key = EXCLUDED.object_key, original_name = EXCLUDED.original_name, media_type = EXCLUDED.media_type, byte_size = EXCLUDED.byte_size, created_at = now()")
+        .bind(workspace_id).bind(current.id).bind(&object_key).bind(&original_name).bind(&media_type).bind(bytes.len() as i64).execute(pool).await;
+    if let Err(error) = result { let _ = tokio::fs::remove_file(&path).await; return Err(ApiError::internal(error)); }
+    sqlx::query("UPDATE workspaces SET background_image_url = $1 WHERE id = $2 AND archived_at IS NULL")
+        .bind(&url).bind(workspace_id).execute(pool).await.map_err(ApiError::internal)?;
+    if let Some(previous_key) = previous_key { let _ = tokio::fs::remove_file(state.upload_dir.join(previous_key)).await; }
+    let _ = state.events.send(());
+    Ok(Json(BoardBackgroundUploadResponse { url: format!("{url}?v={}", Uuid::new_v4()) }))
+}
+
+async fn download_workspace_background(State(state): State<AppState>, current: CurrentUser, Path(workspace_id): Path<Uuid>) -> Result<Response, ApiError> {
+    let background = sqlx::query_as::<_, (String, String)>("SELECT wb.object_key, wb.media_type FROM workspace_backgrounds wb INNER JOIN workspaces w ON w.id = wb.workspace_id WHERE wb.workspace_id = $1 AND w.archived_at IS NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = w.id AND wm.user_id = $2) OR EXISTS (SELECT 1 FROM boards b JOIN board_members bm ON bm.board_id = b.id WHERE b.workspace_id = w.id AND b.archived_at IS NULL AND bm.user_id = $2))")
+        .bind(workspace_id).bind(current.id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "workspace_background_not_found", "Workspace background was not found.".to_owned()))?;
+    let bytes = tokio::fs::read(state.upload_dir.join(background.0)).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "workspace_background_not_found", "Workspace background file was not found.".to_owned()) }
+        else { tracing::error!(?error, "workspace background read failed"); ApiError::storage() }
+    })?;
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"))], bytes).into_response())
 }
 
 async fn list_workspaces(State(state): State<AppState>, current: CurrentUser) -> ApiResult<Vec<WorkspaceResponse>> {
