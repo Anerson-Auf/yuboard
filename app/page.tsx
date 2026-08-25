@@ -89,7 +89,7 @@ function homeGreetingForLocalTime(date = new Date()) {
   return 'Рад видеть вас в столь поздний час';
 }
 
-type StarfallParticle = { x: number; y: number; vx: number; vy: number; size: number; alpha: number; spin: number; rotation: number; phase: number };
+type StarfallParticle = { x: number; y: number; vx: number; vy: number; size: number; alpha: number; spin: number; rotation: number };
 
 function AmbientStarfall() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -106,19 +106,19 @@ function AmbientStarfall() {
     let particles: StarfallParticle[] = [];
     let coinReady = false;
     const random = (min: number, max: number) => min + Math.random() * (max - min);
-    const createParticle = (spread: boolean): StarfallParticle => {
+    const createParticle = (): StarfallParticle => {
       const speed = random(70, 185);
       const angle = random(108, 162) * Math.PI / 180;
+      const fromTop = Math.random() < .46;
       return {
-        x: spread ? random(-width * .15, width + 320) : random(-width * .05, width + 280),
-        y: spread ? random(-height * .45, height * 1.05) : random(-height * .35, height * .65),
+        x: fromTop ? random(-width * .05, width + 280) : random(width + 20, width + 280),
+        y: fromTop ? random(-height * .35, -16) : random(-height * .35, height * .65),
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         size: random(14, 33),
         alpha: random(.3, .72),
         spin: random(-2.8, 2.8),
         rotation: random(0, Math.PI * 2),
-        phase: random(0, Math.PI * 2),
       };
     };
     const resize = () => {
@@ -130,13 +130,13 @@ function AmbientStarfall() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      particles = Array.from({ length: 48 }, () => createParticle(true));
+      particles = Array.from({ length: 48 }, createParticle);
     };
     const coin = new Image();
     const drawParticle = (particle: StarfallParticle, time: number) => {
       if (!coinReady) return;
       context.save();
-      context.globalAlpha = particle.alpha * (.84 + Math.sin(time * 4.5 + particle.phase) * .16);
+      context.globalAlpha = particle.alpha;
       context.translate(particle.x, particle.y);
       context.rotate(particle.rotation + particle.spin * time);
       context.drawImage(coin, -particle.size / 2, -particle.size / 2, particle.size, particle.size);
@@ -148,7 +148,7 @@ function AmbientStarfall() {
       particles.forEach((particle, index) => {
         particle.x += particle.vx * delta;
         particle.y += particle.vy * delta;
-        if (particle.y > height + padding || particle.x < -padding) particles[index] = createParticle(false);
+        if (particle.y > height + padding || particle.x < -padding) particles[index] = createParticle();
         drawParticle(particles[index], now / 1000);
       });
     };
