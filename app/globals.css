@@ -368,6 +368,14 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .board-sort-control { position: absolute; z-index: 28; right: 280px; bottom: 22px; }.board-sort-control .sort-popover { top: calc(100% + 7px); }
 @media (max-width: 760px) { .board-sort-control { right: 245px; bottom: 17px; } }
 
+/* Header controls are ordinary neighbours, not absolutely positioned layers.
+   This keeps filters, sorting, and board labels clickable as the header wraps. */
+.board-header { flex-wrap: wrap; }
+.board-header > :first-child { margin-right: auto; }
+.board-tools { flex-wrap: wrap; justify-content: flex-end; }
+.board-sort-control, .board-labels-control { position: relative; z-index: 28; right: auto; bottom: auto; flex: 0 0 auto; }
+@media (max-width: 760px) { .board-sort-control, .board-labels-control { position: relative; right: auto; bottom: auto; }.board-tools { justify-content: flex-start; } }
+
 /* Saved card priority: a compact five-bar signal, from calm to critical. */
 .priority-signal { --priority-color: #78aee0; display: inline-flex; align-items: end; gap: 2px; width: 31px; height: 17px; vertical-align: middle; }
 .priority-signal i { display: block; width: 4px; flex: 0 0 4px; border-radius: 2px 2px 1px 1px; background: #64707b; opacity: .35; }
