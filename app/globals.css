@@ -449,3 +449,19 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .check-item-detail .checklist-description-preview .markdown-description { font-size: inherit; line-height: inherit; }
 .check-item-detail .checklist-description-preview .markdown-description > :last-child { margin-bottom: 0; }
 .public-viewer .checklist-description-preview { pointer-events: none; }
+
+/* Card details are read, not decoded: give people, labels and copy enough room. */
+.column-head .column-menu { display: none; }
+.card-members-row { gap: 12px; font-size: 13px; font-weight: 800; }
+.card-members-row .avatar { width: 38px; height: 38px; flex-basis: 38px; font-size: 10px; }
+.card-members-row .member-plus { width: 37px; height: 37px; flex-basis: 37px; font-size: 20px; }
+.detail-card-labels { gap: 6px; font-size: 13px; font-weight: 800; }
+.detail-card-labels > .card-labels { min-height: 38px; gap: 7px; }
+.detail-card-labels .custom-label { min-height: 29px; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 800; }
+.card-priority-editor { gap: 12px; margin-top: 13px; font-size: 13px; }
+.card-priority-editor > div { gap: 5px; padding: 4px; }
+.card-priority-editor button { min-width: 40px; min-height: 32px; font-size: 11px; }
+.card-priority-editor button:has(.priority-signal) { min-width: 43px; }
+.card-priority-editor .priority-signal { transform: scale(1.12); transform-origin: center; }
+.description-section .section-heading h3 { font-size: 17px; }
+.markdown-editable-description .markdown-description, .card-description-input { font-size: 14px; line-height: 1.65; }
