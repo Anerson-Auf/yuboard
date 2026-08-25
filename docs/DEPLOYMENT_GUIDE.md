@@ -115,10 +115,7 @@ sudo nano /etc/caddy/Caddyfile
 
 ```caddy
 board.example.ru {
-    reverse_proxy 127.0.0.1:8081 {
-        header_up -X-Forwarded-For
-        header_up X-Forwarded-For {remote_host}
-    }
+    reverse_proxy 127.0.0.1:8081
 }
 ```
 

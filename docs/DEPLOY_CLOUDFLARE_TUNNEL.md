@@ -67,7 +67,7 @@ ingress:
 
 ## 5. Запустить Flowboard и tunnel
 
-Подготовьте `.env` с PostgreSQL URL, `FLOWBOARD_BIND_ADDR=127.0.0.1:8100`, `FLOWBOARD_COOKIE_SECURE=true`, `FLOWBOARD_API_ORIGIN=https://flowboard.zei.su` и `FLOWBOARD_TRUST_PROXY=true`. После Node.js 22:
+Подготовьте `.env` с PostgreSQL URL, `FLOWBOARD_BIND_ADDR=127.0.0.1:8100`, `FLOWBOARD_COOKIE_SECURE=true` и `FLOWBOARD_API_ORIGIN=https://flowboard.zei.su`. После Node.js 22:
 
 ```bash
 cd ~/flowboard
