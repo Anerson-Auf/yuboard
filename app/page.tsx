@@ -14,7 +14,7 @@ type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
 type BoardBackgroundPosition = 'center' | 'top' | 'bottom';
 type ApiMember = { id: string; username: string; avatar_url?: string | null };
-type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; labels: Label[]; members: ApiMember[]; lists: { id: string; title: string; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; labels: Label[]; assignees: ApiMember[] }[] }[] };
+type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; labels: Label[]; members: ApiMember[]; lists: { id: string; title: string; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; labels: Label[]; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
@@ -437,6 +437,7 @@ export default function Home() {
   const [boardBackgroundFit, setBoardBackgroundFit] = useState<BoardBackgroundFit>('cover');
   const [boardBackgroundPosition, setBoardBackgroundPosition] = useState<BoardBackgroundPosition>('center');
   const [boardVisibility, setBoardVisibility] = useState<'public' | 'private'>('private');
+  const [canEditBoard, setCanEditBoard] = useState(true);
   const [backgroundDraft, setBackgroundDraft] = useState('');
   const [isUploadingBoardBackground, setUploadingBoardBackground] = useState(false);
   const [isBoardMenuOpen, setBoardMenuOpen] = useState(false);
@@ -519,7 +520,7 @@ export default function Home() {
   const diagramStartRef = useRef<DiagramPoint | null>(null);
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
   const selectedCardId = selected?.id;
-  const isPublicViewer = authState === 'public';
+  const isPublicViewer = authState === 'public' || !canEditBoard;
   const dueDays = useMemo(() => calendarDays(dueCursor), [dueCursor]);
   const currentMember = account ? memberFromApi({ id: account.user.id, username: account.user.username, avatar_url: account.user.avatar_url }) : { id: '', initials: '—', color: 'violet', name: 'Пользователь' };
   const boardBackgroundStyle = view === 'board' && boardBackgroundUrl ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${assetUrl(boardBackgroundUrl)}")`, backgroundSize: boardBackgroundFit === 'fill' ? '100% 100%' : boardBackgroundFit, backgroundPosition: boardBackgroundPosition === 'top' ? 'center top' : boardBackgroundPosition === 'bottom' ? 'center bottom' : 'center', backgroundRepeat: 'no-repeat' } : undefined;
@@ -1657,6 +1658,7 @@ export default function Home() {
     setBoardBackgroundFit(data.background_fit ?? 'cover');
     setBoardBackgroundPosition(data.background_position ?? 'center');
     setBoardVisibility(data.visibility === 'public' ? 'public' : 'private');
+    setCanEditBoard(data.can_edit);
     // Uploaded board backgrounds are returned with a revision query parameter.
     // Keep the settings input on the canonical path so saving it later cannot
     // persist an obsolete cache-buster into the database.

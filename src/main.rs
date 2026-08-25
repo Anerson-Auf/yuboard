@@ -891,6 +891,7 @@ struct BoardDetail {
     background_fit: String,
     background_position: String,
     visibility: String,
+    can_edit: bool,
     labels: Vec<LabelResponse>,
     members: Vec<MemberResponse>,
     lists: Vec<BoardList>,
@@ -1699,13 +1700,17 @@ async fn update_workspace_member(State(state): State<AppState>, current: Current
     let member = sqlx::query_as::<_, WorkspaceMemberManagementResponse>(
         "UPDATE workspace_members wm SET role = $1::workspace_role FROM users u WHERE wm.workspace_id = $2 AND wm.user_id = $3 AND wm.role <> 'owner' AND u.id = wm.user_id RETURNING u.id, u.username, wm.role::text AS preset, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url",
     )
-    .bind(preset)
+    .bind(&preset)
     .bind(workspace_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError::bad_request("Workspace owner role cannot be changed."))?;
+    if preset == "viewer" {
+        sqlx::query("DELETE FROM workspace_member_permissions WHERE workspace_id = $1 AND user_id = $2")
+            .bind(workspace_id).bind(user_id).execute(pool).await.map_err(ApiError::internal)?;
+    }
     record_audit(pool, current.id, Some(workspace_id), Some(user_id), "workspace_member.preset_changed").await;
     let _ = state.events.send(());
     Ok(Json(member))
@@ -1776,8 +1781,14 @@ async fn update_board_member(State(state): State<AppState>, current: CurrentUser
     let pool = database(&state)?;
     ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
     let member = sqlx::query_as::<_, WorkspaceMemberManagementResponse>("WITH target AS (SELECT b.workspace_id FROM boards b WHERE b.id = $2), updated AS (UPDATE workspace_members wm SET role = $1::workspace_role FROM target WHERE wm.workspace_id = target.workspace_id AND wm.user_id = $3 AND wm.role <> 'owner' AND EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = $2 AND bm.user_id = wm.user_id) RETURNING wm.user_id, wm.role) UPDATE board_members bm SET role = CASE WHEN $1 = 'viewer' THEN 'viewer'::board_role ELSE 'editor'::board_role END FROM updated, users u WHERE bm.board_id = $2 AND bm.user_id = updated.user_id AND u.id = updated.user_id RETURNING u.id, u.username, updated.role::text AS preset, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url")
-        .bind(preset).bind(board_id).bind(user_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .bind(&preset).bind(board_id).bind(user_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::bad_request("Project owner role cannot be changed."))?;
+    if preset == "viewer" {
+        let workspace_id = sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM boards WHERE id = $1")
+            .bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+        sqlx::query("DELETE FROM workspace_member_permissions WHERE workspace_id = $1 AND user_id = $2")
+            .bind(workspace_id).bind(user_id).execute(pool).await.map_err(ApiError::internal)?;
+    }
     record_audit(pool, current.id, None, Some(user_id), "project_member.preset_changed").await;
     let _ = state.events.send(());
     Ok(Json(member))
@@ -1816,6 +1827,11 @@ async fn replace_member_permissions(State(state): State<AppState>, current: Curr
     let member_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner')")
         .bind(workspace_id).bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if !member_exists { return Err(ApiError::bad_request("Permissions for workspace owner cannot be edited.")); }
+    let is_viewer: bool = sqlx::query_scalar("SELECT role = 'viewer' FROM workspace_members WHERE workspace_id = $1 AND user_id = $2")
+        .bind(workspace_id).bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if is_viewer && !permissions.is_empty() {
+        return Err(ApiError::bad_request("Viewer is read-only; choose another role before granting permissions."));
+    }
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
     sqlx::query("DELETE FROM workspace_member_permissions WHERE workspace_id = $1 AND user_id = $2").bind(workspace_id).bind(user_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     for permission in &permissions {
@@ -1979,7 +1995,12 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     let background_image_url = if actor_id.is_none() && board.background_image_url.as_deref().is_some_and(|url| url.starts_with(&uploaded_background_url)) {
         Some(format!("/v1/public/boards/{}/background", board.id))
     } else { board.background_image_url };
-    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, labels, members, lists }))
+    let can_edit = match actor_id {
+        Some(user_id) => sqlx::query_scalar::<_, bool>("SELECT flowboard_has_permission($2, $3, 'edit_cards'::workspace_permission) AND (EXISTS(SELECT 1 FROM board_members WHERE board_id = $1 AND user_id = $3) OR EXISTS(SELECT 1 FROM users WHERE id = $3 AND is_system_owner AND disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $2 AND user_id = $3 AND role IN ('owner', 'full_access')))")
+            .bind(board.id).bind(board.workspace_id).bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?,
+        None => false,
+    };
+    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, can_edit, labels, members, lists }))
 }
 
 async fn board_events(State(state): State<AppState>, viewer: Viewer, Path(board_id): Path<Uuid>) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -2649,7 +2670,7 @@ async fn get_card_diagram(State(state): State<AppState>, current: Viewer, Path(c
 
 async fn replace_card_diagram(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<ReplaceDiagramRequest>) -> ApiResult<DiagramResponse> {
     let pool = database(&state)?;
-    ensure_card_access(pool, card_id, current.id).await?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
     let title = valid_text(&request.title, "title", 120)?;
     validate_diagram_document(&request.document)?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
@@ -2774,7 +2795,7 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     let actor_id = current.id;
     let body = valid_text(&request.body, "body", 10_000)?;
     let pool = database(&state)?;
-    ensure_card_access(pool, card_id, actor_id).await?;
+    ensure_card_permission(pool, card_id, actor_id, "edit_cards").await?;
     if let Some(parent_id) = request.parent_comment_id {
         let parent_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2 AND parent_comment_id IS NULL)")
             .bind(parent_id).bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
@@ -3187,7 +3208,7 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
 async fn update_comment(State(state): State<AppState>, current: CurrentUser, Path(comment_id): Path<Uuid>, Json(request): Json<UpdateCommentRequest>) -> ApiResult<CommentResponse> {
     let body = valid_text(&request.body, "body", 10_000)?;
     let card_id = sqlx::query_scalar::<_, Uuid>(
-        "UPDATE comments c SET body = $1, edited_at = now() FROM cards card INNER JOIN boards b ON b.id = card.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $2 AND c.card_id = card.id AND c.author_id = $3 AND m.user_id = $3 AND card.archived_at IS NULL RETURNING c.card_id",
+        "UPDATE comments c SET body = $1, edited_at = now() FROM cards card INNER JOIN boards b ON b.id = card.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $2 AND c.card_id = card.id AND c.author_id = $3 AND m.user_id = $3 AND card.archived_at IS NULL AND flowboard_has_permission(b.workspace_id, $3, 'edit_cards'::workspace_permission) RETURNING c.card_id",
     )
     .bind(&body)
     .bind(comment_id)
@@ -3211,7 +3232,7 @@ async fn toggle_comment_reaction(State(state): State<AppState>, current: Current
     let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM comments WHERE id = $1")
         .bind(comment_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::bad_request("Comment was not found."))?;
-    ensure_card_access(pool, card_id, current.id).await?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
     let removed = sqlx::query("DELETE FROM comment_reactions WHERE comment_id = $1 AND user_id = $2 AND emoji = $3")
         .bind(comment_id).bind(current.id).bind(emoji).execute(pool).await.map_err(ApiError::internal)?;
     if removed.rows_affected() == 0 {
@@ -3227,7 +3248,7 @@ async fn toggle_comment_reaction(State(state): State<AppState>, current: Current
 
 async fn delete_comment(State(state): State<AppState>, current: CurrentUser, Path(comment_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let card_id = sqlx::query_scalar::<_, Uuid>(
-        "DELETE FROM comments c USING cards card, boards b, board_members m WHERE c.id = $1 AND c.card_id = card.id AND card.board_id = b.id AND m.board_id = b.id AND m.user_id = $2 AND c.author_id = $2 RETURNING c.card_id",
+        "DELETE FROM comments c USING cards card, boards b, board_members m WHERE c.id = $1 AND c.card_id = card.id AND card.board_id = b.id AND m.board_id = b.id AND m.user_id = $2 AND c.author_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING c.card_id",
     )
     .bind(comment_id)
     .bind(current.id)
@@ -3282,7 +3303,7 @@ async fn upload_attachment(State(state): State<AppState>, current: CurrentUser, 
 async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, Path(attachment_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let actor_id = current.id;
     let object_key = sqlx::query_scalar::<_, Option<String>>(
-        "DELETE FROM attachments a USING cards c, boards b, board_members m WHERE a.id = $1 AND a.card_id = c.id AND c.board_id = b.id AND c.archived_at IS NULL AND m.board_id = b.id AND m.user_id = $2 RETURNING a.object_key",
+        "DELETE FROM attachments a USING cards c, boards b, board_members m WHERE a.id = $1 AND a.card_id = c.id AND c.board_id = b.id AND c.archived_at IS NULL AND m.board_id = b.id AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING a.object_key",
     )
     .bind(attachment_id)
     .bind(actor_id)
