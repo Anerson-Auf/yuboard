@@ -2360,10 +2360,14 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
         return Err(ApiError::bad_request("The freeform drawing is too large."));
     }
     for stroke in strokes {
-        let Some(id) = stroke.get("id").and_then(Value::as_str) else { continue; };
-        Uuid::parse_str(id).map_err(|_| ApiError::bad_request("Each stroke id must be a UUID."))?;
-        let author_id = stroke.get("author_id").and_then(Value::as_str).ok_or_else(|| ApiError::bad_request("Each identified stroke must have an author."))?;
-        Uuid::parse_str(author_id).map_err(|_| ApiError::bad_request("Each stroke author must be a UUID."))?;
+        match (stroke.get("id").and_then(Value::as_str), stroke.get("author_id").and_then(Value::as_str)) {
+            (None, None) => {} // Legacy pre-collaboration stroke: preserve it until touched by the eraser.
+            (Some(id), Some(author_id)) => {
+                Uuid::parse_str(id).map_err(|_| ApiError::bad_request("Each stroke id must be a UUID."))?;
+                Uuid::parse_str(author_id).map_err(|_| ApiError::bad_request("Each stroke author must be a UUID."))?;
+            }
+            _ => return Err(ApiError::bad_request("Each identified stroke must have both an id and an author.")),
+        }
     }
     let previous = sqlx::query_scalar::<_, Value>("SELECT document FROM board_freeform_drawings WHERE board_id = $1")
         .bind(board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
@@ -2384,9 +2388,8 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
     }
     let previous_ids = previous_strokes.iter().filter_map(|stroke| stroke.get("id").and_then(Value::as_str)).collect::<HashSet<_>>();
     for stroke in strokes {
-        let id = stroke.get("id").and_then(Value::as_str).expect("validated stroke id");
+        let (Some(id), Some(author_id)) = (stroke.get("id").and_then(Value::as_str), stroke.get("author_id").and_then(Value::as_str)) else { continue; };
         if !previous_ids.contains(id) {
-            let author_id = stroke.get("author_id").and_then(Value::as_str).expect("validated author id");
             if Uuid::parse_str(author_id).ok() != Some(current.id) && !request.erase_foreign { return Err(ApiError::forbidden("New freeform strokes must belong to the current user.")); }
         }
     }

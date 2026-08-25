@@ -1039,7 +1039,9 @@ export default function Home() {
     setFreeformZoom(nextZoom);
     window.requestAnimationFrame(() => {
       board.scrollLeft = Math.max(0, cursorX * nextZoom - (event.clientX - bounds.left));
-      board.scrollTop = scrollTop;
+      // CSS zoom changes the scroll coordinate system. Keep the same canvas Y
+      // at the top of the viewport instead of visually moving it up/down.
+      board.scrollTop = Math.max(0, scrollTop / freeformZoom * nextZoom);
     });
   }
   function startFreeformInk(event: ReactPointerEvent<SVGSVGElement>) {
@@ -1102,7 +1104,14 @@ export default function Home() {
       if (!hit) return [stroke];
       changed = true;
       if (stroke.author_id !== account?.user.id) removedForeign = true;
-      return chunks.map((points, index) => ({ ...stroke, id: index === 0 ? stroke.id : globalThis.crypto.randomUUID(), points }));
+      return chunks.map((points, index) => ({
+        ...stroke,
+        // Old drawings predate collaboration metadata. The user who erases a
+        // legacy line becomes the author of its remaining fragments.
+        id: index === 0 ? stroke.id ?? globalThis.crypto.randomUUID() : globalThis.crypto.randomUUID(),
+        author_id: stroke.author_id ?? account?.user.id,
+        points,
+      }));
     });
     if (!changed) return;
     freeformDrawingDirtyRef.current = true;
@@ -1150,8 +1159,8 @@ export default function Home() {
     const drag = freeformDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const snap = event.shiftKey ? 24 : 1;
-    const x = Math.max(0, Math.round((drag.origin.x + event.clientX - drag.startX) / snap) * snap);
-    const y = Math.max(0, Math.round((drag.origin.y + event.clientY - drag.startY) / snap) * snap);
+    const x = Math.max(0, Math.round((drag.origin.x + (event.clientX - drag.startX) / freeformZoom) / snap) * snap);
+    const y = Math.max(0, Math.round((drag.origin.y + (event.clientY - drag.startY) / freeformZoom) / snap) * snap);
     setFreeformLayout((current) => ({ ...current, [String(drag.columnId)]: { x, y } }));
     event.preventDefault();
   }
@@ -1163,8 +1172,8 @@ export default function Home() {
     setDraggingColumnId(null);
     const snap = event.shiftKey ? 24 : 1;
     const position = {
-      x: Math.max(0, Math.round((drag.origin.x + event.clientX - drag.startX) / snap) * snap),
-      y: Math.max(0, Math.round((drag.origin.y + event.clientY - drag.startY) / snap) * snap),
+      x: Math.max(0, Math.round((drag.origin.x + (event.clientX - drag.startX) / freeformZoom) / snap) * snap),
+      y: Math.max(0, Math.round((drag.origin.y + (event.clientY - drag.startY) / freeformZoom) / snap) * snap),
     };
     const nextLayout = { ...freeformLayout, [String(drag.columnId)]: position };
     setFreeformLayout(nextLayout);
