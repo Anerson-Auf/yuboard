@@ -375,8 +375,6 @@ struct BoardAccess {
 #[derive(Deserialize)]
 struct CreateListRequest {
     title: String,
-    #[serde(default)]
-    below_list_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -385,6 +383,33 @@ struct MoveListRequest {
     before_list_id: Option<Uuid>,
     #[serde(default)]
     below_list_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+struct UpdateBoardLayoutRequest {
+    view_mode: String,
+    #[serde(default)]
+    positions: Vec<BoardFreeformPositionRequest>,
+}
+
+#[derive(Deserialize)]
+struct BoardFreeformPositionRequest {
+    list_id: Uuid,
+    x: i32,
+    y: i32,
+}
+
+#[derive(Serialize, FromRow)]
+struct BoardFreeformPositionResponse {
+    list_id: Uuid,
+    x: i32,
+    y: i32,
+}
+
+#[derive(Serialize)]
+struct BoardLayoutResponse {
+    view_mode: String,
+    positions: Vec<BoardFreeformPositionResponse>,
 }
 
 #[derive(Serialize, FromRow)]
@@ -1007,6 +1032,7 @@ async fn main() {
         .route("/v1/boards/{board_id}/members/existing", post(add_existing_board_member))
         .route("/v1/boards/{board_id}/members/{user_id}", patch(update_board_member).delete(remove_board_member))
         .route("/v1/boards/{board_id}", get(get_board).patch(update_board).delete(delete_board))
+        .route("/v1/boards/{board_id}/layout", get(get_board_layout).patch(update_board_layout))
         .route("/v1/boards/{board_id}/background", put(update_board_background))
         .route("/v1/boards/{board_id}/background/file", get(download_board_background).post(upload_board_background))
         .route("/v1/boards/{board_id}/visibility", put(update_board_visibility))
@@ -1997,7 +2023,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
-    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row FROM lists WHERE board_id = $1 ORDER BY grid_column, grid_row, position")
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row FROM lists WHERE board_id = $1 ORDER BY position, id")
         .bind(board_id)
         .fetch_all(pool)
         .await
@@ -2078,6 +2104,66 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         None => false,
     };
     Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, can_edit, labels, members, lists }))
+}
+
+async fn ensure_board_layout_access(pool: &PgPool, board_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM boards b LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND (bm.user_id IS NOT NULL OR EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))))",
+    )
+    .bind(board_id).bind(actor_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+    if allowed { Ok(()) } else { Err(ApiError::forbidden("You do not have access to store a layout for this board.")) }
+}
+
+async fn get_board_layout(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<BoardLayoutResponse> {
+    let pool = database(&state)?;
+    ensure_board_layout_access(pool, board_id, current.id).await?;
+    let view_mode = sqlx::query_scalar::<_, String>("SELECT view_mode FROM board_layout_preferences WHERE user_id = $1 AND board_id = $2")
+        .bind(current.id).bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .unwrap_or_else(|| "standard".to_owned());
+    let positions = sqlx::query_as::<_, BoardFreeformPositionResponse>(
+        "SELECT list_id, x, y FROM board_freeform_list_positions WHERE user_id = $1 AND board_id = $2 ORDER BY y, x, list_id",
+    )
+    .bind(current.id).bind(board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    Ok(Json(BoardLayoutResponse { view_mode, positions }))
+}
+
+async fn update_board_layout(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardLayoutRequest>) -> ApiResult<BoardLayoutResponse> {
+    if !matches!(request.view_mode.as_str(), "standard" | "freeform") {
+        return Err(ApiError::bad_request("view_mode must be either standard or freeform."));
+    }
+    if request.positions.len() > 500 {
+        return Err(ApiError::bad_request("A board layout cannot contain more than 500 columns."));
+    }
+    let mut list_ids = HashSet::new();
+    for position in &request.positions {
+        if position.x < 0 || position.y < 0 || position.x > 200_000 || position.y > 200_000 || !list_ids.insert(position.list_id) {
+            return Err(ApiError::bad_request("Each freeform position must use a unique list id and coordinates from 0 to 200000."));
+        }
+    }
+    let pool = database(&state)?;
+    ensure_board_layout_access(pool, board_id, current.id).await?;
+    let list_ids: Vec<Uuid> = list_ids.into_iter().collect();
+    if !list_ids.is_empty() {
+        let valid_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lists WHERE board_id = $1 AND id = ANY($2)")
+            .bind(board_id).bind(&list_ids).fetch_one(pool).await.map_err(ApiError::internal)?;
+        if valid_count != list_ids.len() as i64 {
+            return Err(ApiError::bad_request("The layout contains a list from another board or a deleted list."));
+        }
+    }
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    sqlx::query("INSERT INTO board_layout_preferences (user_id, board_id, view_mode) VALUES ($1, $2, $3) ON CONFLICT (user_id, board_id) DO UPDATE SET view_mode = EXCLUDED.view_mode, updated_at = now()")
+        .bind(current.id).bind(board_id).bind(&request.view_mode).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    sqlx::query("DELETE FROM board_freeform_list_positions WHERE user_id = $1 AND board_id = $2")
+        .bind(current.id).bind(board_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    for position in &request.positions {
+        sqlx::query("INSERT INTO board_freeform_list_positions (user_id, board_id, list_id, x, y) VALUES ($1, $2, $3, $4, $5)")
+            .bind(current.id).bind(board_id).bind(position.list_id).bind(position.x).bind(position.y).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    }
+    transaction.commit().await.map_err(ApiError::internal)?;
+    Ok(Json(BoardLayoutResponse {
+        view_mode: request.view_mode,
+        positions: request.positions.into_iter().map(|position| BoardFreeformPositionResponse { list_id: position.list_id, x: position.x, y: position.y }).collect(),
+    }))
 }
 
 async fn board_events(State(state): State<AppState>, viewer: Viewer, Path(board_id): Path<Uuid>) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -2363,25 +2449,15 @@ async fn create_list(State(state): State<AppState>, current: CurrentUser, Path(b
     let pool = database(&state)?;
     ensure_board_permission(pool, board_id, current.id, "create_lists").await?;
     let title = valid_text(&request.title, "title", 200)?;
-    let (grid_column, grid_row) = match request.below_list_id {
-        Some(below_list_id) => {
-            let grid_column = sqlx::query_scalar::<_, i32>("SELECT grid_column FROM lists WHERE id = $1 AND board_id = $2")
-                .bind(below_list_id).bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
-                .ok_or_else(|| ApiError::bad_request("Target list is unavailable."))?;
-            let grid_row = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_row), 0) + 1 FROM lists WHERE board_id = $1 AND grid_column = $2")
-                .bind(board_id).bind(grid_column).fetch_one(pool).await.map_err(ApiError::internal)?;
-            (grid_column, grid_row)
-        }
-        None => {
-            let grid_column = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_column), 0) + 1 FROM lists WHERE board_id = $1")
-                .bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
-            (grid_column, 1)
-        }
-    };
+    // The standard board is one horizontal sequence.  `below_list_id` is
+    // intentionally ignored for compatibility with older clients; freeform
+    // placement lives in each user's personal layout instead.
+    let grid_column = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_column), 0) + 1 FROM lists WHERE board_id = $1")
+        .bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     let list = sqlx::query_as::<_, ListResponse>(
-        "INSERT INTO lists (id, board_id, title, position, grid_column, grid_row) VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) FROM lists WHERE board_id = $2), 0) + 1000, $4, $5) RETURNING id, title, grid_column, grid_row",
+        "INSERT INTO lists (id, board_id, title, position, grid_column, grid_row) VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) FROM lists WHERE board_id = $2), 0) + 1000, $4, 1) RETURNING id, title, grid_column, grid_row",
     )
-    .bind(Uuid::new_v4()).bind(board_id).bind(title).bind(grid_column).bind(grid_row)
+    .bind(Uuid::new_v4()).bind(board_id).bind(title).bind(grid_column)
     .fetch_one(pool).await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(Json(list))
@@ -2457,39 +2533,26 @@ async fn move_list(State(state): State<AppState>, current: CurrentUser, Path(lis
     let pool = database(&state)?;
     ensure_list_permission(pool, list_id, current.id, "create_lists").await?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
-    let list = sqlx::query_as::<_, (Uuid, i32)>("SELECT board_id, grid_column FROM lists WHERE id = $1 FOR UPDATE")
+    let list = sqlx::query_as::<_, (Uuid,)>("SELECT board_id FROM lists WHERE id = $1 FOR UPDATE")
         .bind(list_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "list_not_found", "List was not found.".to_owned()))?;
-    if let Some(below_list_id) = request.below_list_id {
-        if below_list_id == list_id { transaction.commit().await.map_err(ApiError::internal)?; return Ok(StatusCode::NO_CONTENT); }
-        let target_column = sqlx::query_scalar::<_, i32>("SELECT grid_column FROM lists WHERE id = $1 AND board_id = $2 FOR UPDATE")
-            .bind(below_list_id).bind(list.0).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
-            .ok_or_else(|| ApiError::bad_request("Target list is unavailable."))?;
-        let target_row = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_row), 0) + 1 FROM lists WHERE board_id = $1 AND grid_column = $2 AND id <> $3")
-            .bind(list.0).bind(target_column).bind(list_id).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
-        sqlx::query("UPDATE lists SET grid_column = $1, grid_row = $2, updated_at = now() WHERE id = $3")
-            .bind(target_column).bind(target_row).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-        transaction.commit().await.map_err(ApiError::internal)?;
-        let _ = state.events.send(());
-        return Ok(StatusCode::NO_CONTENT);
+    let before_list_id = request.before_list_id.or(request.below_list_id);
+    if before_list_id == Some(list_id) { transaction.commit().await.map_err(ApiError::internal)?; return Ok(StatusCode::NO_CONTENT); }
+    match before_list_id {
+        Some(before_list_id) => {
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)")
+                .bind(before_list_id).bind(list.0).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
+            if !exists { return Err(ApiError::bad_request("Target list is unavailable.")); }
+            sqlx::query(
+                "WITH target AS (SELECT position FROM lists WHERE id = $2), previous AS (SELECT position FROM lists WHERE board_id = $1 AND id <> $3 AND position < (SELECT position FROM target) ORDER BY position DESC LIMIT 1) UPDATE lists SET position = COALESCE(((SELECT position FROM previous) + (SELECT position FROM target)) / 2, (SELECT position FROM target) - 1000), updated_at = now() WHERE id = $3",
+            )
+            .bind(list.0).bind(before_list_id).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        }
+        None => {
+            sqlx::query("UPDATE lists SET position = COALESCE((SELECT MAX(position) FROM lists WHERE board_id = $1 AND id <> $2), 0) + 1000, updated_at = now() WHERE id = $2")
+                .bind(list.0).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        }
     }
-    let target_column = match request.before_list_id {
-        Some(before_list_id) if before_list_id == list_id => { transaction.commit().await.map_err(ApiError::internal)?; return Ok(StatusCode::NO_CONTENT); }
-        Some(before_list_id) => sqlx::query_scalar::<_, i32>("SELECT grid_column FROM lists WHERE id = $1 AND board_id = $2 FOR UPDATE")
-            .bind(before_list_id).bind(list.0).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
-            .ok_or_else(|| ApiError::bad_request("Target list is unavailable."))?,
-        None => sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_column), 0) + 1 FROM lists WHERE board_id = $1")
-            .bind(list.0).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?,
-    };
-    if list.1 == target_column { transaction.commit().await.map_err(ApiError::internal)?; return Ok(StatusCode::NO_CONTENT); }
-    // Keep the grid manual: only make room at the chosen horizontal coordinate.
-    // The temporary positive offset avoids colliding with the unique grid index.
-    sqlx::query("UPDATE lists SET grid_column = grid_column + 1000000, updated_at = now() WHERE board_id = $1 AND grid_column >= $2 AND id <> $3")
-        .bind(list.0).bind(target_column).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    sqlx::query("UPDATE lists SET grid_column = grid_column - 999999, updated_at = now() WHERE board_id = $1 AND grid_column >= 1000000 AND id <> $2")
-        .bind(list.0).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    sqlx::query("UPDATE lists SET grid_column = $1, grid_row = 1, updated_at = now() WHERE id = $2")
-        .bind(target_column).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     transaction.commit().await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
@@ -3002,7 +3065,7 @@ async fn create_discord_card(State(state): State<AppState>, integration: Discord
 }
 
 async fn list_discord_board_lists(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<ListResponse>> {
-    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row FROM lists WHERE board_id = $1 ORDER BY grid_column, grid_row, position")
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row FROM lists WHERE board_id = $1 ORDER BY position, id")
         .bind(integration.board_id)
         .fetch_all(database(&state)?)
         .await

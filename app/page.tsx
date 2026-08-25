@@ -8,7 +8,7 @@ type EntityId = number | string;
 type Member = { id: EntityId; initials: string; color: string; name: string; avatarUrl?: string | null };
 type Label = { id: string; name: string; color: string };
 type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; labels: Label[]; checklist?: string; comments?: number; attachments?: number; members: Member[] };
-type Column = { id: EntityId; title: string; gridColumn: number; gridRow: number; cards: Card[] };
+type Column = { id: EntityId; title: string; cards: Card[] };
 type View = 'home' | 'board';
 type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
@@ -29,6 +29,9 @@ type Workspace = { id: string; name: string };
 type BoardSummary = { id: string; title: string; visibility: string };
 type FilterMode = 'all' | 'assigned' | 'due' | 'overdue';
 type CardSort = 'manual' | 'priority' | 'activity';
+type BoardViewMode = 'standard' | 'freeform';
+type FreeformPosition = { x: number; y: number };
+type BoardLayout = { view_mode: BoardViewMode; positions: { list_id: string; x: number; y: number }[] };
 type ArchivedCard = { id: string; list_id: string; title: string; description: string; archived_at: string };
 type TeamMember = { id: string; username: string; preset: 'owner' | 'viewer' | 'contributor' | 'editor' | 'full_access'; avatar_url?: string | null };
 const roleLabels: Record<TeamMember['preset'], string> = { owner: 'Владелец', viewer: 'Наблюдатель', contributor: 'Участник', editor: 'Редактор', full_access: 'Полный доступ' };
@@ -53,7 +56,6 @@ type DiagramHandle = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'start' | 'end';
 type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean };
 type CardContextMenu = { card: Card; x: number; y: number };
 type ColumnContextMenu = { column: Column; x: number; y: number };
-type ColumnDropTarget = { beforeColumnId: EntityId | null; visualColumnId: EntityId; edge: 'before' | 'after' };
 
 // Empty in local development and production: requests stay on the current origin.
 // Vite forwards /v1 to Rust locally; nginx does the same after deployment.
@@ -500,7 +502,9 @@ export default function Home() {
   const [dragOverListId, setDragOverListId] = useState<EntityId | null>(null);
   const [dragDropTarget, setDragDropTarget] = useState<DragDropTarget | null>(null);
   const [draggingColumnId, setDraggingColumnId] = useState<EntityId | null>(null);
-  const [columnDropTarget, setColumnDropTarget] = useState<ColumnDropTarget | null>(null);
+  const [columnDropBeforeId, setColumnDropBeforeId] = useState<EntityId | null>(null);
+  const [boardViewMode, setBoardViewMode] = useState<BoardViewMode>('standard');
+  const [freeformLayout, setFreeformLayout] = useState<Record<string, FreeformPosition>>({});
   const [isBoardPanning, setBoardPanning] = useState(false);
   const [columnMenuId, setColumnMenuId] = useState<EntityId | null>(null);
   const [editingColumnId, setEditingColumnId] = useState<EntityId | null>(null);
@@ -516,7 +520,8 @@ export default function Home() {
   const boardRef = useRef<HTMLElement | null>(null);
   const boardDragScrollFrameRef = useRef<number | null>(null);
   const boardDragScrollDirectionRef = useRef<-1 | 1 | null>(null);
-  const boardPanRef = useRef<{ pointerId: number; startX: number; startScrollLeft: number; moved: boolean } | null>(null);
+  const boardPanRef = useRef<{ pointerId: number; startX: number; startY: number; startScrollLeft: number; startScrollTop: number; moved: boolean } | null>(null);
+  const freeformDragRef = useRef<{ pointerId: number; columnId: EntityId; startX: number; startY: number; origin: FreeformPosition } | null>(null);
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
@@ -543,43 +548,15 @@ export default function Home() {
     return { ...column, cards: [...cards].sort((left, right) => cardSort === 'priority'
       ? (right.priority ?? 0) - (left.priority ?? 0)
       : activityTime(right) - activityTime(left)) };
-  }).sort((left, right) => left.gridColumn - right.gridColumn || left.gridRow - right.gridRow), [cardSort, columns, currentMember.id, filterMode, query]);
+  }), [cardSort, columns, currentMember.id, filterMode, query]);
 
-  useEffect(() => {
-    const board = boardRef.current;
-    if (!board) return;
-    const elements = Array.from(board.querySelectorAll<HTMLElement>(':scope > .column'));
-    let frame: number | null = null;
-    const layout = () => {
-      frame = null;
-      const lanes = new Map<number, { element: HTMLElement; column: Column }[]>();
-      elements.forEach((element, index) => {
-        const column = visibleColumns[index];
-        if (!column) return;
-        const lane = lanes.get(column.gridColumn) ?? [];
-        lane.push({ element, column }); lanes.set(column.gridColumn, lane);
-      });
-      let boardHeight = 0;
-      lanes.forEach((lane, gridColumn) => {
-        let offset = 0;
-        lane.sort((left, right) => left.column.gridRow - right.column.gridRow).forEach(({ element }) => {
-          element.style.gridColumn = String(gridColumn);
-          element.style.gridRow = '1';
-          element.style.translate = `0 ${offset}px`;
-          offset += element.offsetHeight + 16;
-        });
-        boardHeight = Math.max(boardHeight, offset);
-      });
-      const addColumnButton = board.querySelector<HTMLElement>(':scope > .add-column');
-      if (addColumnButton) { addColumnButton.style.gridColumn = String(Math.max(0, ...visibleColumns.map((column) => column.gridColumn)) + 1); addColumnButton.style.gridRow = '1'; }
-      board.style.minHeight = `${Math.max(window.innerHeight - 170, boardHeight + 30)}px`;
+  const freeformCanvasSize = useMemo(() => {
+    const positions = visibleColumns.map((column, index) => freeformLayout[String(column.id)] ?? { x: index * 336, y: 0 });
+    return {
+      width: Math.max(980, ...positions.map((position) => position.x + 354)),
+      height: Math.max(900, ...positions.map((position) => position.y + 860)),
     };
-    const scheduleLayout = () => { if (frame === null) frame = window.requestAnimationFrame(layout); };
-    const observer = new ResizeObserver(scheduleLayout);
-    elements.forEach((element) => observer.observe(element));
-    layout();
-    return () => { observer.disconnect(); if (frame !== null) window.cancelAnimationFrame(frame); };
-  }, [visibleColumns]);
+  }, [freeformLayout, visibleColumns]);
 
   useEffect(() => {
     async function connectToApi() {
@@ -836,6 +813,79 @@ export default function Home() {
   }
   function openHome() { updateBoardRoute(null); setView('home'); setQuery(''); }
   function openBoard() { setView('board'); setQuery(''); }
+  useEffect(() => {
+    if (!boardId || authState !== 'signed-in') {
+      setBoardViewMode('standard');
+      setFreeformLayout({});
+      return;
+    }
+    let active = true;
+    void fetch(`${API_URL}/v1/boards/${boardId}/layout`)
+      .then(async (response) => { if (!response.ok) throw new Error('layout load failed'); return response.json() as Promise<BoardLayout>; })
+      .then((layout) => {
+        if (!active) return;
+        setBoardViewMode(layout.view_mode === 'freeform' ? 'freeform' : 'standard');
+        setFreeformLayout(Object.fromEntries(layout.positions.map((position) => [position.list_id, { x: position.x, y: position.y }])));
+      })
+      .catch(() => { if (active) { setBoardViewMode('standard'); setFreeformLayout({}); } });
+    return () => { active = false; };
+  }, [authState, boardId]);
+
+  function defaultFreeformPosition(layout: Record<string, FreeformPosition>, listId: EntityId) {
+    const positions = Object.values(layout);
+    return layout[String(listId)] ?? { x: positions.length ? Math.max(...positions.map((position) => position.x)) + 336 : 0, y: 0 };
+  }
+  function persistBoardLayout(mode: BoardViewMode, layout: Record<string, FreeformPosition>, sourceColumns = columns) {
+    if (persistence !== 'connected' || !boardId || authState !== 'signed-in') return;
+    const positions = sourceColumns.filter((column) => typeof column.id === 'string').map((column, index) => {
+      const position = defaultFreeformPosition(layout, column.id) ?? { x: index * 336, y: 0 };
+      return { list_id: String(column.id), x: Math.max(0, Math.round(position.x)), y: Math.max(0, Math.round(position.y)) };
+    });
+    void fetch(`${API_URL}/v1/boards/${boardId}/layout`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ view_mode: mode, positions }) })
+      .then((response) => { if (!response.ok) throw new Error('layout save failed'); })
+      .catch(() => showToast('Раскладка не сохранена: обновите доску'));
+  }
+  function changeBoardViewMode(mode: BoardViewMode) {
+    if (authState !== 'signed-in') return;
+    const nextLayout = { ...freeformLayout };
+    columns.forEach((column, index) => { if (!nextLayout[String(column.id)]) nextLayout[String(column.id)] = { x: index * 336, y: 0 }; });
+    setFreeformLayout(nextLayout);
+    setBoardViewMode(mode);
+    persistBoardLayout(mode, nextLayout);
+  }
+  function beginFreeformColumnDrag(event: ReactPointerEvent<HTMLDivElement>, column: Column, index: number) {
+    if (boardViewMode !== 'freeform' || authState !== 'signed-in' || event.button !== 0) return;
+    const origin = freeformLayout[String(column.id)] ?? { x: index * 336, y: 0 };
+    freeformDragRef.current = { pointerId: event.pointerId, columnId: column.id, startX: event.clientX, startY: event.clientY, origin };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDraggingColumnId(column.id);
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  function moveFreeformColumnDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = freeformDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const snap = event.shiftKey ? 24 : 1;
+    const x = Math.max(0, Math.round((drag.origin.x + event.clientX - drag.startX) / snap) * snap);
+    const y = Math.max(0, Math.round((drag.origin.y + event.clientY - drag.startY) / snap) * snap);
+    setFreeformLayout((current) => ({ ...current, [String(drag.columnId)]: { x, y } }));
+    event.preventDefault();
+  }
+  function endFreeformColumnDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = freeformDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    freeformDragRef.current = null;
+    setDraggingColumnId(null);
+    const snap = event.shiftKey ? 24 : 1;
+    const position = {
+      x: Math.max(0, Math.round((drag.origin.x + event.clientX - drag.startX) / snap) * snap),
+      y: Math.max(0, Math.round((drag.origin.y + event.clientY - drag.startY) / snap) * snap),
+    };
+    const nextLayout = { ...freeformLayout, [String(drag.columnId)]: position };
+    setFreeformLayout(nextLayout);
+    persistBoardLayout('freeform', nextLayout);
+  }
   function stopCardListAutoScroll() {
     dragScrollTargetRef.current = null;
     if (dragScrollFrameRef.current !== null) {
@@ -888,18 +938,19 @@ export default function Home() {
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('.column-head, button, input, textarea, select, a, .composer') || (!isPublicViewer && target?.closest('.task-card'))) return;
     const board = event.currentTarget;
-    boardPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startScrollLeft: board.scrollLeft, moved: false };
+    boardPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startScrollLeft: board.scrollLeft, startScrollTop: board.scrollTop, moved: false };
   }
   function moveBoardPan(event: ReactPointerEvent<HTMLElement>) {
     const pan = boardPanRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    if (Math.abs(event.clientX - pan.startX) <= 4 && !pan.moved) return;
+    if (Math.max(Math.abs(event.clientX - pan.startX), Math.abs(event.clientY - pan.startY)) <= 4 && !pan.moved) return;
     if (!pan.moved) {
       pan.moved = true;
       event.currentTarget.setPointerCapture(event.pointerId);
       setBoardPanning(true);
     }
     event.currentTarget.scrollLeft = pan.startScrollLeft - (event.clientX - pan.startX);
+    event.currentTarget.scrollTop = pan.startScrollTop - (event.clientY - pan.startY);
     event.preventDefault();
   }
   function stopBoardPan(event: ReactPointerEvent<HTMLElement>) {
@@ -926,7 +977,7 @@ export default function Home() {
   function clearColumnDragState() {
     stopBoardAutoScroll();
     setDraggingColumnId(null);
-    setColumnDropTarget(null);
+    setColumnDropBeforeId(null);
   }
   function clearDragState() {
     stopCardListAutoScroll();
@@ -981,9 +1032,12 @@ export default function Home() {
     setColumns((current) => {
       const moving = current.find((column) => column.id === columnId);
       if (!moving) return current;
-      const target = beforeColumnId === undefined ? Math.max(0, ...current.map((column) => column.gridColumn)) + 1 : current.find((column) => column.id === beforeColumnId)?.gridColumn;
-      if (!target || moving.gridColumn === target) return current;
-      return current.map((column) => column.id === moving.id ? { ...column, gridColumn: target, gridRow: 1 } : column.id !== moving.id && column.gridColumn >= target ? { ...column, gridColumn: column.gridColumn + 1 } : column);
+      const withoutMoving = current.filter((column) => column.id !== columnId);
+      const targetIndex = beforeColumnId === undefined ? withoutMoving.length : withoutMoving.findIndex((column) => column.id === beforeColumnId);
+      if (targetIndex < 0) return current;
+      const next = [...withoutMoving];
+      next.splice(targetIndex, 0, moving);
+      return next;
     });
     clearColumnDragState();
     if (persistence === 'connected' && typeof columnId === 'string') {
@@ -992,81 +1046,26 @@ export default function Home() {
         .catch(() => showToast('Порядок колонок не сохранён: обновите доску'));
     }
   }
-  function moveColumnBelow(columnId: EntityId, belowColumnId: EntityId) {
-    if (columnId === belowColumnId) return;
-    setColumns((current) => {
-      const moving = current.find((column) => column.id === columnId);
-      const target = current.find((column) => column.id === belowColumnId);
-      if (!moving || !target) return current;
-      const gridRow = Math.max(0, ...current.filter((column) => column.id !== moving.id && column.gridColumn === target.gridColumn).map((column) => column.gridRow)) + 1;
-      return current.map((column) => column.id === moving.id ? { ...column, gridColumn: target.gridColumn, gridRow } : column);
-    });
-    clearColumnDragState();
-    if (persistence === 'connected' && typeof columnId === 'string' && typeof belowColumnId === 'string') {
-      void fetch(`${API_URL}/v1/lists/${columnId}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ before_list_id: null, below_list_id: belowColumnId }) })
-        .then((response) => { if (!response.ok) throw new Error('vertical list move failed'); showToast('Колонка перемещена ниже'); })
-        .catch(() => showToast('Позиция колонки не сохранена: обновите доску'));
-    }
-  }
-  function addColumn(belowColumn?: Column) {
+  function addColumn() {
     const title = `Новая колонка ${columns.length + 1}`;
     if (persistence === 'connected' && boardId) {
-      void fetch(`${API_URL}/v1/boards/${boardId}/lists`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, below_list_id: typeof belowColumn?.id === 'string' ? belowColumn.id : null }) })
+      void fetch(`${API_URL}/v1/boards/${boardId}/lists`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })
         .then(async (response) => { if (!response.ok) throw new Error('save failed'); return response.json() as Promise<{ id: string; title: string; grid_column: number; grid_row: number }>; })
-        .then((saved) => { setColumns((current) => [...current, { id: saved.id, title: saved.title, gridColumn: saved.grid_column, gridRow: saved.grid_row, cards: [] }]); showToast(belowColumn ? 'Колонка добавлена ниже' : 'Колонка добавлена'); })
+        .then((saved) => {
+          const nextColumn: Column = { id: saved.id, title: saved.title, cards: [] };
+          setColumns((current) => [...current, nextColumn]);
+          if (boardViewMode === 'freeform') {
+            const nextLayout = { ...freeformLayout, [saved.id]: defaultFreeformPosition(freeformLayout, saved.id) };
+            setFreeformLayout(nextLayout);
+            persistBoardLayout('freeform', nextLayout, [...columns, nextColumn]);
+          }
+          showToast('Колонка добавлена');
+        })
         .catch(() => showToast('Не удалось сохранить колонку'));
       return;
     }
-    setColumns((current) => {
-      const gridColumn = belowColumn?.gridColumn ?? Math.max(0, ...current.map((column) => column.gridColumn)) + 1;
-      const gridRow = belowColumn ? Math.max(0, ...current.filter((column) => column.gridColumn === gridColumn).map((column) => column.gridRow)) + 1 : 1;
-      return [...current, { id: current.length + 1, title, gridColumn, gridRow, cards: [] }];
-    }); showToast(belowColumn ? 'Колонка добавлена ниже' : 'Колонка добавлена');
+    setColumns((current) => [...current, { id: current.length + 1, title, cards: [] }]); showToast('Колонка добавлена');
   }
-  useEffect(() => {
-    const board = boardRef.current;
-    if (!board || !draggingColumnId) return;
-    const columnsInBoard = () => Array.from(board.querySelectorAll<HTMLElement>(':scope > .column'));
-    const clearDropHint = () => columnsInBoard().forEach((column) => column.classList.remove('column-drop-below-target', 'column-drop-before', 'column-drop-after'));
-    const targetForEvent = (event: DragEvent) => {
-      let target = event.target instanceof Element ? event.target.closest<HTMLElement>('.column') : null;
-      if (!target || !board.contains(target)) {
-        target = columnsInBoard().map((element) => ({ element, bounds: element.getBoundingClientRect() }))
-          .filter(({ bounds }) => event.clientY >= bounds.top - 20 && event.clientY <= bounds.bottom + 20 && event.clientX >= bounds.left - 52 && event.clientX <= bounds.right + 52)
-          .sort((left, right) => Math.abs(event.clientX - (left.bounds.left + left.bounds.width / 2)) - Math.abs(event.clientX - (right.bounds.left + right.bounds.width / 2)))[0]?.element ?? null;
-      }
-      if (!target || !board.contains(target)) return null;
-      const bounds = target.getBoundingClientRect();
-      const index = columnsInBoard().indexOf(target);
-      const column = visibleColumns[index];
-      if (!column) return null;
-      if (event.clientY >= bounds.bottom - Math.min(76, bounds.height * .28)) return { type: 'below' as const, target, column };
-      if (event.clientX <= bounds.left + bounds.width * .34) return { type: 'before' as const, target, column };
-      if (event.clientX >= bounds.right - bounds.width * .34) return { type: 'after' as const, target, column };
-      return null;
-    };
-    const onDragOver = (event: DragEvent) => {
-      const target = targetForEvent(event);
-      if (!target) { clearDropHint(); return; }
-      event.preventDefault(); event.stopPropagation(); clearDropHint();
-      target.target.classList.add(target.type === 'below' ? 'column-drop-below-target' : target.type === 'before' ? 'column-drop-before' : 'column-drop-after');
-    };
-    const onDrop = (event: DragEvent) => {
-      const target = targetForEvent(event);
-      if (!target) return;
-      event.preventDefault(); event.stopPropagation();
-      clearDropHint();
-      if (target.type === 'below') { moveColumnBelow(draggingColumnId, target.column.id); return; }
-      if (target.type === 'before') { moveColumn(draggingColumnId, target.column.id); return; }
-      const nextLane = visibleColumns.find((column) => column.gridColumn > target.column.gridColumn && column.gridRow === 1);
-      moveColumn(draggingColumnId, nextLane?.id);
-    };
-    const onDragEnd = () => clearDropHint();
-    board.addEventListener('dragover', onDragOver, true);
-    board.addEventListener('drop', onDrop, true);
-    window.addEventListener('dragend', onDragEnd);
-    return () => { board.removeEventListener('dragover', onDragOver, true); board.removeEventListener('drop', onDrop, true); window.removeEventListener('dragend', onDragEnd); clearDropHint(); };
-  }, [draggingColumnId, visibleColumns]);
 
   function openCard(card: Card) {
     setSelected(card);
@@ -1798,7 +1797,7 @@ export default function Home() {
   }
 
   function applyBoard(data: ApiBoard) {
-    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, gridColumn: list.grid_column, gridRow: list.grid_row, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, members: card.assignees.map(memberFromApi) })) })));
+    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, members: card.assignees.map(memberFromApi) })) })));
     setBoardLabels(data.labels);
     setWorkspaceMembers(data.members.map(memberFromApi));
     setWorkspaceId(data.workspace_id);
@@ -2068,7 +2067,7 @@ export default function Home() {
     </section>) : <>
       <section className="board-header">
         <div><button className="breadcrumbs" onClick={openHome}>{workspaceName} <span>/</span> {boardTitle}</button><div className="board-title-row">{isEditingBoardTitle ? <form className="board-title-form" onSubmit={(event) => { event.preventDefault(); saveBoardTitle(); }}><input autoFocus value={boardTitleDraft} onChange={(event) => setBoardTitleDraft(event.target.value)} maxLength={200} onKeyDown={(event) => { if (event.key === 'Escape') setEditingBoardTitle(false); }} /><button type="submit" disabled={isSavingBoardTitle}>✓</button></form> : <h1>{boardTitle}</h1>}<span className={`sync-status ${persistence}`}>{persistence === 'connected' ? 'Сохранено' : persistence === 'connecting' ? 'Подключение…' : 'Нет подключения'}</span><button className="title-edit" onClick={beginBoardRename} aria-label="Переименовать доску">✎</button></div></div>
-        <div className="board-tools"><div className="avatars">{workspaceMembers.slice(0, 3).map((person) => <Avatar key={person.name} member={person} />)}{workspaceMembers.length > 3 && <span className="more-members">+{workspaceMembers.length - 3}</span>}</div><div className="filter-control"><button className={`secondary-button ${filterMode !== 'all' ? 'active-filter' : ''}`} onClick={() => setFilterOpen((current) => !current)}>⌘ Фильтры</button>{isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['due', 'С дедлайном'], ['overdue', 'Просроченные']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}</div>}</div><button className="secondary-button" onClick={openArchive}>Архив</button><button className="share-button" onClick={openTeam}>Команда</button><div className="board-menu-control"><button className="secondary-button more" onClick={() => setBoardMenuOpen((current) => !current)} aria-expanded={isBoardMenuOpen}>•••</button>{isBoardMenuOpen && <div className="board-menu">{!isPublicViewer && <button onClick={() => { setBoardMenuOpen(false); openDiscordIntegration(); }}>⌁ Discord API</button>}<button onClick={exportCurrentBoard}>⇩ Экспорт JSON</button><button onClick={() => importFileRef.current?.click()}>⇧ Импорт Trello / Flowboard JSON</button><button className="danger-action" onClick={deleteCurrentBoard}>Удалить проект</button><input ref={importFileRef} type="file" accept="application/json,.json" onChange={importBoardFile} /><section className="visibility-control"><b>Доступ к доске</b><p>{boardVisibility === 'public' ? 'Public: любой аккаунт может только смотреть.' : 'Private: видят только участники проекта.'}</p><div><button type="button" className={boardVisibility === 'public' ? 'selected' : ''} onClick={() => changeBoardVisibility('public')}>Public · просмотр всем</button><button type="button" className={boardVisibility === 'private' ? 'selected' : ''} onClick={() => changeBoardVisibility('private')}>Private</button></div>{boardVisibility === 'public' && <button className="copy-public-link" type="button" onClick={copyPublicBoardLink}>Скопировать публичную ссылку</button>}</section><form onSubmit={saveBoardBackground}><label>Фон проекта по ссылке<input value={backgroundDraft} onChange={(event) => setBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" /></label><section className="background-display-control"><b>Отображение фона</b><div className="background-fit-options"><button type="button" className={boardBackgroundFit === 'cover' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('cover')}>Заполнить</button><button type="button" className={boardBackgroundFit === 'contain' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('contain')}>Целиком</button><button type="button" className={boardBackgroundFit === 'fill' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('fill')}>Растянуть</button></div><div className="background-position-options"><button type="button" className={boardBackgroundPosition === 'top' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('top')}>↑ Верх</button><button type="button" className={boardBackgroundPosition === 'center' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('center')}>⊙ Центр</button><button type="button" className={boardBackgroundPosition === 'bottom' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('bottom')}>↓ Низ</button></div><small>«Целиком» сохраняет изображение без обрезки, «Растянуть» подгоняет его под экран.</small></section><div><button type="submit" disabled={isSavingBackground}>{isSavingBackground ? 'Сохраняем…' : 'Сохранить фон'}</button><button type="button" onClick={() => { setBackgroundDraft(''); }}>Снять</button></div></form><input ref={boardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardBackground} /><button type="button" onClick={() => boardBackgroundFileRef.current?.click()} disabled={isUploadingBoardBackground}>{isUploadingBoardBackground ? 'Загружаем фон…' : '▧ Загрузить фон проекта'}</button></div>}</div></div>
+        <div className="board-tools"><div className="avatars">{workspaceMembers.slice(0, 3).map((person) => <Avatar key={person.name} member={person} />)}{workspaceMembers.length > 3 && <span className="more-members">+{workspaceMembers.length - 3}</span>}</div>{!isPublicViewer && <div className="board-view-toggle" role="group" aria-label="Режим расположения колонок"><button type="button" className={boardViewMode === 'standard' ? 'active' : ''} onClick={() => changeBoardViewMode('standard')}>Ряд</button><button type="button" className={boardViewMode === 'freeform' ? 'active' : ''} onClick={() => changeBoardViewMode('freeform')} title="Колонки можно свободно двигать; Shift включает привязку к сетке">Свободно</button></div>}<div className="filter-control"><button className={`secondary-button ${filterMode !== 'all' ? 'active-filter' : ''}`} onClick={() => setFilterOpen((current) => !current)}>⌘ Фильтры</button>{isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['due', 'С дедлайном'], ['overdue', 'Просроченные']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}</div>}</div><button className="secondary-button" onClick={openArchive}>Архив</button><button className="share-button" onClick={openTeam}>Команда</button><div className="board-menu-control"><button className="secondary-button more" onClick={() => setBoardMenuOpen((current) => !current)} aria-expanded={isBoardMenuOpen}>•••</button>{isBoardMenuOpen && <div className="board-menu">{!isPublicViewer && <button onClick={() => { setBoardMenuOpen(false); openDiscordIntegration(); }}>⌁ Discord API</button>}<button onClick={exportCurrentBoard}>⇩ Экспорт JSON</button><button onClick={() => importFileRef.current?.click()}>⇧ Импорт Trello / Flowboard JSON</button><button className="danger-action" onClick={deleteCurrentBoard}>Удалить проект</button><input ref={importFileRef} type="file" accept="application/json,.json" onChange={importBoardFile} /><section className="visibility-control"><b>Доступ к доске</b><p>{boardVisibility === 'public' ? 'Public: любой аккаунт может только смотреть.' : 'Private: видят только участники проекта.'}</p><div><button type="button" className={boardVisibility === 'public' ? 'selected' : ''} onClick={() => changeBoardVisibility('public')}>Public · просмотр всем</button><button type="button" className={boardVisibility === 'private' ? 'selected' : ''} onClick={() => changeBoardVisibility('private')}>Private</button></div>{boardVisibility === 'public' && <button className="copy-public-link" type="button" onClick={copyPublicBoardLink}>Скопировать публичную ссылку</button>}</section><form onSubmit={saveBoardBackground}><label>Фон проекта по ссылке<input value={backgroundDraft} onChange={(event) => setBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" /></label><section className="background-display-control"><b>Отображение фона</b><div className="background-fit-options"><button type="button" className={boardBackgroundFit === 'cover' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('cover')}>Заполнить</button><button type="button" className={boardBackgroundFit === 'contain' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('contain')}>Целиком</button><button type="button" className={boardBackgroundFit === 'fill' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('fill')}>Растянуть</button></div><div className="background-position-options"><button type="button" className={boardBackgroundPosition === 'top' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('top')}>↑ Верх</button><button type="button" className={boardBackgroundPosition === 'center' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('center')}>⊙ Центр</button><button type="button" className={boardBackgroundPosition === 'bottom' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('bottom')}>↓ Низ</button></div><small>«Целиком» сохраняет изображение без обрезки, «Растянуть» подгоняет его под экран.</small></section><div><button type="submit" disabled={isSavingBackground}>{isSavingBackground ? 'Сохраняем…' : 'Сохранить фон'}</button><button type="button" onClick={() => { setBackgroundDraft(''); }}>Снять</button></div></form><input ref={boardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardBackground} /><button type="button" onClick={() => boardBackgroundFileRef.current?.click()} disabled={isUploadingBoardBackground}>{isUploadingBoardBackground ? 'Загружаем фон…' : '▧ Загрузить фон проекта'}</button></div>}</div></div>
         <div className="board-sort-control"><button className={`secondary-button ${cardSort !== 'manual' ? 'active-filter' : ''}`} onClick={() => setSortOpen((current) => !current)} aria-expanded={isSortOpen}>⇅ Сортировка</button>{isSortOpen && <div className="filter-popover sort-popover"><p>Порядок в колонках</p>{([['manual', 'Как на доске'], ['priority', 'Сначала важные'], ['activity', 'Недавно обновлённые']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => { setCardSort(mode); setSortOpen(false); }}>{label}{cardSort === mode && <b>✓</b>}</button>)}</div>}</div>
         <div className="board-labels-control">
           <button className={`secondary-button ${isBoardLabelsOpen ? 'active-filter' : ''}`} type="button" onClick={() => { setBoardLabelsOpen((current) => !current); setEditingBoardLabel(null); }}>▰ Метки</button>
@@ -2096,17 +2095,17 @@ export default function Home() {
           </section>
         </div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
-      <section className={`board ${isBoardPanning ? 'board-panning' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={moveBoardPan} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan}>
-        {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <>{visibleColumns.map((column) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${draggingColumnId === column.id ? 'column-dragging' : ''} ${columnDropTarget?.visualColumnId === column.id ? `column-drop-${columnDropTarget.edge}` : ''}`} key={column.id} aria-label={column.title} onContextMenu={(event) => { if (isPublicViewer || (event.target instanceof Element && event.target.closest('.task-card'))) return; event.preventDefault(); event.stopPropagation(); setColumnContextMenu({ column, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 150) }); }} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId) { const bounds = event.currentTarget.getBoundingClientRect(); const after = event.clientX > bounds.left + bounds.width / 2; const index = columns.findIndex((item) => item.id === column.id); const next = after ? columns[index + 1] : undefined; setColumnDropTarget({ beforeColumnId: after ? next?.id ?? null : column.id, visualColumnId: column.id, edge: after ? 'after' : 'before' }); updateBoardAutoScroll(event); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { if (draggingColumnId) { setColumnDropTarget(null); stopBoardAutoScroll(); } else { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId) { const target = columnDropTarget?.visualColumnId === column.id ? columnDropTarget.beforeColumnId ?? undefined : column.id; moveColumn(draggingColumnId, target); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>
-          <div className="column-head column-drag-handle" draggable={!isPublicViewer} onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData('application/x-flowboard-column', String(column.id)); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setDragImage(event.currentTarget, 30, 22); setDraggingColumnId(column.id); setColumnDropTarget(null); }} onDragEnd={clearColumnDragState}><span className="column-drag-icon" aria-hidden="true">⠿</span><div>{editingColumnId === column.id ? <form className="column-rename" onSubmit={(event) => { event.preventDefault(); saveColumnTitle(column.id); }}><input autoFocus maxLength={200} value={columnTitleDraft} onChange={(event) => setColumnTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setEditingColumnId(null); }} aria-label="Название колонки" /><button type="submit" disabled={isSavingColumn}>✓</button></form> : <><h2>{column.title}</h2><span>{column.cards.length}</span></>}</div><div className="column-actions"><button className="column-menu" aria-label={`Меню колонки ${column.title}`} onClick={() => setColumnMenuId((current) => current === column.id ? null : column.id)}>•••</button>{columnMenuId === column.id && <div className="column-popover"><button onClick={() => beginColumnRename(column)}>Переименовать</button><button className="danger-action" onClick={() => deleteColumn(column)}>Удалить пустую</button></div>}</div></div>
-          <div className={`card-list ${dragDropTarget?.listId === column.id && dragDropTarget.beforeCardId === null ? 'drop-at-end' : ''}`}>{column.cards.map((card) => <article className={`task-card ${card.completedAt ? 'completed' : ''} ${labelsCollapsed ? 'labels-collapsed' : ''} ${dragging?.cardId === card.id ? 'dragging' : ''} ${dragDropTarget?.listId === column.id && dragDropTarget.beforeCardId === card.id ? 'drop-before' : ''}`} key={card.id} draggable={!isPublicViewer} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setCardContextMenu({ card, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 170) }); }} onDragStart={(event) => { didDragRef.current = false; event.dataTransfer.setData('application/x-flowboard-card', String(card.id)); event.dataTransfer.effectAllowed = 'move'; setDragging({ cardId: card.id, sourceListId: column.id }); setDragDropTarget(null); }} onDragEnd={() => { didDragRef.current = true; clearDragState(); window.setTimeout(() => { didDragRef.current = false; }, 0); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId || !dragging || dragging.cardId === card.id) return; const bounds = event.currentTarget.getBoundingClientRect(); const cardIndex = column.cards.findIndex((item) => item.id === card.id); const nextCard = event.clientY > bounds.top + bounds.height / 2 ? column.cards[cardIndex + 1] : card; setDragOverListId(column.id); setDragDropTarget({ listId: column.id, beforeCardId: nextCard?.id ?? null }); updateCardListAutoScroll(event); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); if (draggingColumnId) { moveColumn(draggingColumnId, column.id); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : card.id; if (!dragging || dragging.cardId === card.id || beforeCardId === dragging.cardId) { clearDragState(); return; } moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }} onClick={() => { if (!didDragRef.current) openCard(card); }}>
+      <section className={`board ${isBoardPanning ? 'board-panning' : ''} ${boardViewMode === 'freeform' ? 'board-freeform' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={moveBoardPan} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan}>
+        {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <div className={boardViewMode === 'freeform' ? 'freeform-canvas' : 'board-columns'} style={boardViewMode === 'freeform' ? { width: freeformCanvasSize.width, height: freeformCanvasSize.height } : undefined}>{visibleColumns.map((column, index) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${draggingColumnId === column.id ? 'column-dragging' : ''}`} key={column.id} aria-label={column.title} style={boardViewMode === 'freeform' ? (() => { const position = freeformLayout[String(column.id)] ?? { x: index * 336, y: 0 }; return { left: position.x, top: position.y }; })() : undefined} onContextMenu={(event) => { if (isPublicViewer || (event.target instanceof Element && event.target.closest('.task-card'))) return; event.preventDefault(); event.stopPropagation(); setColumnContextMenu({ column, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 150) }); }} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId && boardViewMode === 'standard') { const bounds = event.currentTarget.getBoundingClientRect(); const next = event.clientX > bounds.left + bounds.width / 2 ? visibleColumns[index + 1] : column; setColumnDropBeforeId(next?.id ?? null); updateBoardAutoScroll(event); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId && boardViewMode === 'standard') { moveColumn(draggingColumnId, columnDropBeforeId ?? undefined); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>
+          <div className="column-head column-drag-handle" draggable={!isPublicViewer && boardViewMode === 'standard'} onPointerDown={(event) => beginFreeformColumnDrag(event, column, index)} onPointerMove={moveFreeformColumnDrag} onPointerUp={endFreeformColumnDrag} onPointerCancel={endFreeformColumnDrag} onDragStart={(event) => { if (boardViewMode !== 'standard') { event.preventDefault(); return; } event.stopPropagation(); event.dataTransfer.setData('application/x-flowboard-column', String(column.id)); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setDragImage(event.currentTarget, 30, 22); setDraggingColumnId(column.id); }} onDragEnd={clearColumnDragState}><span className="column-drag-icon" aria-hidden="true">⠿</span><div>{editingColumnId === column.id ? <form className="column-rename" onSubmit={(event) => { event.preventDefault(); saveColumnTitle(column.id); }}><input autoFocus maxLength={200} value={columnTitleDraft} onChange={(event) => setColumnTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setEditingColumnId(null); }} aria-label="Название колонки" /><button type="submit" disabled={isSavingColumn}>✓</button></form> : <><h2>{column.title}</h2><span>{column.cards.length}</span></>}</div><div className="column-actions"><button className="column-menu" aria-label={`Меню колонки ${column.title}`} onClick={() => setColumnMenuId((current) => current === column.id ? null : column.id)}>•••</button>{columnMenuId === column.id && <div className="column-popover"><button onClick={() => beginColumnRename(column)}>Переименовать</button><button className="danger-action" onClick={() => deleteColumn(column)}>Удалить пустую</button></div>}</div></div>
+          <div className={`card-list ${dragDropTarget?.listId === column.id && dragDropTarget.beforeCardId === null ? 'drop-at-end' : ''}`}>{column.cards.map((card) => <article className={`task-card ${card.completedAt ? 'completed' : ''} ${labelsCollapsed ? 'labels-collapsed' : ''} ${dragging?.cardId === card.id ? 'dragging' : ''} ${dragDropTarget?.listId === column.id && dragDropTarget.beforeCardId === card.id ? 'drop-before' : ''}`} key={card.id} draggable={!isPublicViewer} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setCardContextMenu({ card, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 170) }); }} onDragStart={(event) => { didDragRef.current = false; event.dataTransfer.setData('application/x-flowboard-card', String(card.id)); event.dataTransfer.effectAllowed = 'move'; setDragging({ cardId: card.id, sourceListId: column.id }); setDragDropTarget(null); }} onDragEnd={() => { didDragRef.current = true; clearDragState(); window.setTimeout(() => { didDragRef.current = false; }, 0); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId || !dragging || dragging.cardId === card.id) return; const bounds = event.currentTarget.getBoundingClientRect(); const cardIndex = column.cards.findIndex((item) => item.id === card.id); const nextCard = event.clientY > bounds.top + bounds.height / 2 ? column.cards[cardIndex + 1] : card; setDragOverListId(column.id); setDragDropTarget({ listId: column.id, beforeCardId: nextCard?.id ?? null }); updateCardListAutoScroll(event); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); if (draggingColumnId && boardViewMode === 'standard') { moveColumn(draggingColumnId, columnDropBeforeId ?? undefined); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : card.id; if (!dragging || dragging.cardId === card.id || beforeCardId === dragging.cardId) { clearDragState(); return; } moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }} onClick={() => { if (!didDragRef.current) openCard(card); }}>
             {card.hasUnreadMentions && <span className="card-mention-dot" title="Вас упомянули в этой карточке" aria-label="Вас упомянули в этой карточке" />}{card.coverUrl && <div className={`card-cover ${card.coverMode ?? 'full'}`}><img src={assetUrl(card.coverUrl)} alt="" /></div>}<div className="card-main">{card.labels.length > 0 && <div className="card-top"><div className="card-labels">{card.labels.map((label) => <button className="label custom-label" key={label.id} style={{ color: '#F7F8FC', backgroundColor: `${label.color}66` }} onClick={(event) => { event.stopPropagation(); setLabelsCollapsed((current) => !current); }}>{label.name}</button>)}</div></div>}<div className="card-title-row"><button className="card-complete" aria-label={card.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(card.completedAt)} onClick={(event) => toggleCardCompletion(card, event)}>{card.completedAt && '✓'}</button><h3>{card.title}</h3></div>{card.dueAt && <p className={`due ${new Date(card.dueAt).getTime() < Date.now() ? 'today' : ''}`}>◷ {formatDue(card.dueAt)}</p>}</div>
             {card.priority ? <span className="card-priority-corner" style={{ right: card.members.length ? 96 : 14 }}><PrioritySignal priority={card.priority} /></span> : null}
             {(card.checklist || card.comments || card.attachments || card.members.length > 0) && <footer className="card-footer"><div className="card-meta">{card.checklist && <span className={isChecklistComplete(card.checklist) ? 'checklist-complete' : ''}><CardMetaIcon type="checklist" />{card.checklist}</span>}{card.comments && <span><CardMetaIcon type="comments" />{card.comments}</span>}{card.attachments && <span title="Есть вложения"><CardMetaIcon type="attachments" /></span>}</div><div className="card-avatars">{card.members.map((member) => <Avatar key={member.id} member={member} />)}</div></footer>}
           </article>)}</div>
           {isComposerOpen === column.id ? <form className="composer" onSubmit={(event) => addCard(event, column.id)}><textarea autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Название задачи" /><div><button className="add-card" type="submit">Добавить</button><button className="cancel" type="button" onClick={() => { setComposerOpen(null); setDraft(''); }}>Отмена</button></div></form> : <button className="add-task" onClick={() => setComposerOpen(column.id)}>＋ Добавить задачу</button>}
         </section>)}
-        <button className="add-column" onClick={addColumn}>＋ Добавить колонку</button></>}
+        <button className="add-column" style={boardViewMode === 'freeform' ? { left: 24, top: freeformCanvasSize.height - 74 } : undefined} onClick={addColumn}>＋ Добавить колонку</button></div>}
       </section>
       {isArchiveOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setArchiveOpen(false)}><section className="archive-modal" role="dialog" aria-modal="true" aria-label="Архив задач" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setArchiveOpen(false)} aria-label="Закрыть архив">×</button><p className="eyebrow">АРХИВ ПРОЕКТА</p><h2>Архивированные задачи</h2><p className="archive-copy">Восстановленная задача вернётся в свою последнюю колонку.</p>{isArchiveLoading ? <p className="detail-loading">Загружаем архив…</p> : archivedCards.length ? <div className="archive-list">{archivedCards.map((card) => <article key={card.id}><div><b>{card.title}</b>{card.description && <small>{card.description}</small>}<time>{new Date(card.archived_at).toLocaleString('ru-RU')}</time></div><button onClick={() => restoreArchivedCard(card)}>Восстановить</button></article>)}</div> : <p className="empty-comments">В архиве пока нет задач.</p>}</section></div>}
       {isTeamOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setTeamOpen(false)}><section className="archive-modal team-modal" role="dialog" aria-modal="true" aria-label="Команда проекта" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setTeamOpen(false)} aria-label="Закрыть команду">×</button><p className="eyebrow">ПРОЕКТ</p><h2>Команда и доступы</h2><p className="archive-copy">Участник получает доступ только к этому проекту. Выберите готовую роль — сервер применяет права на каждом запросе.</p><div className="role-guide">{(['viewer', 'contributor', 'editor', 'full_access'] as TeamMember['preset'][]).map((role) => <div key={role}><b>{roleLabels[role]}</b><span>{roleDescriptions[role]}</span></div>)}</div>{isTeamLoading ? <p className="detail-loading">Загружаем участников…</p> : <><form className="member-picker" onSubmit={addWorkspaceMember}><label><span>Добавить участника</span><input autoFocus value={accountSearch} onChange={(event) => { setAccountSearch(event.target.value); setSelectedAccountId(''); }} placeholder="Найти по @нику" /></label><div className="member-picker-results">{availableAccounts.filter((item) => item.username.toLowerCase().includes(accountSearch.trim().replace(/^@/, '').toLowerCase())).slice(0, 6).map((item) => <button type="button" className={selectedAccountId === item.id ? 'selected' : ''} key={item.id} onClick={() => setSelectedAccountId(item.id)}><Avatar member={memberFromApi(item)} /><span>@{item.username}</span><small>{selectedAccountId === item.id ? 'Выбран' : 'Выбрать'}</small></button>)}{!availableAccounts.filter((item) => item.username.toLowerCase().includes(accountSearch.trim().replace(/^@/, '').toLowerCase())).length && <p className="empty-comments">Подходящих активных аккаунтов нет.</p>}</div><button className="create-button" disabled={!selectedAccountId || isSavingMember}>{isSavingMember ? 'Добавляем…' : 'Добавить в проект'}</button></form><div className="team-list">{teamMembers.map((member) => <article key={member.id}><Avatar member={memberFromApi({ id: member.id, username: member.username, avatar_url: member.avatar_url })} /><div><b>@{member.username}</b><small>{roleDescriptions[member.preset]}</small></div>{member.preset === 'owner' ? <span className="role-badge owner">Владелец</span> : <div className="team-actions"><select value={member.preset} onChange={(event) => changeTeamPreset(member, event.target.value as TeamMember['preset'])} aria-label={`Роль для @${member.username}`}><option value="viewer">Наблюдатель — только просмотр</option><option value="contributor">Участник — карточки</option><option value="editor">Редактор — карточки, колонки, метки</option><option value="full_access">Полный доступ — команда и настройки</option></select><button onClick={() => removeTeamMember(member)}>Исключить</button></div>}</article>)}</div></>}</section></div>}

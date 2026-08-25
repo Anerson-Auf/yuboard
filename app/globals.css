@@ -125,6 +125,23 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 @media (max-width: 760px) { .conversation-panel { min-height: 420px; margin: 18px -20px -20px; padding: 17px 20px 20px; }.conversation-scroll { max-height: 44vh; }.comment-reply { margin-left: 24px !important; } }
 .markdown-media { display: block; width: min(100%, 520px); max-height: 360px; margin: 8px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); object-fit: contain; }.markdown-image-link { display: block; width: fit-content; max-width: 100%; padding: 0; overflow: hidden; }.markdown-video { width: min(100%, 520px); }.media-drop-target { border-style: dashed; transition: border-color .16s, background .16s, opacity .16s; }.media-drop-target:focus, .media-drop-target:hover { border-color: color-mix(in srgb, var(--primary) 62%, var(--line)); background: color-mix(in srgb, var(--primary) 6%, var(--surface-raised)); }.media-drop-target.uploading { cursor: wait; opacity: .7; }
 
+/* Board layout modes. The normal view is one shared row; the freeform view is
+   a personal canvas whose coordinates are persisted per user and board. */
+.board { display: block; overflow: auto; }
+.board-columns { display: flex; align-items: flex-start; gap: 16px; min-width: max-content; min-height: calc(100vh - 170px); }
+.board-freeform { cursor: grab; overscroll-behavior: contain; }
+.freeform-canvas { position: relative; min-width: 980px; min-height: calc(100vh - 190px); }
+.board-freeform .column { position: absolute; margin: 0; touch-action: none; }
+.board-freeform .add-column { position: absolute; width: 220px; }
+.board-freeform .column-head { cursor: move; touch-action: none; }
+.board-freeform .column-dragging { z-index: 3; opacity: .9; box-shadow: 0 18px 42px rgb(0 0 0 / 32%); }
+.board-view-toggle { display: inline-flex; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--surface) 76%, transparent); }
+.board-view-toggle button { min-height: 32px; padding: 0 9px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; font-weight: 750; }
+.board-view-toggle button:last-child { border-right: 0; }
+.board-view-toggle button:hover { color: var(--text); background: var(--surface-soft); }
+.board-view-toggle button.active { color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, transparent); }
+@media (max-width: 760px) { .board-view-toggle button { padding: 0 7px; font-size: 10px; }.freeform-canvas { min-height: 760px; } }
+
 /* Keep the conversation column visually primary and give it the modal's full working height. */
 .task-layout { height: min(90vh, 820px); max-height: min(90vh, 820px); }
 .task-content, .task-sidebar { height: 100%; max-height: none; }
