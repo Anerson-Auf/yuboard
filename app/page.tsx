@@ -626,6 +626,17 @@ export default function Home() {
   }, [checklists]);
 
   useEffect(() => {
+    const openAttachmentPreview = (event: MouseEvent) => {
+      const image = event.target instanceof Element ? event.target.closest<HTMLImageElement>('.attachment-preview img') : null;
+      if (!image) return;
+      const name = image.alt || image.closest('figure')?.querySelector('figcaption span')?.textContent || 'Изображение';
+      setImagePreview({ url: image.currentSrc || image.src, name });
+    };
+    document.addEventListener('click', openAttachmentPreview);
+    return () => document.removeEventListener('click', openAttachmentPreview);
+  }, []);
+
+  useEffect(() => {
     if (persistence !== 'connected' || !boardId) return;
     let refreshTimer: number | undefined;
     const stream = new EventSource(`${API_URL}/v1/boards/${boardId}/events`, { withCredentials: true });

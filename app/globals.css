@@ -227,6 +227,9 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .activity-message p { opacity: .86; }
 .light .activity-message { background: rgb(28 39 52 / 7%); }
 
+.attachment-preview img { cursor: zoom-in; }
+.image-preview-backdrop { z-index: 120; }
+
 /* Leave a deliberate gutter between cards and a column's vertical scrollbar. */
 .card-list { padding-right: 10px; }
 
