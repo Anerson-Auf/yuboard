@@ -470,6 +470,8 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 /* A workspace cover is artwork for the whole card, so never crop it to fill. */
 .workspace-card.has-background { background-color: #242528; background-position: center; background-repeat: no-repeat; background-size: 100% 100%; }
 
+.default-board-ambient > canvas { display: block; width: 100%; height: 100%; }
+
 /* A dispersed starfall: every coin has its own entry and exit, with a south-west bias. */
 .default-board-ambient > i:nth-child(12n + 1) { top: -18vh; left: 112% !important; --coin-drift: -100vw !important; --coin-mid-x: -48vw; --coin-mid-y: 43vh; --coin-late-x: -82vw; --coin-late-y: 78vh; --coin-end-y: 102vh; }
 .default-board-ambient > i:nth-child(12n + 2) { top: -28vh; left: 96% !important; --coin-drift: -78vw !important; --coin-mid-x: -38vw; --coin-mid-y: 49vh; --coin-late-x: -64vw; --coin-late-y: 80vh; --coin-end-y: 94vh; }

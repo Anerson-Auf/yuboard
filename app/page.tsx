@@ -89,6 +89,88 @@ function homeGreetingForLocalTime(date = new Date()) {
   return 'Рад видеть вас в столь поздний час';
 }
 
+type StarfallParticle = { x: number; y: number; vx: number; vy: number; radius: number; alpha: number; kind: 'dot' | 'glow'; phase: number };
+
+function AmbientStarfall() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) return;
+    let width = 0;
+    let height = 0;
+    let frameId = 0;
+    let lastTime = performance.now();
+    let lastPaint = 0;
+    let particles: StarfallParticle[] = [];
+    const random = (min: number, max: number) => min + Math.random() * (max - min);
+    const createParticle = (spread: boolean): StarfallParticle => {
+      const speed = random(70, 185);
+      const angle = random(108, 162) * Math.PI / 180;
+      const isDot = Math.random() < .42;
+      return {
+        x: spread ? random(-width * .15, width + 320) : random(-width * .05, width + 280),
+        y: spread ? random(-height * .45, height * 1.05) : random(-height * .35, height * .65),
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        radius: isDot ? random(1.6, 4.2) : random(12, 24),
+        alpha: isDot ? random(.4, .7) : random(.14, .32),
+        kind: isDot ? 'dot' : 'glow',
+        phase: random(0, Math.PI * 2),
+      };
+    };
+    const resize = () => {
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = Math.round(width * pixelRatio);
+      canvas.height = Math.round(height * pixelRatio);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      particles = Array.from({ length: 48 }, () => createParticle(true));
+    };
+    const drawParticle = (particle: StarfallParticle, time: number) => {
+      const alpha = particle.alpha * (.84 + Math.sin(time * 4.5 + particle.phase) * .16);
+      if (particle.kind === 'dot') {
+        context.fillStyle = `rgb(244 162 193 / ${alpha})`;
+        context.beginPath(); context.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2); context.fill();
+        return;
+      }
+      const glow = context.createRadialGradient(particle.x, particle.y, 0, particle.x, particle.y, particle.radius * 2.4);
+      glow.addColorStop(0, `rgb(255 180 204 / ${alpha})`);
+      glow.addColorStop(1, 'rgb(242 126 171 / 0)');
+      context.fillStyle = glow;
+      context.beginPath(); context.arc(particle.x, particle.y, particle.radius * 2.4, 0, Math.PI * 2); context.fill();
+    };
+    const paint = (now: number, delta: number) => {
+      context.clearRect(0, 0, width, height);
+      const padding = Math.max(width, height) * .2;
+      particles.forEach((particle, index) => {
+        particle.x += particle.vx * delta;
+        particle.y += particle.vy * delta;
+        if (particle.y > height + padding || particle.x < -padding) particles[index] = createParticle(false);
+        drawParticle(particles[index], now / 1000);
+      });
+    };
+    const render = (now: number) => {
+      const delta = Math.min((now - lastTime) / 1000, .05);
+      lastTime = now;
+      if (now - lastPaint >= 33) { paint(now, delta); lastPaint = now; }
+      frameId = window.requestAnimationFrame(render);
+    };
+
+    resize();
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reducedMotion) paint(0, 0); else frameId = window.requestAnimationFrame(render);
+    window.addEventListener('resize', resize);
+    return () => { window.cancelAnimationFrame(frameId); window.removeEventListener('resize', resize); };
+  }, []);
+
+  return <div className="default-board-ambient" aria-hidden="true"><canvas ref={canvasRef} /></div>;
+}
+
 function freeformLiveSocketUrl(boardId: string) {
   const base = API_URL || window.location.origin;
   const url = new URL(`/v1/boards/${boardId}/freeform/live/ws`, base);
@@ -2686,7 +2768,7 @@ export default function Home() {
     </header>
     <input ref={workspaceBackgroundFileRef} className="workspace-background-file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadWorkspaceBackground} />
 
-    <div className="default-board-ambient" aria-hidden="true">{Array.from({ length: 84 }, (_, index) => <i key={index} />)}</div>
+    <AmbientStarfall />
 
     {isProfileOpen && account && <div className="modal-backdrop" role="presentation" onMouseDown={() => setProfileOpen(false)}><section className="archive-modal profile-modal" role="dialog" aria-modal="true" aria-label="Профиль" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setProfileOpen(false)} aria-label="Закрыть профиль">×</button>{profilePanel === 'overview' ? <><header className="profile-modal-head"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /><div><p className="eyebrow">ПРОФИЛЬ</p><h2>@{account.user.username}</h2></div></header><div className="profile-action-list"><button onClick={() => { setProfileName(account.user.username); setProfilePanel('username'); }}>Изменить ник <span>›</span></button><button onClick={() => setProfilePanel('password')}>Сменить пароль <span>›</span></button><label>Изменить аватар<input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadProfileAvatar} disabled={isSavingProfile} /></label></div><button className="profile-signout" onClick={signOut}>Выйти из аккаунта</button></> : profilePanel === 'username' ? <><button className="text-action" onClick={() => setProfilePanel('overview')}>← Профиль</button><h2>Изменить ник</h2><form className="profile-form" onSubmit={saveProfileName}><label>Новый ник<input autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={32} /></label><div><button type="button" className="secondary-button" onClick={() => setProfilePanel('overview')}>Отмена</button><button className="create-button" type="submit" disabled={isSavingProfile}>Сохранить</button></div></form></> : <><button className="text-action" onClick={() => setProfilePanel('overview')}>← Профиль</button><h2>Сменить пароль</h2><form className="profile-form" onSubmit={changeProfilePassword}><label>Текущий пароль<input autoFocus type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>Новый пароль<input type="password" value={nextPassword} onChange={(event) => setNextPassword(event.target.value)} minLength={10} /></label><div><button type="button" className="secondary-button" onClick={() => setProfilePanel('overview')}>Отмена</button><button className="create-button" type="submit" disabled={isSavingProfile}>Сохранить</button></div></form></>}{profileError && <p className="profile-error">{profileError}</p>}</section></div>}
 
