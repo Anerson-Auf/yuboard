@@ -86,6 +86,12 @@ type PointerCardDrag = { card: Card; sourceListId: EntityId; startX: number; sta
 const API_URL = process.env.NEXT_PUBLIC_FLOWBOARD_API_URL ?? '';
 const browserFetch = globalThis.fetch.bind(globalThis);
 const DEFAULT_REACTION_EMOJIS = ['👍', '👎', '❤️', '🔥', '🎉', '😂', '😮', '😢', '😡', '🤔', '👀', '🙏', '💯', '✅', '❌', '🚀', '💀', '🤝', '👏', '💪', '⭐', '💫', '⚡', '🎯', '🫡', '🫶', '🥳', '😎', '🤡', '🧠', '💬', '📌'];
+const DEFAULT_STICKERS = [
+  { emoji: '😀', name: 'Радость' }, { emoji: '😂', name: 'Смех' }, { emoji: '🥳', name: 'Праздник' }, { emoji: '😍', name: 'Восторг' },
+  { emoji: '😎', name: 'Круто' }, { emoji: '🤔', name: 'Думаю' }, { emoji: '👀', name: 'Смотрю' }, { emoji: '🫡', name: 'Принято' },
+  { emoji: '👍', name: 'Одобряю' }, { emoji: '👏', name: 'Аплодисменты' }, { emoji: '🔥', name: 'Огонь' }, { emoji: '💯', name: 'Сто процентов' },
+  { emoji: '🎉', name: 'Ура' }, { emoji: '🚀', name: 'Поехали' }, { emoji: '❤️', name: 'Любовь' }, { emoji: '💀', name: 'Умер' },
+];
 
 function assetUrl(url: string | null | undefined) {
   if (!url) return '';
@@ -226,12 +232,13 @@ function inlineMarkdown(value: string, highlightMentions = false): ReactNode[] {
       const mediaUrl = assetUrl(image[2]);
       const isVideo = image[1].startsWith('video:');
       const isAudio = image[1].startsWith('audio:');
-      const name = image[1].replace(/^(?:video|audio):/, '') || (isVideo ? 'Видео' : isAudio ? 'Голосовое сообщение' : 'Изображение');
+      const isSticker = image[1].startsWith('sticker:');
+      const name = image[1].replace(/^(?:video|audio|sticker):/, '') || (isVideo ? 'Видео' : isAudio ? 'Голосовое сообщение' : isSticker ? 'Стикер' : 'Изображение');
       return isAudio
         ? <audio className="markdown-media markdown-audio" controls preload="metadata" src={mediaUrl} aria-label={name} />
         : isVideo
         ? <video className="markdown-media markdown-video" key={index} controls preload="metadata" src={mediaUrl} aria-label={name} />
-        : <a className="markdown-image-link" key={index} href={mediaUrl} target="_blank" rel="noreferrer"><img className="markdown-media" src={mediaUrl} alt={name} /></a>;
+        : <a className={`markdown-image-link ${isSticker ? 'chat-sticker-link' : ''}`} key={index} href={mediaUrl} target="_blank" rel="noreferrer"><img className={`markdown-media ${isSticker ? 'chat-sticker' : ''}`} src={mediaUrl} alt={name} /></a>;
     }
     const link = /^\[([^\]]+)\]\(([^\s)]+)/.exec(part);
     if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
@@ -247,6 +254,8 @@ function inlineMarkdown(value: string, highlightMentions = false): ReactNode[] {
 
 function MarkdownDescription({ value, highlightMentions = false, emptyText = 'Добавьте описание задачи…' }: { value: string; highlightMentions?: boolean; emptyText?: string }) {
   if (!value.trim()) return <p className="description-empty">{emptyText}</p>;
+  const defaultSticker = /^\[\[sticker:([^\]\r\n]{1,16})\]\]$/.exec(value.trim());
+  if (defaultSticker) return <span className="chat-sticker chat-sticker-emoji" role="img" aria-label="Стикер">{defaultSticker[1]}</span>;
   const lines = value.replace(/\r\n?/g, '\n').split('\n');
   const blocks: ReactNode[] = [];
   let index = 0;
@@ -418,6 +427,10 @@ function CardMetaIcon({ type }: { type: 'comments' | 'checklist' | 'attachments'
 
 function StickerIcon() {
   return <svg className="sticker-icon" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" d="M2 1.5h12v9.1a3.9 3.9 0 0 1-3.9 3.9H2zm1.5 1.5v10h6.6A2.4 2.4 0 0 0 12.5 10.6V3zM6 6a1 1 0 1 1-2 0 1 1 0 0 1 2 0m5 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-6.7 2.6h7.4v1.5H4.3z" clipRule="evenodd" /></svg>;
+}
+
+function ReactionIcon() {
+  return <svg className="reaction-icon" fill="none" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.1" stroke="currentColor" strokeWidth="1.35" /><circle cx="5.75" cy="6.3" r=".75" fill="currentColor" /><circle cx="10.25" cy="6.3" r=".75" fill="currentColor" /><path d="M5.15 9.45c.62 1.15 1.56 1.72 2.85 1.72s2.23-.57 2.85-1.72" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" /></svg>;
 }
 
 function BoardToolbarIcon({ type }: { type: 'filter' | 'labels' | 'milestones' | 'archive' | 'team' }) {
@@ -2756,11 +2769,60 @@ export default function Home() {
     const name = sticker.name.replace(/[\[\]\r\n]/g, '').trim() || 'Стикер';
     return `![sticker:${name}](${assetUrl(sticker.url)})`;
   }
-  function appendStickerToDraft(target: 'comment' | 'thread', sticker: BoardSticker) {
-    const append = (value: string) => value ? `${value}${value.endsWith('\n') ? '' : '\n'}${stickerMarkdown(sticker)}` : stickerMarkdown(sticker);
-    if (target === 'comment') setCommentDraft((current) => append(current));
-    else setThreadDraft((current) => append(current));
+  function sendStickerMessage(target: 'comment' | 'thread', body: string) {
+    if (!selected || !body || (target === 'comment' ? isSendingComment : isSendingThread)) return;
+    const parentCommentId = target === 'thread' ? threadRoot?.id : null;
+    if (target === 'thread' && (!parentCommentId || typeof parentCommentId !== 'string')) return;
     setStickerPickerTarget(null);
+    const localComment: Comment = {
+      id: `local-sticker-${Date.now()}`,
+      body,
+      author_id: account?.user.id,
+      author_name: account?.user.username ?? 'Вы',
+      parent_comment_id: parentCommentId ? String(parentCommentId) : null,
+      created_at: new Date().toISOString(),
+      reactions: [],
+    };
+    if (target === 'comment') {
+      if (persistence !== 'connected' || typeof selected.id !== 'string') {
+        setComments((current) => [localComment, ...current]);
+        return;
+      }
+      setSendingComment(true);
+      setComments((current) => [localComment, ...current]);
+      void fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
+        .then(async (response) => { if (!response.ok) throw new Error('sticker comment save failed'); return response.json() as Promise<Comment>; })
+        .then((comment) => setComments((current) => current.map((item) => item.id === localComment.id ? comment : item)))
+        .catch(() => { setComments((current) => current.filter((item) => item.id !== localComment.id)); showToast('Не удалось отправить стикер'); })
+        .finally(() => setSendingComment(false));
+      return;
+    }
+    if (persistence !== 'connected' || typeof selected.id !== 'string') {
+      setThreadComments((current) => [...current, localComment]);
+      setComments((current) => [...current, localComment]);
+      return;
+    }
+    setSendingThread(true);
+    setThreadComments((current) => [...current, localComment]);
+    setComments((current) => [...current, localComment]);
+    void fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body, parent_comment_id: parentCommentId }) })
+      .then(async (response) => { if (!response.ok) throw new Error('sticker thread save failed'); return response.json() as Promise<Comment>; })
+      .then((comment) => {
+        setThreadComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
+        setComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
+      })
+      .catch(() => {
+        setThreadComments((current) => current.filter((item) => item.id !== localComment.id));
+        setComments((current) => current.filter((item) => item.id !== localComment.id));
+        showToast('Не удалось отправить стикер');
+      })
+      .finally(() => setSendingThread(false));
+  }
+  function sendBoardSticker(target: 'comment' | 'thread', sticker: BoardSticker) {
+    sendStickerMessage(target, stickerMarkdown(sticker));
+  }
+  function sendDefaultSticker(target: 'comment' | 'thread', emoji: string) {
+    sendStickerMessage(target, `[[sticker:${emoji}]]`);
   }
   async function uploadBoardSticker(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -2804,8 +2866,9 @@ export default function Home() {
     return <span className="sticker-composer-control">
       <button className={`sticker-composer-button ${open ? 'active' : ''}`} type="button" onClick={() => setStickerPickerTarget(open ? null : target)} aria-label="Отправить стикер" title="Отправить стикер"><StickerIcon /></button>
       {open && <div className="sticker-picker" role="dialog" aria-label="Стикеры">
-        <b>Стикеры доски</b>
-        <div className="sticker-picker-grid">{boardStickers.length ? boardStickers.map((sticker) => <span key={sticker.id} className="sticker-picker-item"><button type="button" onClick={() => appendStickerToDraft(target, sticker)} title={sticker.name}><img src={assetUrl(sticker.url)} alt={sticker.name} /></button>{canManageBoardAdministration && <button type="button" className="sticker-remove" onClick={() => deleteBoardSticker(sticker)} aria-label={`Удалить стикер ${sticker.name}`}>×</button>}</span>) : <span className="sticker-picker-empty">Пока нет стикеров</span>}</div>
+        <b>Стандартные</b>
+        <div className="sticker-picker-grid sticker-picker-defaults">{DEFAULT_STICKERS.map((sticker) => <button type="button" key={sticker.emoji} onClick={() => sendDefaultSticker(target, sticker.emoji)} title={sticker.name} aria-label={sticker.name}>{sticker.emoji}</button>)}</div>
+        {boardStickers.length > 0 && <><b className="sticker-picker-section-title">Стикеры доски</b><div className="sticker-picker-grid">{boardStickers.map((sticker) => <span key={sticker.id} className="sticker-picker-item"><button type="button" onClick={() => sendBoardSticker(target, sticker)} title={sticker.name}><img src={assetUrl(sticker.url)} alt={sticker.name} /></button>{canManageBoardAdministration && <button type="button" className="sticker-remove" onClick={() => deleteBoardSticker(sticker)} aria-label={`Удалить стикер ${sticker.name}`}>×</button>}</span>)}</div></>}
         {canManageBoardAdministration && <button type="button" className="sticker-upload-button" onClick={() => boardStickerFileRef.current?.click()}><span>＋</span> Добавить стикер</button>}
       </div>}
     </span>;
@@ -2833,7 +2896,7 @@ export default function Home() {
           <div className="comment-text"><MarkdownDescription value={comment.body} highlightMentions={unreadMentionSourceIds.includes(String(comment.id))} />{comment.is_unread && <i className="comment-unread-dot comment-unread-dot-message" aria-label="Новое непрочитанное сообщение" />}</div>
           <div className="comment-reactions">
             {(comment.reactions ?? []).map((reaction) => <button type="button" key={reaction.emoji} className={reaction.reacted ? 'reacted' : ''} onClick={() => toggleCommentReaction(comment, reaction.emoji)} disabled={isPublicViewer || !canEditBoard} title={reaction.emoji}>{reactionContent(reaction.emoji)}<small>{reaction.count}</small></button>)}
-            {!isPublicViewer && canEditBoard && <span className="reaction-picker-control"><button type="button" className="reaction-add" onClick={() => setReactionPickerCommentId((current) => String(current) === String(comment.id) ? null : comment.id)} aria-label="Добавить реакцию" title="Добавить реакцию">☺</button>{String(reactionPickerCommentId) === String(comment.id) && <div className="reaction-picker" role="dialog" aria-label="Выберите реакцию"><div className="reaction-picker-grid">{DEFAULT_REACTION_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => toggleCommentReaction(comment, emoji)} title={emoji}>{emoji}</button>)}</div>{boardStickers.length > 0 && <><b>Стикеры</b><div className="reaction-picker-grid sticker-reaction-grid">{boardStickers.map((sticker) => <button type="button" key={sticker.id} onClick={() => toggleCommentReaction(comment, `sticker:${sticker.id}`)} title={sticker.name}><img src={assetUrl(sticker.url)} alt={sticker.name} /></button>)}</div></>}</div>}</span>}
+            {!isPublicViewer && canEditBoard && <span className="reaction-picker-control"><button type="button" className="reaction-add" onClick={() => setReactionPickerCommentId((current) => String(current) === String(comment.id) ? null : comment.id)} aria-label="Добавить реакцию" title="Добавить реакцию"><ReactionIcon /></button>{String(reactionPickerCommentId) === String(comment.id) && <div className="reaction-picker" role="dialog" aria-label="Выберите реакцию"><div className="reaction-picker-grid">{DEFAULT_REACTION_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => toggleCommentReaction(comment, emoji)} title={emoji}>{emoji}</button>)}</div>{boardStickers.length > 0 && <><b>Стикеры доски</b><div className="reaction-picker-grid sticker-reaction-grid">{boardStickers.map((sticker) => <button type="button" key={sticker.id} onClick={() => toggleCommentReaction(comment, `sticker:${sticker.id}`)} title={sticker.name}><img src={assetUrl(sticker.url)} alt={sticker.name} /></button>)}</div></>}</div>}</span>}
           </div>
           <div className="comment-actions">
             {canOpenThread && <button type="button" className={`comment-thread-action ${comment.has_unread_thread ? 'has-unread' : ''}`} onClick={() => openCommentThread(comment)}><CardMetaIcon type="comments" /><span>Обсудить{threadCount ? ` · ${threadCount}` : ''}</span>{comment.has_unread_thread && <i className="comment-unread-dot" aria-label="Новые сообщения в треде" />}</button>}
