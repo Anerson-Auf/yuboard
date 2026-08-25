@@ -1068,6 +1068,12 @@ struct CommentResponse {
     attachments: Vec<CommentAttachmentResponse>,
 }
 
+#[derive(Serialize)]
+struct CommentThreadResponse {
+    root: CommentResponse,
+    comments: Vec<CommentResponse>,
+}
+
 #[derive(Clone, Serialize, FromRow)]
 struct CommentAttachmentResponse {
     id: Uuid,
@@ -1345,6 +1351,7 @@ async fn main() {
         .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
         .route("/v1/integrations/discord/cards/{card_id}/attachments/{attachment_id}", get(download_discord_card_attachment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
+        .route("/v1/comments/{comment_id}/thread", get(get_comment_thread))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
@@ -3895,9 +3902,9 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, actor_id, "edit_cards").await?;
     if let Some(parent_id) = request.parent_comment_id {
-        let parent_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2 AND parent_comment_id IS NULL)")
+        let parent_exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2)")
             .bind(parent_id).bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
-        if !parent_exists { return Err(ApiError::bad_request("Reply target is not a top-level comment on this card.")); }
+        if !parent_exists { return Err(ApiError::bad_request("Thread parent does not belong to this card.")); }
     }
     let comment_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO comments (id, card_id, author_id, body, parent_comment_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
@@ -3913,9 +3920,48 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     replace_card_mentions(pool, card_id, actor_id, "comment", comment_id, &body).await?;
     let comment = load_card_comments(pool, card_id, Some(actor_id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
-    record_card_activity(pool, card_id, actor_id, if comment.parent_comment_id.is_some() { "Добавлен ответ" } else { "Добавлен комментарий" }, "").await;
+    record_card_activity(pool, card_id, actor_id, if comment.parent_comment_id.is_some() { "Добавлено сообщение в тред" } else { "Добавлен комментарий" }, "").await;
     let _ = state.events.send(());
     Ok(Json(comment))
+}
+
+async fn get_comment_thread(State(state): State<AppState>, current: Viewer, Path(comment_id): Path<Uuid>) -> ApiResult<CommentThreadResponse> {
+    let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM comments WHERE id = $1")
+        .bind(comment_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "comment_not_found", "Comment was not found.".to_owned()))?;
+    let actor_id = current.0.map(|user| user.id);
+    ensure_card_public_read(pool, card_id, actor_id).await?;
+    let mut comments = load_card_comments(pool, card_id, actor_id).await?;
+    let root_index = comments.iter().position(|comment| comment.id == comment_id)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "comment_not_found", "Comment was not found.".to_owned()))?;
+    let mut root = comments.remove(root_index);
+    let mut thread_comments: Vec<CommentResponse> = comments.into_iter()
+        .filter(|comment| comment.parent_comment_id == Some(comment_id))
+        .collect();
+    thread_comments.sort_by(|left, right| left.created_at.cmp(&right.created_at).then(left.id.cmp(&right.id)));
+    if actor_id.is_none() {
+        let board_id = sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM cards WHERE id = $1")
+            .bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+        let rewrite_avatar = |comment: &mut CommentResponse| {
+            if let Some(author_id) = comment.author_id {
+                comment.author_avatar_url = Some(format!("/v1/public/boards/{board_id}/avatars/{author_id}"));
+            } else if comment.author_avatar_url.is_some() {
+                comment.author_avatar_url = Some(format!("/v1/comments/{}/avatar", comment.id));
+            }
+        };
+        rewrite_avatar(&mut root);
+        for comment in &mut thread_comments { rewrite_avatar(comment); }
+    } else {
+        if root.author_id.is_none() && root.author_avatar_url.is_some() { root.author_avatar_url = Some(format!("/v1/comments/{}/avatar", root.id)); }
+        for comment in &mut thread_comments {
+            if comment.author_id.is_none() && comment.author_avatar_url.is_some() { comment.author_avatar_url = Some(format!("/v1/comments/{}/avatar", comment.id)); }
+        }
+    }
+    Ok(Json(CommentThreadResponse { root, comments: thread_comments }))
 }
 
 async fn create_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Json(request): Json<CreateDiscordCardRequest>) -> ApiResult<CardResponse> {
@@ -4203,16 +4249,18 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
     if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
     let Some(after) = query.after else {
         let mut comments = load_card_comments(pool, card_id, None).await?;
+        // A local Flowboard thread is deliberately not mirrored back into Discord.
+        comments.retain(|comment| comment.parent_comment_id.is_none());
         rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
         rewrite_discord_comment_attachment_urls(integration, card_id, &mut comments);
         return Ok(Json(comments));
     };
-    let cursor_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2)")
+    let cursor_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2 AND parent_comment_id IS NULL)")
         .bind(after).bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if !cursor_exists { return Err(ApiError::bad_request("The comment cursor does not belong to this card.")); }
     let limit = i64::from(query.limit.unwrap_or(100).clamp(1, 200));
     let rows = sqlx::query_as::<_, CommentRow>(
-        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id CROSS JOIN (SELECT created_at, id FROM comments WHERE id = $2 AND card_id = $1) anchor WHERE c.card_id = $1 AND (c.created_at, c.id) > (anchor.created_at, anchor.id) ORDER BY c.created_at ASC, c.id ASC LIMIT $3",
+        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id CROSS JOIN (SELECT created_at, id FROM comments WHERE id = $2 AND card_id = $1) anchor WHERE c.card_id = $1 AND c.parent_comment_id IS NULL AND (c.created_at, c.id) > (anchor.created_at, anchor.id) ORDER BY c.created_at ASC, c.id ASC LIMIT $3",
     )
     .bind(card_id).bind(after).bind(limit)
     .fetch_all(pool).await.map_err(ApiError::internal)?;

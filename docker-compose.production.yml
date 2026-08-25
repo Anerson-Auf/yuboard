@@ -22,6 +22,7 @@ services:
       FLOWBOARD_UPLOAD_DIR: /var/lib/flowboard/uploads
       FLOWBOARD_COOKIE_SECURE: "true"
       FLOWBOARD_API_ORIGIN: ${FLOWBOARD_PUBLIC_ORIGIN:?set-https-public-origin}
+      FLOWBOARD_TRUST_PROXY: "true"
     volumes:
       - uploads_data:/var/lib/flowboard/uploads
 

@@ -93,6 +93,7 @@ FLOWBOARD_UPLOAD_DIR=/var/lib/flowboard/uploads
 FLOWBOARD_BIND_ADDR=127.0.0.1:8100
 FLOWBOARD_COOKIE_SECURE=true
 FLOWBOARD_API_ORIGIN=https://board.example.com
+FLOWBOARD_TRUST_PROXY=true
 NEXT_PUBLIC_FLOWBOARD_API_URL=
 ```
 
@@ -143,7 +144,10 @@ board.example.com {
     encode zstd gzip
 
     @api path /v1/* /health
-    reverse_proxy @api 127.0.0.1:8100
+    reverse_proxy @api 127.0.0.1:8100 {
+        header_up -X-Forwarded-For
+        header_up X-Forwarded-For {remote_host}
+    }
     reverse_proxy 127.0.0.1:3100
 }
 ```
@@ -173,7 +177,7 @@ server {
         proxy_pass http://127.0.0.1:8100;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
         proxy_read_timeout 3600s;

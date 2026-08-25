@@ -575,7 +575,11 @@ export default function Home() {
   const [isUploadingAttachment, setUploadingAttachment] = useState(false);
   const [coverModeDraft, setCoverModeDraft] = useState<'full' | 'top'>('full');
   const [commentDraft, setCommentDraft] = useState('');
-  const [replyToCommentId, setReplyToCommentId] = useState<EntityId | null>(null);
+  const [threadRoot, setThreadRoot] = useState<Comment | null>(null);
+  const [threadComments, setThreadComments] = useState<Comment[]>([]);
+  const [threadDraft, setThreadDraft] = useState('');
+  const [isThreadLoading, setThreadLoading] = useState(false);
+  const [isSendingThread, setSendingThread] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<EntityId | null>(null);
   const [commentEditDraft, setCommentEditDraft] = useState('');
   const [isSavingChecklist, setSavingChecklist] = useState(false);
@@ -1011,6 +1015,19 @@ export default function Home() {
       .finally(() => { if (!cancelled) setDetailsLoading(false); });
     return () => { cancelled = true; };
   }, [selectedCardId, persistence, cardDetailRevision, account, isPublicViewer]);
+
+  // Board realtime refreshes replace the card detail payload. Keep an open
+  // thread in step with that payload, so external comments never reorder the
+  // local discussion or require reopening the window.
+  useEffect(() => {
+    if (!threadRoot) return;
+    const freshRoot = comments.find((comment) => comment.id === threadRoot.id);
+    if (!freshRoot) { setThreadRoot(null); setThreadComments([]); return; }
+    setThreadRoot(freshRoot);
+    setThreadComments(comments
+      .filter((comment) => comment.parent_comment_id === String(freshRoot.id))
+      .sort((left, right) => String(left.created_at ?? '').localeCompare(String(right.created_at ?? ''))));
+  }, [comments, threadRoot?.id]);
 
   useEffect(() => {
     const items = checklists.flatMap((checklist) => checklist.items);
@@ -1907,7 +1924,10 @@ export default function Home() {
     setExpandedChecklistItemIds([]);
     setChecklistItemDescriptionDrafts({});
     setComments([]);
-    setReplyToCommentId(null);
+    setThreadRoot(null);
+    setThreadComments([]);
+    setThreadDraft('');
+    setThreadLoading(false);
     setEditingCommentId(null);
     setCommentEditDraft('');
     setAttachments([]);
@@ -2487,17 +2507,58 @@ export default function Home() {
     const body = commentDraft.trim();
     if (!selected || !body || isSendingComment) return;
     if (persistence !== 'connected' || typeof selected.id !== 'string') {
-      setComments((current) => [{ id: `local-comment-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: typeof replyToCommentId === 'string' ? replyToCommentId : null, created_at: new Date().toISOString(), reactions: [] }, ...current]);
+      setComments((current) => [{ id: `local-comment-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: null, created_at: new Date().toISOString(), reactions: [] }, ...current]);
       setCommentDraft('');
-      setReplyToCommentId(null);
       return;
     }
     setSendingComment(true);
-    void fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body, parent_comment_id: typeof replyToCommentId === 'string' ? replyToCommentId : null }) })
+    void fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
       .then(async (response) => { if (!response.ok) throw new Error('comment save failed'); return response.json() as Promise<Comment>; })
-      .then((comment) => { setComments((current) => [comment, ...current]); setCommentDraft(''); setReplyToCommentId(null); })
+      .then((comment) => { setComments((current) => [comment, ...current]); setCommentDraft(''); })
       .catch(() => showToast('Не удалось отправить комментарий'))
       .finally(() => setSendingComment(false));
+  }
+  function openCommentThread(comment: Comment) {
+    if (!selected || typeof comment.id !== 'string') return;
+    setThreadRoot(comment);
+    setThreadComments([]);
+    setThreadDraft('');
+    setEditingCommentId(null);
+    setThreadLoading(true);
+    void fetch(`${API_URL}/v1/comments/${comment.id}/thread`)
+      .then(async (response) => { if (!response.ok) throw new Error('thread load failed'); return response.json() as Promise<{ root: Comment; comments: Comment[] }>; })
+      .then((thread) => { setThreadRoot(thread.root); setThreadComments(thread.comments); })
+      .catch(() => { setThreadRoot(null); showToast('Не удалось загрузить тред'); })
+      .finally(() => setThreadLoading(false));
+  }
+  function addThreadComment(event: FormEvent) {
+    event.preventDefault();
+    const body = threadDraft.trim();
+    if (!selected || !threadRoot || typeof threadRoot.id !== 'string' || !body || isSendingThread) return;
+    const parentCommentId = threadRoot.id;
+    const localComment: Comment = { id: `local-thread-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: parentCommentId, created_at: new Date().toISOString() };
+    if (persistence !== 'connected' || typeof selected.id !== 'string') {
+      setThreadComments((current) => [...current, localComment]);
+      setComments((current) => [...current, localComment]);
+      setThreadDraft('');
+      return;
+    }
+    setSendingThread(true);
+    setThreadComments((current) => [...current, localComment]);
+    setComments((current) => [...current, localComment]);
+    void fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body, parent_comment_id: parentCommentId }) })
+      .then(async (response) => { if (!response.ok) throw new Error('thread comment save failed'); return response.json() as Promise<Comment>; })
+      .then((comment) => {
+        setThreadComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
+        setComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
+        setThreadDraft('');
+      })
+      .catch(() => {
+        setThreadComments((current) => current.filter((item) => item.id !== localComment.id));
+        setComments((current) => current.filter((item) => item.id !== localComment.id));
+        showToast('Не удалось отправить сообщение в тред');
+      })
+      .finally(() => setSendingThread(false));
   }
   function beginCommentEdit(comment: Comment) {
     setEditingCommentId(comment.id);
@@ -2507,6 +2568,8 @@ export default function Home() {
     const body = commentEditDraft.trim();
     if (!body || body === comment.body) { setEditingCommentId(null); return; }
     setComments((current) => current.map((item) => item.id === comment.id ? { ...item, body } : item));
+    setThreadComments((current) => current.map((item) => item.id === comment.id ? { ...item, body } : item));
+    setThreadRoot((current) => current?.id === comment.id ? { ...current, body } : current);
     setEditingCommentId(null);
     if (persistence !== 'connected' || typeof comment.id !== 'string') return;
     void fetch(`${API_URL}/v1/comments/${comment.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
@@ -2515,10 +2578,41 @@ export default function Home() {
   }
   function removeComment(comment: Comment) {
     setComments((current) => current.filter((item) => item.id !== comment.id));
+    setThreadComments((current) => current.filter((item) => item.id !== comment.id));
+    setThreadRoot((current) => current?.id === comment.id ? null : current);
     if (persistence !== 'connected' || typeof comment.id !== 'string') return;
     void fetch(`${API_URL}/v1/comments/${comment.id}`, { method: 'DELETE' })
       .then((response) => { if (!response.ok) throw new Error('comment delete failed'); })
       .catch(() => showToast('Не удалось удалить комментарий'));
+  }
+  function commentMember(comment: Comment): Member {
+    return comment.author_id === account?.user.id
+      ? currentMember
+      : { id: `comment-${comment.id}`, initials: comment.author_name.slice(0, 2).toUpperCase() || 'У', color: 'mint', name: comment.author_name, avatarUrl: comment.author_avatar_url };
+  }
+  function commentTime(comment: Comment) {
+    return comment.created_at
+      ? new Date(comment.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+      : 'только что';
+  }
+  function renderCommentMessage(comment: Comment, className = '') {
+    const threadCount = comments.filter((item) => item.parent_comment_id === String(comment.id)).length;
+    return <div className={`comment ${className}`.trim()} key={comment.id}>
+      <Avatar member={commentMember(comment)} />
+      <div className="comment-body">
+        {editingCommentId === comment.id ? <form className="comment-edit" onSubmit={(event) => { event.preventDefault(); saveCommentEdit(comment); }}>
+          <MentionTextarea autoFocus value={commentEditDraft} onValueChange={setCommentEditDraft} members={account ? workspaceMembers : []} maxLength={10000} ariaLabel="Изменить комментарий" />
+          <div><button type="submit">Сохранить</button><button type="button" onClick={() => setEditingCommentId(null)}>Отмена</button></div>
+        </form> : <>
+          <header><b>@{comment.author_name}</b><time>{commentTime(comment)}{comment.edited_at && ' · изменено'}</time></header>
+          <div className="comment-text"><MarkdownDescription value={comment.body} highlightMentions={unreadMentionSourceIds.includes(String(comment.id))} /></div>
+          <div className="comment-actions">
+            <button type="button" onClick={() => openCommentThread(comment)}>Обсудить{threadCount ? ` · ${threadCount}` : ''}</button>
+            {comment.author_id === account?.user.id && <><button type="button" onClick={() => beginCommentEdit(comment)}>Изменить</button><button type="button" onClick={() => removeComment(comment)}>Удалить</button></>}
+          </div>
+        </>}
+      </div>
+    </div>;
   }
   const supportedMediaTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime']);
   function isSupportedMedia(file: File) { return supportedMediaTypes.has(file.type); }
@@ -2527,12 +2621,13 @@ export default function Home() {
     const url = assetUrl(attachment.url);
     return attachment.media_type.startsWith('video/') ? `![video:${name}](${url})` : `![${name}](${url})`;
   }
-  function appendEmbeddedMedia(target: 'description' | 'comment', uploaded: Attachment[]) {
+  function appendEmbeddedMedia(target: 'description' | 'comment' | 'thread', uploaded: Attachment[]) {
     if (!uploaded.length) return;
     const snippets = uploaded.map(markdownForAttachment).join('\n');
     const append = (value: string) => value ? `${value}${value.endsWith('\n') ? '' : '\n'}${snippets}` : snippets;
     if (target === 'description') setCardDescriptionDraft((current) => append(current));
-    else setCommentDraft((current) => append(current));
+    else if (target === 'comment') setCommentDraft((current) => append(current));
+    else setThreadDraft((current) => append(current));
   }
   function incrementAttachmentCount() {
     if (!selectedCardId) return;
@@ -2540,7 +2635,7 @@ export default function Home() {
     setSelected((current) => current ? patch(current) : current);
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? patch(card) : card) })));
   }
-  async function uploadMediaFiles(files: File[], target?: 'description' | 'comment') {
+  async function uploadMediaFiles(files: File[], target?: 'description' | 'comment' | 'thread') {
     if (!selected || !files.length || isUploadingAttachment) return;
     if (persistence !== 'connected' || typeof selected.id !== 'string') { showToast('Для вложений нужно подключение к серверу'); return; }
     const unsupported = files.filter((file) => !isSupportedMedia(file));
@@ -2574,13 +2669,13 @@ export default function Home() {
     event.target.value = '';
     await uploadMediaFiles(files);
   }
-  function handleMediaDrop(event: ReactDragEvent<HTMLTextAreaElement>, target: 'description' | 'comment') {
+  function handleMediaDrop(event: ReactDragEvent<HTMLTextAreaElement>, target: 'description' | 'comment' | 'thread') {
     const files = Array.from(event.dataTransfer.files);
     if (!files.length) return;
     event.preventDefault();
     void uploadMediaFiles(files, target);
   }
-  function handleMediaPaste(event: ReactClipboardEvent<HTMLTextAreaElement>, target: 'description' | 'comment') {
+  function handleMediaPaste(event: ReactClipboardEvent<HTMLTextAreaElement>, target: 'description' | 'comment' | 'thread') {
     const files = Array.from(event.clipboardData.files);
     if (!files.length) return;
     event.preventDefault();
@@ -3239,16 +3334,28 @@ export default function Home() {
             <section className="conversation-panel" aria-label="Комментарии и активность">
               <div className="conversation-heading"><div><p className="sidebar-caption">ОБСУЖДЕНИЕ</p><h3>Комментарии и активность</h3></div><span>{comments.length}</span></div>
               {isDetailsLoading ? <p className="detail-loading">Загружаем сообщения…</p> : <div className="conversation-scroll">
-                {comments.filter((comment) => !comment.parent_comment_id).map((comment) => <div className="comment-thread comment-arrive" key={comment.id}>
-                  <div className="comment"><Avatar member={comment.author_id === account?.user.id ? currentMember : { id: `comment-${comment.id}`, initials: comment.author_name.slice(0, 2).toUpperCase() || 'У', color: 'mint', name: comment.author_name, avatarUrl: comment.author_avatar_url }} /><div className="comment-body">{editingCommentId === comment.id ? <form className="comment-edit" onSubmit={(event) => { event.preventDefault(); saveCommentEdit(comment); }}><MentionTextarea autoFocus value={commentEditDraft} onValueChange={setCommentEditDraft} members={account ? workspaceMembers : []} maxLength={10000} ariaLabel="Изменить комментарий" /><div><button type="submit">Сохранить</button><button type="button" onClick={() => setEditingCommentId(null)}>Отмена</button></div></form> : <><header><b>@{comment.author_name}</b><time>{comment.created_at ? new Date(comment.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'только что'}{comment.edited_at && ' · изменено'}</time></header><div className="comment-text"><MarkdownDescription value={comment.body} highlightMentions={unreadMentionSourceIds.includes(String(comment.id))} /></div><div className="comment-actions"><button onClick={() => { setReplyToCommentId(comment.id); setCommentDraft(''); }}>Ответить</button>{comment.author_id === account?.user.id && <><button onClick={() => beginCommentEdit(comment)}>Изменить</button><button onClick={() => removeComment(comment)}>Удалить</button></>}</div></>}</div></div>
-                  {comments.filter((reply) => reply.parent_comment_id === String(comment.id)).map((reply) => <div className="comment comment-reply comment-arrive" key={reply.id}><Avatar member={reply.author_id === account?.user.id ? currentMember : { id: `comment-${reply.id}`, initials: reply.author_name.slice(0, 2).toUpperCase() || 'У', color: 'mint', name: reply.author_name, avatarUrl: reply.author_avatar_url }} /><div className="comment-body">{editingCommentId === reply.id ? <form className="comment-edit" onSubmit={(event) => { event.preventDefault(); saveCommentEdit(reply); }}><MentionTextarea autoFocus value={commentEditDraft} onValueChange={setCommentEditDraft} members={account ? workspaceMembers : []} maxLength={10000} ariaLabel="Изменить ответ" /><div><button type="submit">Сохранить</button><button type="button" onClick={() => setEditingCommentId(null)}>Отмена</button></div></form> : <><header><b>@{reply.author_name}</b><time>{reply.created_at ? new Date(reply.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'только что'}{reply.edited_at && ' · изменено'}</time></header><div className="comment-text"><MarkdownDescription value={reply.body} highlightMentions={unreadMentionSourceIds.includes(String(reply.id))} /></div><div className="comment-actions">{reply.author_id === account?.user.id && <><button onClick={() => beginCommentEdit(reply)}>Изменить</button><button onClick={() => removeComment(reply)}>Удалить</button></>}</div></>}</div></div>)}</div>)}
+                {comments.filter((comment) => !comment.parent_comment_id).map((comment) => <div className="comment-thread comment-arrive" key={comment.id}>{renderCommentMessage(comment)}</div>)}
                 {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
                 {activity.map((item) => <div className="activity-message" key={item.id}><i>Console</i><p><b>@{item.actor_name ?? 'Deleted user'}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>)}
               </div>}
-              <form className="comment-composer" onSubmit={addComment}>{replyToCommentId && <div className="replying-to">Ответ на сообщение <button type="button" onClick={() => setReplyToCommentId(null)}>×</button></div>}<MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder={replyToCommentId ? 'Написать ответ…' : 'Написать комментарий или перетащить медиа…'} ariaLabel="Написать комментарий" /><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : replyToCommentId ? 'Ответить' : 'Отправить'}</button></form>
+              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" /><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
             </section>
           </aside>
         </div>
+      </section>
+    </div>}
+    {threadRoot && <div className="thread-window-backdrop" role="presentation" onMouseDown={() => setThreadRoot(null)}>
+      <section className="thread-window" role="dialog" aria-modal="true" aria-label="Тред обсуждения" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="thread-window-heading"><div><p className="sidebar-caption">Т Р Е Д</p><h3>Обсуждение сообщения</h3></div><button type="button" onClick={() => setThreadRoot(null)} aria-label="Закрыть тред">×</button></header>
+        <div className="thread-window-scroll">
+          <div className="thread-origin">{renderCommentMessage(threadRoot, 'thread-origin-message')}</div>
+          <div className="thread-divider"><span>Сообщения в треде</span></div>
+          {isThreadLoading ? <p className="detail-loading">Загружаем тред…</p> : threadComments.length ? threadComments.map((comment) => <div className="thread-message comment-arrive" key={comment.id}>{renderCommentMessage(comment)}</div>) : <p className="empty-comments">Пока никто не ответил.</p>}
+        </div>
+        {!isPublicViewer && <form className="comment-composer thread-composer" onSubmit={addThreadComment}>
+          <MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} maxLength={10000} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" />
+          <button className="add-card" type="submit" disabled={isSendingThread || !threadDraft.trim()}>{isSendingThread ? 'Отправка…' : 'Отправить'}</button>
+        </form>}
       </section>
     </div>}
     {imagePreview && <div className="image-preview-backdrop" role="presentation" onMouseDown={() => setImagePreview(null)}><figure className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Просмотр ${imagePreview.name}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" onClick={() => setImagePreview(null)} aria-label="Закрыть просмотр">×</button><img src={imagePreview.url} alt={imagePreview.name} /><figcaption>{imagePreview.name}</figcaption></figure></div>}

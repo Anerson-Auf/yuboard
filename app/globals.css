@@ -516,3 +516,24 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
   84% { opacity: .4; }
   100% { transform: translate3d(var(--coin-drift), var(--coin-end-y), 0) rotate(var(--coin-spin)); opacity: 0; }
 }
+
+/* Threads keep their own focused surface above a card, without competing with
+   the persistent discussion column. */
+.thread-window-backdrop { position: fixed; z-index: 180; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(4 7 11 / 62%); backdrop-filter: blur(5px); }
+.thread-window { display: flex; width: min(680px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 40px)); min-height: min(480px, calc(100vh - 40px)); flex-direction: column; overflow: hidden; border: 1px solid #454b52; border-radius: 15px; background: #303134; box-shadow: 0 28px 82px rgb(0 0 0 / 55%); }
+.thread-window-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 17px 19px 14px; border-bottom: 1px solid #454b52; background: color-mix(in srgb, #303134 92%, #242528); }
+.thread-window-heading .sidebar-caption { margin: 0 0 4px; color: var(--faint); font-size: 10px; letter-spacing: .12em; }
+.thread-window-heading h3 { margin: 0; color: var(--text); font-size: 15px; }
+.thread-window-heading button { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 21px; line-height: 1; }
+.thread-window-heading button:hover { background: var(--surface-soft); color: var(--text); }
+.thread-window-scroll { min-height: 0; flex: 1 1 auto; padding: 15px 17px; overflow-y: auto; }
+.thread-origin { padding: 10px; border: 1px solid color-mix(in srgb, var(--primary) 24%, #454b52); border-radius: 12px; background: color-mix(in srgb, var(--primary) 6%, #242528); }
+.thread-origin .comment { margin: 0; }
+.thread-origin .comment-text { background: rgb(36 37 40 / 76%); }
+.thread-divider { display: flex; align-items: center; gap: 9px; margin: 18px 0 10px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.thread-divider::before, .thread-divider::after { height: 1px; flex: 1; content: ''; background: #454b52; }
+.thread-message { padding: 9px 0; border-bottom: 1px solid rgb(69 75 82 / 55%); }
+.thread-message .comment { margin: 0; }
+.thread-composer { margin: 0; padding: 13px 17px 16px; border-top: 1px solid #454b52; background: #303134; }
+.thread-composer textarea { min-height: 76px; }
+@media (max-width: 640px) { .thread-window-backdrop { padding: 10px; }.thread-window { width: 100%; min-height: min(500px, calc(100vh - 20px)); max-height: calc(100vh - 20px); }.thread-window-scroll { padding: 12px; }.thread-composer { padding: 11px 12px 13px; } }
