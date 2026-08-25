@@ -470,16 +470,24 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 /* A workspace cover is artwork for the whole card, so never crop it to fill. */
 .workspace-card.has-background { background-color: #242528; background-position: center; background-repeat: no-repeat; background-size: 100% 100%; }
 
-/* Coins finish at the lower-left edge instead of collecting in the centre. */
-.default-board-ambient > i:nth-child(4n + 1) { left: 112% !important; --coin-drift: -116vw !important; --coin-mid-x: -50vw; --coin-mid-y: 38vh; --coin-late-x: -85vw; --coin-late-y: 81vh; }
-.default-board-ambient > i:nth-child(4n + 2) { left: 104% !important; --coin-drift: -108vw !important; --coin-mid-x: -48vw; --coin-mid-y: 54vh; --coin-late-x: -82vw; --coin-late-y: 75vh; }
-.default-board-ambient > i:nth-child(4n + 3) { left: 96% !important; --coin-drift: -100vw !important; --coin-mid-x: -44vw; --coin-mid-y: 45vh; --coin-late-x: -76vw; --coin-late-y: 88vh; }
-.default-board-ambient > i:nth-child(4n) { left: 88% !important; --coin-drift: -92vw !important; --coin-mid-x: -39vw; --coin-mid-y: 58vh; --coin-late-x: -70vw; --coin-late-y: 79vh; }
+/* A dispersed starfall: every coin has its own entry and exit, with a south-west bias. */
+.default-board-ambient > i:nth-child(12n + 1) { top: -18vh; left: 112% !important; --coin-drift: -100vw !important; --coin-mid-x: -48vw; --coin-mid-y: 43vh; --coin-late-x: -82vw; --coin-late-y: 78vh; --coin-end-y: 102vh; }
+.default-board-ambient > i:nth-child(12n + 2) { top: -28vh; left: 96% !important; --coin-drift: -78vw !important; --coin-mid-x: -38vw; --coin-mid-y: 49vh; --coin-late-x: -64vw; --coin-late-y: 80vh; --coin-end-y: 94vh; }
+.default-board-ambient > i:nth-child(12n + 3) { top: -4vh; left: 83% !important; --coin-drift: -60vw !important; --coin-mid-x: -28vw; --coin-mid-y: 36vh; --coin-late-x: -49vw; --coin-late-y: 67vh; --coin-end-y: 86vh; }
+.default-board-ambient > i:nth-child(12n + 4) { top: -21vh; left: 70% !important; --coin-drift: -45vw !important; --coin-mid-x: -21vw; --coin-mid-y: 54vh; --coin-late-x: -37vw; --coin-late-y: 79vh; --coin-end-y: 104vh; }
+.default-board-ambient > i:nth-child(12n + 5) { top: 10vh; left: 57% !important; --coin-drift: -30vw !important; --coin-mid-x: -15vw; --coin-mid-y: 35vh; --coin-late-x: -25vw; --coin-late-y: 63vh; --coin-end-y: 85vh; }
+.default-board-ambient > i:nth-child(12n + 6) { top: 18vh; left: 101% !important; --coin-drift: -87vw !important; --coin-mid-x: -41vw; --coin-mid-y: 29vh; --coin-late-x: -71vw; --coin-late-y: 51vh; --coin-end-y: 73vh; }
+.default-board-ambient > i:nth-child(12n + 7) { top: -11vh; left: 88% !important; --coin-drift: -63vw !important; --coin-mid-x: -31vw; --coin-mid-y: 58vh; --coin-late-x: -54vw; --coin-late-y: 91vh; --coin-end-y: 112vh; }
+.default-board-ambient > i:nth-child(12n + 8) { top: 31vh; left: 76% !important; --coin-drift: -49vw !important; --coin-mid-x: -22vw; --coin-mid-y: 27vh; --coin-late-x: -39vw; --coin-late-y: 48vh; --coin-end-y: 64vh; }
+.default-board-ambient > i:nth-child(12n + 9) { top: 4vh; left: 64% !important; --coin-drift: -38vw !important; --coin-mid-x: -18vw; --coin-mid-y: 42vh; --coin-late-x: -30vw; --coin-late-y: 72vh; --coin-end-y: 91vh; }
+.default-board-ambient > i:nth-child(12n + 10) { top: 22vh; left: 50% !important; --coin-drift: -21vw !important; --coin-mid-x: -10vw; --coin-mid-y: 25vh; --coin-late-x: -17vw; --coin-late-y: 48vh; --coin-end-y: 70vh; }
+.default-board-ambient > i:nth-child(12n + 11) { top: -33vh; left: 103% !important; --coin-drift: -78vw !important; --coin-mid-x: -36vw; --coin-mid-y: 60vh; --coin-late-x: -65vw; --coin-late-y: 93vh; --coin-end-y: 109vh; }
+.default-board-ambient > i:nth-child(12n) { top: 42vh; left: 78% !important; --coin-drift: -47vw !important; --coin-mid-x: -23vw; --coin-mid-y: 17vh; --coin-late-x: -40vw; --coin-late-y: 36vh; --coin-end-y: 51vh; }
 @keyframes default-coin-fall {
   0% { transform: translate3d(0, -100px, 0) rotate(0deg); opacity: 0; }
   8% { opacity: .55; }
   45% { transform: translate3d(var(--coin-mid-x), var(--coin-mid-y), 0) rotate(240deg); opacity: .54; }
   70% { transform: translate3d(var(--coin-late-x), var(--coin-late-y), 0) rotate(430deg); opacity: .44; }
   84% { opacity: .4; }
-  100% { transform: translate3d(var(--coin-drift), 112vh, 0) rotate(var(--coin-spin)); opacity: 0; }
+  100% { transform: translate3d(var(--coin-drift), var(--coin-end-y), 0) rotate(var(--coin-spin)); opacity: 0; }
 }
