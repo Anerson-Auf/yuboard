@@ -507,6 +507,11 @@ struct UpdateCardCompletionRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateCardPriorityRequest {
+    priority: i16,
+}
+
+#[derive(Deserialize)]
 struct CreateLabelRequest {
     name: String,
     color: String,
@@ -606,11 +611,21 @@ struct CardResponse {
 }
 
 #[derive(Serialize, FromRow)]
+struct DiscordCardListResponse {
+    id: Uuid,
+    list_id: Uuid,
+    title: String,
+    description: String,
+    priority: i16,
+}
+
+#[derive(Serialize, FromRow)]
 struct DiscordCardStatusResponse {
     id: Uuid,
     list_id: Uuid,
     title: String,
     description: String,
+    priority: i16,
     is_completed: bool,
     completed_at: Option<String>,
 }
@@ -1007,6 +1022,7 @@ async fn main() {
         .route("/v1/integrations/discord/cards/{card_id}/move", post(move_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}/cover", post(set_discord_card_cover))
         .route("/v1/integrations/discord/cards/{card_id}/completion", patch(set_discord_card_completion))
+        .route("/v1/integrations/discord/cards/{card_id}/priority", patch(set_discord_card_priority))
         .route("/v1/integrations/discord/cards/{card_id}/comments", get(list_discord_card_comments).post(create_discord_comment))
         .route("/v1/comments/{comment_id}", patch(update_comment).delete(delete_comment))
         .route("/v1/comments/{comment_id}/reactions", post(toggle_comment_reaction))
@@ -2886,8 +2902,8 @@ async fn remove_discord_card_label(State(state): State<AppState>, integration: D
     replace_discord_card_labels(State(state), integration, Path(card_id), Json(ReplaceDiscordCardLabelsRequest { label_ids })).await
 }
 
-async fn list_discord_board_cards(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<CardResponse>> {
-    let cards = sqlx::query_as::<_, CardResponse>("SELECT id, list_id, title, description FROM cards WHERE board_id = $1 AND archived_at IS NULL ORDER BY list_id, position")
+async fn list_discord_board_cards(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<DiscordCardListResponse>> {
+    let cards = sqlx::query_as::<_, DiscordCardListResponse>("SELECT id, list_id, title, description, priority FROM cards WHERE board_id = $1 AND archived_at IS NULL ORDER BY list_id, position")
         .bind(integration.board_id)
         .fetch_all(database(&state)?)
         .await
@@ -2976,7 +2992,7 @@ async fn list_discord_card_sync_events(State(state): State<AppState>, integratio
 }
 
 async fn get_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<DiscordCardStatusResponse> {
-    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("SELECT id, list_id, title, description, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL")
+    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("SELECT id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL")
         .bind(card_id).bind(integration.board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
     Ok(Json(card))
@@ -2984,10 +3000,22 @@ async fn get_discord_card(State(state): State<AppState>, integration: DiscordInt
 
 async fn set_discord_card_completion(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardCompletionRequest>) -> ApiResult<DiscordCardStatusResponse> {
     let pool = database(&state)?;
-    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = $2 AND board_id = $3 AND archived_at IS NULL RETURNING id, list_id, title, description, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at")
+    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = $2 AND board_id = $3 AND archived_at IS NULL RETURNING id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at")
         .bind(request.is_completed).bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
     record_external_card_activity(pool, card_id, if request.is_completed { "Discord: задача выполнена" } else { "Discord: задача возвращена в работу" }, "").await;
+    let _ = state.events.send(());
+    Ok(Json(card))
+}
+
+async fn set_discord_card_priority(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardPriorityRequest>) -> ApiResult<DiscordCardStatusResponse> {
+    if !(0..=5).contains(&request.priority) { return Err(ApiError::bad_request("priority must be between 0 and 5.")); }
+    let pool = database(&state)?;
+    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("UPDATE cards SET priority = $1, updated_at = now() WHERE id = $2 AND board_id = $3 AND archived_at IS NULL RETURNING id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at")
+        .bind(request.priority).bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
+    let detail = if request.priority == 0 { "Приоритет снят".to_owned() } else { format!("Приоритет: {}/5", request.priority) };
+    record_external_card_activity(pool, card_id, "Discord: изменён приоритет", &detail).await;
     let _ = state.events.send(());
     Ok(Json(card))
 }

@@ -36,7 +36,7 @@ Use one of these values as `list_id` when creating a card.
 GET /v1/integrations/discord/cards
 ```
 
-Returns active cards from this token's board only. Each entry contains `id`, `list_id`, `title`, and `description`. Use the card `id` to retrieve or append its conversation.
+Returns active cards from this token's board only. Each entry contains `id`, `list_id`, `title`, `description`, and `priority` (`0`–`5`). Use the card `id` to retrieve or append its conversation.
 
 ## Manage labels
 
@@ -72,7 +72,7 @@ DELETE /v1/integrations/discord/cards/{card-id}/labels/{label-id}
 
 All variants return the resulting array of card labels, except deleting a shared label, which returns `204 No Content`.
 
-## Read or change completion status
+## Read or change completion status and priority
 
 ```http
 GET /v1/integrations/discord/cards/{card-id}
@@ -86,6 +86,7 @@ Returns the current card data plus an explicit completion state:
   "list_id": "list-uuid",
   "title": "Добавить ночной режим",
   "description": "…",
+  "priority": 4,
   "is_completed": true,
   "completed_at": "2026-08-25T12:34:56Z"
 }
@@ -100,6 +101,16 @@ PATCH /v1/integrations/discord/cards/{card-id}/completion
 ```
 
 Pass `false` to return the card to work. Both endpoints are restricted to the board that owns the Discord token.
+
+Priority is a whole number from `0` to `5`: `0` removes it, `1` is the lowest and `5` is the highest. Set it with the same board token:
+
+```http
+PATCH /v1/integrations/discord/cards/{card-id}/priority
+
+{ "priority": 4 }
+```
+
+The response is the same card-status object, including the resulting `priority` and completion state.
 
 ## Move a card
 
