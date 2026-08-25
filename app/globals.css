@@ -471,7 +471,15 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .workspace-card.has-background { background-color: #242528; background-position: center; background-repeat: no-repeat; background-size: 100% 100%; }
 
 /* Coins finish at the lower-left edge instead of collecting in the centre. */
-.default-board-ambient > i:nth-child(4n + 1) { left: 112% !important; --coin-drift: -116vw !important; }
-.default-board-ambient > i:nth-child(4n + 2) { left: 104% !important; --coin-drift: -108vw !important; }
-.default-board-ambient > i:nth-child(4n + 3) { left: 96% !important; --coin-drift: -100vw !important; }
-.default-board-ambient > i:nth-child(4n) { left: 88% !important; --coin-drift: -92vw !important; }
+.default-board-ambient > i:nth-child(4n + 1) { left: 112% !important; --coin-drift: -116vw !important; --coin-mid-x: -50vw; --coin-mid-y: 38vh; --coin-late-x: -85vw; --coin-late-y: 81vh; }
+.default-board-ambient > i:nth-child(4n + 2) { left: 104% !important; --coin-drift: -108vw !important; --coin-mid-x: -48vw; --coin-mid-y: 54vh; --coin-late-x: -82vw; --coin-late-y: 75vh; }
+.default-board-ambient > i:nth-child(4n + 3) { left: 96% !important; --coin-drift: -100vw !important; --coin-mid-x: -44vw; --coin-mid-y: 45vh; --coin-late-x: -76vw; --coin-late-y: 88vh; }
+.default-board-ambient > i:nth-child(4n) { left: 88% !important; --coin-drift: -92vw !important; --coin-mid-x: -39vw; --coin-mid-y: 58vh; --coin-late-x: -70vw; --coin-late-y: 79vh; }
+@keyframes default-coin-fall {
+  0% { transform: translate3d(0, -100px, 0) rotate(0deg); opacity: 0; }
+  8% { opacity: .55; }
+  45% { transform: translate3d(var(--coin-mid-x), var(--coin-mid-y), 0) rotate(240deg); opacity: .54; }
+  70% { transform: translate3d(var(--coin-late-x), var(--coin-late-y), 0) rotate(430deg); opacity: .44; }
+  84% { opacity: .4; }
+  100% { transform: translate3d(var(--coin-drift), 112vh, 0) rotate(var(--coin-spin)); opacity: 0; }
+}
