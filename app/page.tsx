@@ -416,9 +416,10 @@ type MentionTextareaProps = {
   onDragOver?: (event: ReactDragEvent<HTMLTextAreaElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLTextAreaElement>) => void;
   onPaste?: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
+  onSubmitShortcut?: () => void;
 };
 
-function MentionTextarea({ value, onValueChange, members, className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste }: MentionTextareaProps) {
+function MentionTextarea({ value, onValueChange, members, className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste, onSubmitShortcut }: MentionTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [query, setQuery] = useState<string | null>(null);
   const isChecklistDescription = ariaLabel.startsWith('Описание пункта ');
@@ -448,7 +449,7 @@ function MentionTextarea({ value, onValueChange, members, className, placeholder
   if (isChecklistDescription && isMarkdownPreview) {
     return <div className={`checklist-description-preview markdown-editable-description ${className ?? ''}`} role={disabled ? undefined : 'button'} tabIndex={disabled ? undefined : 0} onClick={() => { if (!disabled) setMarkdownPreview(false); }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMarkdownPreview(false); } }}><MarkdownDescription value={value} emptyText="Добавьте описание пункта…" /></div>;
   }
-  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') setQuery(null); if (event.key === 'Tab' && suggestions[0]) { event.preventDefault(); insertMention(suggestions[0]); } }} onBlur={() => { setQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{suggestions.length > 0 && <div className="mention-suggestions" role="listbox" aria-label="Участники доски"><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</div>}</div>;
+  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') setQuery(null); if (event.key === 'Tab' && suggestions[0]) { event.preventDefault(); insertMention(suggestions[0]); } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else onSubmitShortcut(); } }} onBlur={() => { setQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{suggestions.length > 0 && <div className="mention-suggestions" role="listbox" aria-label="Участники доски"><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</div>}</div>;
 }
 
 function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramElement) {
@@ -2508,8 +2509,8 @@ export default function Home() {
         .catch(() => showToast('Удаление пункта не сохранено'));
     }
   }
-  function addComment(event: FormEvent) {
-    event.preventDefault();
+  function addComment(event?: FormEvent) {
+    event?.preventDefault();
     const body = commentDraft.trim();
     if (!selected || !body || isSendingComment) return;
     if (persistence !== 'connected' || typeof selected.id !== 'string') {
@@ -2544,8 +2545,8 @@ export default function Home() {
       .catch(() => { setThreadRoot(null); showToast('Не удалось загрузить тред'); })
       .finally(() => setThreadLoading(false));
   }
-  function addThreadComment(event: FormEvent) {
-    event.preventDefault();
+  function addThreadComment(event?: FormEvent) {
+    event?.preventDefault();
     const body = threadDraft.trim();
     if (!selected || !threadRoot || typeof threadRoot.id !== 'string' || !body || isSendingThread) return;
     const parentCommentId = threadRoot.id;
@@ -3351,7 +3352,7 @@ export default function Home() {
                 {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
                 {activity.map((item) => <div className="activity-message" key={item.id}><i>Console</i><p><b>@{item.actor_name ?? 'Deleted user'}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>)}
               </div>}
-              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" /><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
+              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" /><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
             </section>
           </aside>
         </div>
@@ -3366,7 +3367,7 @@ export default function Home() {
           {isThreadLoading ? <p className="detail-loading">Загружаем тред…</p> : threadComments.length ? threadComments.map((comment) => <div className="thread-message comment-arrive" key={comment.id}>{renderCommentMessage(comment)}</div>) : <p className="empty-comments">Пока никто не ответил.</p>}
         </div>
         {!isPublicViewer && <form className="comment-composer thread-composer" onSubmit={addThreadComment}>
-          <MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} maxLength={10000} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" />
+          <MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} onSubmitShortcut={() => addThreadComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} maxLength={10000} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" />
           <button className="add-card" type="submit" disabled={isSendingThread || !threadDraft.trim()}>{isSendingThread ? 'Отправка…' : 'Отправить'}</button>
         </form>}
       </section>
