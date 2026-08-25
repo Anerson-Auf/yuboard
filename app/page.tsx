@@ -1,7 +1,7 @@
 'use client';
 /* eslint-disable @next/next/no-img-element -- self-hosted attachment URLs are served by the Rust API. */
 
-import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent, FormEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent, FormEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import './auth.css';
 
 type EntityId = number | string;
@@ -993,6 +993,23 @@ export default function Home() {
   }, [boardId, boardViewMode, freeformZoom]);
 
   useEffect(() => {
+    if (boardViewMode !== 'freeform') return;
+    const board = boardRef.current;
+    if (!board) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.target instanceof Element && event.target.closest('.card-list, textarea, input, select')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      zoomFreeform(board, event.clientX, event.clientY, event.deltaY);
+    };
+    // React delegates wheel events passively in some browser paths, which lets
+    // the document scroll even after preventDefault(). This listener must stay
+    // native and explicitly non-passive.
+    board.addEventListener('wheel', onWheel, { passive: false });
+    return () => board.removeEventListener('wheel', onWheel);
+  }, [boardViewMode, freeformZoom]);
+
+  useEffect(() => {
     if (!freeformDrawingDirtyRef.current || !boardId || authState !== 'signed-in' || boardViewMode !== 'freeform') return;
     if (freeformDrawingSaveTimerRef.current !== null) window.clearTimeout(freeformDrawingSaveTimerRef.current);
     freeformDrawingSaveTimerRef.current = window.setTimeout(() => flushFreeformDrawing(), 520);
@@ -1025,20 +1042,16 @@ export default function Home() {
     const point = getFreeformPoint(event.clientX, event.clientY);
     if (point) publishFreeformCursor(point);
   }
-  function zoomFreeformWithWheel(event: ReactWheelEvent<HTMLElement>) {
-    if (boardViewMode !== 'freeform' || event.target instanceof Element && event.target.closest('.card-list, textarea, input, select')) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const delta = event.deltaY > 0 ? -0.08 : 0.08;
-    const board = event.currentTarget;
+  function zoomFreeform(board: HTMLElement, clientX: number, clientY: number, deltaY: number) {
+    const delta = deltaY > 0 ? -0.08 : 0.08;
     const bounds = board.getBoundingClientRect();
-    const cursorX = (event.clientX - bounds.left + board.scrollLeft) / freeformZoom;
+    const cursorX = (clientX - bounds.left + board.scrollLeft) / freeformZoom;
     const scrollTop = board.scrollTop;
     const nextZoom = Math.max(0.42, Math.min(1.45, Math.round((freeformZoom + delta) * 100) / 100));
     if (nextZoom === freeformZoom) return;
     setFreeformZoom(nextZoom);
     window.requestAnimationFrame(() => {
-      board.scrollLeft = Math.max(0, cursorX * nextZoom - (event.clientX - bounds.left));
+      board.scrollLeft = Math.max(0, cursorX * nextZoom - (clientX - bounds.left));
       // CSS zoom changes the scroll coordinate system. Keep the same canvas Y
       // at the top of the viewport instead of visually moving it up/down.
       board.scrollTop = Math.max(0, scrollTop / freeformZoom * nextZoom);
@@ -2388,7 +2401,7 @@ export default function Home() {
           </section>
         </div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
-      <section className={`board ${isBoardPanning ? 'board-panning' : ''} ${boardViewMode === 'freeform' ? 'board-freeform' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={(event) => { moveBoardPan(event); updateFreeformCursor(event); }} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan} onWheel={zoomFreeformWithWheel} onScroll={(event) => { if (boardViewMode === 'freeform') { const board = event.currentTarget; setFreeformViewport({ x: board.scrollLeft / freeformZoom, y: board.scrollTop / freeformZoom, width: board.clientWidth / freeformZoom, height: board.clientHeight / freeformZoom }); } }}>
+      <section className={`board ${isBoardPanning ? 'board-panning' : ''} ${boardViewMode === 'freeform' ? 'board-freeform' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={(event) => { moveBoardPan(event); updateFreeformCursor(event); }} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan} onScroll={(event) => { if (boardViewMode === 'freeform') { const board = event.currentTarget; setFreeformViewport({ x: board.scrollLeft / freeformZoom, y: board.scrollTop / freeformZoom, width: board.clientWidth / freeformZoom, height: board.clientHeight / freeformZoom }); } }}>
         {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : <div ref={freeformCanvasRef} className={boardViewMode === 'freeform' ? 'freeform-canvas' : 'board-columns'} style={boardViewMode === 'freeform' ? { width: freeformCanvasSize.width, height: freeformCanvasSize.height, zoom: freeformZoom } : undefined} onContextMenu={(event) => { if (boardViewMode !== 'freeform' || isPublicViewer || (event.target instanceof Element && event.target.closest('.column'))) return; const point = getFreeformPoint(event.clientX, event.clientY); if (!point) return; event.preventDefault(); setFreeformContextMenu({ x: Math.min(event.clientX, window.innerWidth - 230), y: Math.min(event.clientY, window.innerHeight - 170), position: point }); }}>
           {boardViewMode === 'freeform' && <><svg className={`freeform-ink ${isFreeformDrawing || isFreeformErasing ? 'active' : ''} ${isFreeformErasing ? 'erasing' : ''}`} width={freeformCanvasSize.width} height={freeformCanvasSize.height} viewBox={`0 0 ${freeformCanvasSize.width} ${freeformCanvasSize.height}`} onPointerDown={startFreeformInk} onPointerMove={continueFreeformInk} onPointerUp={finishFreeformInk} onPointerCancel={finishFreeformInk}>{freeformDrawing.strokes.map((stroke, index) => <polyline key={stroke.id ?? index} points={stroke.points.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke={stroke.color} strokeWidth={stroke.width} strokeLinecap="round" strokeLinejoin="round" />)}</svg>{freeformLive.cursors.filter((cursor) => cursor.user_id !== account?.user.id).map((cursor) => <div className="freeform-cursor" key={cursor.user_id} style={{ left: cursor.x, top: cursor.y }}><span>⌖</span><b>@{cursor.username}</b></div>)}{freeformLive.pings.map((ping) => <span className="freeform-ping" key={ping.id} style={{ left: ping.x, top: ping.y }} title={`@${ping.username} зовёт сюда`}><i />@{ping.username}</span>)}{freeformLive.pings.map((ping) => { const dx = ping.x - freeformViewport.x; const dy = ping.y - freeformViewport.y; if (dx >= 0 && dx <= freeformViewport.width && dy >= 0 && dy <= freeformViewport.height) return null; const horizontal = Math.abs(dx - freeformViewport.width / 2) > Math.abs(dy - freeformViewport.height / 2); const arrow = horizontal ? dx < 0 ? '←' : '→' : dy < 0 ? '↑' : '↓'; return <span className="freeform-ping-direction" key={`${ping.id}-direction`} style={{ left: freeformViewport.x + Math.max(16, Math.min(Math.max(16, freeformViewport.width - 150), dx)), top: freeformViewport.y + Math.max(16, Math.min(Math.max(16, freeformViewport.height - 38), dy)) }}>{arrow} @{ping.username}</span>; })}</>}
           {visibleColumns.map((column, index) => <section className={`column ${dragOverListId === column.id ? 'drag-target' : ''} ${draggingColumnId === column.id ? 'column-dragging' : ''}`} key={column.id} aria-label={column.title} style={boardViewMode === 'freeform' ? (() => { const position = freeformLayout[String(column.id)] ?? { x: index * 336, y: 0 }; return { left: position.x, top: position.y }; })() : undefined} onContextMenu={(event) => { if (isPublicViewer || (event.target instanceof Element && event.target.closest('.task-card'))) return; event.preventDefault(); event.stopPropagation(); setColumnContextMenu({ column, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 150) }); }} onDragEnter={() => { if (dragging) setDragOverListId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (draggingColumnId && boardViewMode === 'standard') { const bounds = event.currentTarget.getBoundingClientRect(); const next = event.clientX > bounds.left + bounds.width / 2 ? visibleColumns[index + 1] : column; setColumnDropBeforeId(next?.id ?? null); updateBoardAutoScroll(event); return; } const cardTarget = event.target instanceof Element ? event.target.closest('.task-card') : null; if (!cardTarget) setDragDropTarget({ listId: column.id, beforeCardId: null }); updateCardListAutoScroll(event); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) { setDragOverListId(null); setDragDropTarget(null); stopCardListAutoScroll(); } }} onDrop={(event) => { event.preventDefault(); if (draggingColumnId && boardViewMode === 'standard') { moveColumn(draggingColumnId, columnDropBeforeId ?? undefined); return; } const beforeCardId = dragDropTarget?.listId === column.id ? dragDropTarget.beforeCardId ?? undefined : undefined; if (dragging) moveCard(dragging.cardId, dragging.sourceListId, column.id, beforeCardId); }}>
