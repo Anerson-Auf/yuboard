@@ -538,6 +538,12 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .thread-composer textarea { min-height: 76px; }
 @media (max-width: 640px) { .thread-window-backdrop { padding: 10px; }.thread-window { width: 100%; min-height: min(500px, calc(100vh - 20px)); max-height: calc(100vh - 20px); }.thread-window-scroll { padding: 12px; }.thread-composer { padding: 11px 12px 13px; } }
 
+/* Each selected mode is a pill sized by its own label: “По людям” must not
+   reserve the same highlight width as the shorter “Колонки”. */
+.board-content-toggle, .board-view-toggle { width: fit-content; gap: 2px; }
+.board-content-toggle button, .board-view-toggle button { width: auto; flex: 0 0 auto; padding: 0 8px; border-radius: 7px; transition: color .18s ease, background-color .22s ease, transform .18s ease; }
+.board-content-toggle button.active, .board-view-toggle button.active { background: color-mix(in srgb, var(--primary) 22%, transparent); }
+
 /* White dots are intentionally quiet: they only distinguish unread human
    messages from the rest of a dense technical discussion. */
 .comment-text { position: relative; }
