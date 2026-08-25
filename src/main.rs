@@ -2153,6 +2153,58 @@ async fn ensure_workspace_owner(pool: &PgPool, workspace_id: Uuid, actor_id: Uui
     if is_owner { Ok(()) } else { Err(ApiError::forbidden("Permission to manage workspace access is required.")) }
 }
 
+/// `full_access` is an administrative preset, but it is deliberately not an
+/// owner-equivalent role.  Without this guard a full-access member could
+/// remove or demote themself (and lock the workspace into an unexpected
+/// state), or mutate another full-access member.  Only the workspace owner
+/// and the system owner may manage that protected level.
+async fn ensure_member_role_mutation_allowed(
+    pool: &PgPool,
+    workspace_id: Uuid,
+    actor_id: Uuid,
+    target_id: Uuid,
+    requested_preset: Option<&str>,
+) -> Result<(), ApiError> {
+    let is_system_owner: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND is_system_owner AND disabled_at IS NULL)",
+    )
+    .bind(actor_id)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    if is_system_owner {
+        return Ok(());
+    }
+
+    let actor_role = sqlx::query_scalar::<_, String>(
+        "SELECT role::text FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(actor_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let target_role = sqlx::query_scalar::<_, String>(
+        "SELECT role::text FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(target_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)?;
+
+    let actor_is_workspace_owner = actor_role.as_deref() == Some("owner");
+    let protects_target = target_role.as_deref() == Some("full_access")
+        || requested_preset == Some("full_access");
+    if !actor_is_workspace_owner && protects_target {
+        return Err(ApiError::forbidden(
+            "Only the workspace owner or system owner may manage Full Access members.",
+        ));
+    }
+
+    Ok(())
+}
+
 async fn ensure_board_permission(pool: &PgPool, board_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
     let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM boards b LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2 WHERE b.id = $1 AND b.archived_at IS NULL AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission) AND (bm.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))))")
         .bind(board_id).bind(actor_id).bind(permission).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
@@ -2197,6 +2249,7 @@ async fn update_workspace_member(State(state): State<AppState>, current: Current
     };
     let pool = database(&state)?;
     ensure_workspace_owner(pool, workspace_id, current.id).await?;
+    ensure_member_role_mutation_allowed(pool, workspace_id, current.id, user_id, Some(&preset)).await?;
     let member = sqlx::query_as::<_, WorkspaceMemberManagementResponse>(
         "UPDATE workspace_members wm SET role = $1::workspace_role FROM users u WHERE wm.workspace_id = $2 AND wm.user_id = $3 AND wm.role <> 'owner' AND u.id = wm.user_id RETURNING u.id, u.username, wm.role::text AS preset, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url",
     )
@@ -2219,6 +2272,7 @@ async fn update_workspace_member(State(state): State<AppState>, current: Current
 async fn remove_workspace_member(State(state): State<AppState>, current: CurrentUser, Path((workspace_id, user_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_workspace_owner(pool, workspace_id, current.id).await?;
+    ensure_member_role_mutation_allowed(pool, workspace_id, current.id, user_id, None).await?;
     let result = sqlx::query("DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner'")
         .bind(workspace_id)
         .bind(user_id)
@@ -2280,6 +2334,10 @@ async fn update_board_member(State(state): State<AppState>, current: CurrentUser
     };
     let pool = database(&state)?;
     ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    let workspace_id = sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM boards WHERE id = $1")
+        .bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("Project was not found."))?;
+    ensure_member_role_mutation_allowed(pool, workspace_id, current.id, user_id, Some(&preset)).await?;
     let member = sqlx::query_as::<_, WorkspaceMemberManagementResponse>("WITH target AS (SELECT b.workspace_id FROM boards b WHERE b.id = $2), updated AS (UPDATE workspace_members wm SET role = $1::workspace_role FROM target WHERE wm.workspace_id = target.workspace_id AND wm.user_id = $3 AND wm.role <> 'owner' AND EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = $2 AND bm.user_id = wm.user_id) RETURNING wm.user_id, wm.role) UPDATE board_members bm SET role = CASE WHEN $1 = 'viewer' THEN 'viewer'::board_role ELSE 'editor'::board_role END FROM updated, users u WHERE bm.board_id = $2 AND bm.user_id = updated.user_id AND u.id = updated.user_id RETURNING u.id, u.username, updated.role::text AS preset, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url")
         .bind(&preset).bind(board_id).bind(user_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::bad_request("Project owner role cannot be changed."))?;
@@ -2297,6 +2355,10 @@ async fn update_board_member(State(state): State<AppState>, current: CurrentUser
 async fn remove_board_member(State(state): State<AppState>, current: CurrentUser, Path((board_id, user_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_board_permission(pool, board_id, current.id, "remove_members").await?;
+    let workspace_id = sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM boards WHERE id = $1")
+        .bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("Project was not found."))?;
+    ensure_member_role_mutation_allowed(pool, workspace_id, current.id, user_id, None).await?;
     let result = sqlx::query("DELETE FROM board_members bm USING boards b, workspace_members wm WHERE bm.board_id = $1 AND bm.user_id = $2 AND b.id = bm.board_id AND wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id AND wm.role <> 'owner'")
         .bind(board_id).bind(user_id).execute(pool).await.map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError::bad_request("Project owner cannot be removed.")); }
@@ -2320,6 +2382,7 @@ async fn list_member_permissions(State(state): State<AppState>, current: Current
 async fn replace_member_permissions(State(state): State<AppState>, current: CurrentUser, Path((workspace_id, user_id)): Path<(Uuid, Uuid)>, Json(request): Json<ReplaceMemberPermissionsRequest>) -> ApiResult<MemberPermissionsResponse> {
     let pool = database(&state)?;
     ensure_workspace_owner(pool, workspace_id, current.id).await?;
+    ensure_member_role_mutation_allowed(pool, workspace_id, current.id, user_id, None).await?;
     let permissions: Vec<String> = request.permissions.into_iter().collect::<HashSet<_>>().into_iter().collect();
     if permissions.len() > WORKSPACE_PERMISSIONS.len() || permissions.iter().any(|permission| !WORKSPACE_PERMISSIONS.contains(&permission.as_str())) {
         return Err(ApiError::bad_request("Unknown workspace permission."));
