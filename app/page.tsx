@@ -548,12 +548,37 @@ export default function Home() {
   useEffect(() => {
     const board = boardRef.current;
     if (!board) return;
-    board.querySelectorAll<HTMLElement>(':scope > .column').forEach((element, index) => {
-      const column = visibleColumns[index];
-      if (!column) return;
-      element.style.gridColumn = String(column.gridColumn);
-      element.style.gridRow = String(column.gridRow);
-    });
+    const elements = Array.from(board.querySelectorAll<HTMLElement>(':scope > .column'));
+    let frame: number | null = null;
+    const layout = () => {
+      frame = null;
+      const lanes = new Map<number, { element: HTMLElement; column: Column }[]>();
+      elements.forEach((element, index) => {
+        const column = visibleColumns[index];
+        if (!column) return;
+        const lane = lanes.get(column.gridColumn) ?? [];
+        lane.push({ element, column }); lanes.set(column.gridColumn, lane);
+      });
+      let boardHeight = 0;
+      lanes.forEach((lane, gridColumn) => {
+        let offset = 0;
+        lane.sort((left, right) => left.column.gridRow - right.column.gridRow).forEach(({ element }) => {
+          element.style.gridColumn = String(gridColumn);
+          element.style.gridRow = '1';
+          element.style.translate = `0 ${offset}px`;
+          offset += element.offsetHeight + 16;
+        });
+        boardHeight = Math.max(boardHeight, offset);
+      });
+      const addColumnButton = board.querySelector<HTMLElement>(':scope > .add-column');
+      if (addColumnButton) { addColumnButton.style.gridColumn = String(Math.max(0, ...visibleColumns.map((column) => column.gridColumn)) + 1); addColumnButton.style.gridRow = '1'; }
+      board.style.minHeight = `${Math.max(window.innerHeight - 170, boardHeight + 30)}px`;
+    };
+    const scheduleLayout = () => { if (frame === null) frame = window.requestAnimationFrame(layout); };
+    const observer = new ResizeObserver(scheduleLayout);
+    elements.forEach((element) => observer.observe(element));
+    layout();
+    return () => { observer.disconnect(); if (frame !== null) window.cancelAnimationFrame(frame); };
   }, [visibleColumns]);
 
   useEffect(() => {
@@ -1002,26 +1027,39 @@ export default function Home() {
     const board = boardRef.current;
     if (!board || !draggingColumnId) return;
     const columnsInBoard = () => Array.from(board.querySelectorAll<HTMLElement>(':scope > .column'));
-    const clearDropHint = () => columnsInBoard().forEach((column) => column.classList.remove('column-drop-below-target'));
+    const clearDropHint = () => columnsInBoard().forEach((column) => column.classList.remove('column-drop-below-target', 'column-drop-before', 'column-drop-after'));
     const targetForEvent = (event: DragEvent) => {
-      const target = event.target instanceof Element ? event.target.closest<HTMLElement>('.column') : null;
+      let target = event.target instanceof Element ? event.target.closest<HTMLElement>('.column') : null;
+      if (!target || !board.contains(target)) {
+        target = columnsInBoard().map((element) => ({ element, bounds: element.getBoundingClientRect() }))
+          .filter(({ bounds }) => event.clientY >= bounds.top - 20 && event.clientY <= bounds.bottom + 20 && event.clientX >= bounds.left - 52 && event.clientX <= bounds.right + 52)
+          .sort((left, right) => Math.abs(event.clientX - (left.bounds.left + left.bounds.width / 2)) - Math.abs(event.clientX - (right.bounds.left + right.bounds.width / 2)))[0]?.element ?? null;
+      }
       if (!target || !board.contains(target)) return null;
       const bounds = target.getBoundingClientRect();
-      return event.clientY >= bounds.bottom - Math.min(76, bounds.height * .28) ? target : null;
+      const index = columnsInBoard().indexOf(target);
+      const column = visibleColumns[index];
+      if (!column) return null;
+      if (event.clientY >= bounds.bottom - Math.min(76, bounds.height * .28)) return { type: 'below' as const, target, column };
+      if (event.clientX <= bounds.left + bounds.width * .34) return { type: 'before' as const, target, column };
+      if (event.clientX >= bounds.right - bounds.width * .34) return { type: 'after' as const, target, column };
+      return null;
     };
     const onDragOver = (event: DragEvent) => {
       const target = targetForEvent(event);
       if (!target) { clearDropHint(); return; }
-      event.preventDefault(); event.stopPropagation(); clearDropHint(); target.classList.add('column-drop-below-target');
+      event.preventDefault(); event.stopPropagation(); clearDropHint();
+      target.target.classList.add(target.type === 'below' ? 'column-drop-below-target' : target.type === 'before' ? 'column-drop-before' : 'column-drop-after');
     };
     const onDrop = (event: DragEvent) => {
       const target = targetForEvent(event);
       if (!target) return;
       event.preventDefault(); event.stopPropagation();
-      const index = columnsInBoard().indexOf(target);
-      const belowColumn = visibleColumns[index];
       clearDropHint();
-      if (belowColumn) moveColumnBelow(draggingColumnId, belowColumn.id);
+      if (target.type === 'below') { moveColumnBelow(draggingColumnId, target.column.id); return; }
+      if (target.type === 'before') { moveColumn(draggingColumnId, target.column.id); return; }
+      const nextLane = visibleColumns.find((column) => column.gridColumn > target.column.gridColumn && column.gridRow === 1);
+      moveColumn(draggingColumnId, nextLane?.id);
     };
     const onDragEnd = () => clearDropHint();
     board.addEventListener('dragover', onDragOver, true);
@@ -2150,7 +2188,7 @@ export default function Home() {
     </div>}
     {imagePreview && <div className="image-preview-backdrop" role="presentation" onMouseDown={() => setImagePreview(null)}><figure className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Просмотр ${imagePreview.name}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" onClick={() => setImagePreview(null)} aria-label="Закрыть просмотр">×</button><img src={imagePreview.url} alt={imagePreview.name} /><figcaption>{imagePreview.name}</figcaption></figure></div>}
     {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button>{!isPublicViewer && <><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button></>}</div>}
-    {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); addColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Добавить колонку ниже</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}
+    {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); addColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Добавить колонку ниже</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); moveColumn(columnContextMenu.column.id); setColumnContextMenu(null); }}>Вынести в отдельный ряд справа</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }
