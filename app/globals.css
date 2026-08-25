@@ -129,7 +129,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
    a personal canvas whose coordinates are persisted per user and board. */
 .board { display: block; overflow: auto; }
 .board-columns { display: flex; align-items: flex-start; gap: 16px; min-width: max-content; min-height: calc(100vh - 170px); }
-.board-freeform { cursor: grab; overscroll-behavior: contain; }
+.board.board-freeform { height: calc(100vh - 178px); min-height: 540px; overflow: auto; cursor: grab; overscroll-behavior: contain; }
 .freeform-canvas { position: relative; min-width: 980px; min-height: calc(100vh - 190px); }
 .board-freeform .column { position: absolute; z-index: 2; margin: 0; touch-action: none; }
 .board-freeform .add-column { position: absolute; width: 220px; }
@@ -147,7 +147,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .board-view-toggle button:last-child { border-right: 0; }
 .board-view-toggle button:hover { color: var(--text); background: var(--surface-soft); }
 .board-view-toggle button.active { color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, transparent); }
-@media (max-width: 760px) { .board-view-toggle button { padding: 0 7px; font-size: 10px; }.freeform-canvas { min-height: 760px; }.freeform-drawing-toolbar { right: 12px; bottom: 12px; max-width: calc(100vw - 24px); overflow-x: auto; }.freeform-cursor b { display: none; } }
+@media (max-width: 760px) { .board-view-toggle button { padding: 0 7px; font-size: 10px; }.board.board-freeform { height: calc(100dvh - 166px); min-height: 420px; }.freeform-canvas { min-height: 760px; }.freeform-drawing-toolbar { right: 12px; bottom: 12px; max-width: calc(100vw - 24px); overflow-x: auto; }.freeform-cursor b { display: none; } }
 
 /* Keep the conversation column visually primary and give it the modal's full working height. */
 .task-layout { height: min(90vh, 820px); max-height: min(90vh, 820px); }
