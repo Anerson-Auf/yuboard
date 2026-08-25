@@ -343,3 +343,6 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-priority-editor button:hover { background: var(--surface-raised); color: var(--text); }.card-priority-editor button.selected { border-color: color-mix(in srgb, var(--primary) 55%, var(--line)); background: color-mix(in srgb, var(--primary) 16%, var(--surface-raised)); color: var(--text); }
 .card-priority-editor button:has(.priority-signal) { min-width: 37px; }.card-priority-editor .priority-signal { pointer-events: none; }
 @media (max-width: 620px) { .card-priority-editor { align-items: flex-start; flex-direction: column; gap: 5px; }.card-priority-editor > div { max-width: 100%; }.card-priority-editor button { min-width: 31px; padding: 0 4px; } }
+
+/* The upload action belongs directly under the background URL, before fit controls. */
+.board-menu form { display: contents; }.board-menu form > label { order: 5; margin-top: 5px; padding-top: 10px; border-top: 1px solid var(--line); }.board-menu > input[type='file'] + button { order: 6; justify-self: start; margin-top: -2px; }.board-menu .background-display-control { order: 7; }.board-menu form > div { order: 8; }
