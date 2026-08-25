@@ -466,3 +466,6 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-priority-editor .priority-signal { transform: scale(1.12); transform-origin: center; }
 .description-section .section-heading h3 { font-size: 17px; }
 .markdown-editable-description .markdown-description, .card-description-input { font-size: 14px; line-height: 1.65; }
+
+/* A workspace cover is artwork for the whole card, so never crop it to fill. */
+.workspace-card.has-background { background-color: #242528; background-position: center; background-repeat: no-repeat; background-size: contain; }
