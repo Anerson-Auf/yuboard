@@ -1184,6 +1184,7 @@ struct BoardDetail {
     background_position: String,
     visibility: String,
     can_edit: bool,
+    can_admin: bool,
     labels: Vec<LabelResponse>,
     milestones: Vec<MilestoneResponse>,
     members: Vec<MemberResponse>,
@@ -2153,6 +2154,41 @@ async fn ensure_workspace_owner(pool: &PgPool, workspace_id: Uuid, actor_id: Uui
     if is_owner { Ok(()) } else { Err(ApiError::forbidden("Permission to manage workspace access is required.")) }
 }
 
+/// Administrative project controls are intentionally narrower than a custom
+/// `manage_permissions` grant: only owners, Full Access members and the
+/// system owner may expose a card publicly or use the project's `…` menu.
+async fn ensure_workspace_full_access(pool: &PgPool, workspace_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))",
+    )
+    .bind(workspace_id)
+    .bind(actor_id)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    if allowed { Ok(()) } else { Err(ApiError::forbidden("Full Access is required for this administrative action.")) }
+}
+
+async fn ensure_board_full_access(pool: &PgPool, board_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
+    let workspace_id = sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM boards WHERE id = $1 AND archived_at IS NULL")
+        .bind(board_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("Project was not found."))?;
+    ensure_workspace_full_access(pool, workspace_id, actor_id).await
+}
+
+async fn ensure_card_full_access(pool: &PgPool, card_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
+    let workspace_id = sqlx::query_scalar::<_, Uuid>("SELECT b.workspace_id FROM cards c INNER JOIN boards b ON b.id = c.board_id WHERE c.id = $1 AND c.archived_at IS NULL AND b.archived_at IS NULL")
+        .bind(card_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("Card was not found."))?;
+    ensure_workspace_full_access(pool, workspace_id, actor_id).await
+}
+
 /// `full_access` is an administrative preset, but it is deliberately not an
 /// owner-equivalent role.  Without this guard a full-access member could
 /// remove or demote themself (and lock the workspace into an unexpected
@@ -2577,7 +2613,12 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
             .bind(board.id).bind(board.workspace_id).bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?,
         None => false,
     };
-    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, can_edit, labels, milestones, members, lists }))
+    let can_admin = match actor_id {
+        Some(user_id) => sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))")
+            .bind(board.workspace_id).bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?,
+        None => false,
+    };
+    Ok(Json(BoardDetail { id: board.id, workspace_id: board.workspace_id, title: board.title, background_image_url, background_fit: board.background_fit, background_position: board.background_position, visibility: board.visibility, can_edit, can_admin, labels, milestones, members, lists }))
 }
 
 async fn ensure_board_layout_access(pool: &PgPool, board_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
@@ -2825,7 +2866,7 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
 
 async fn list_board_activity(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Query(query): Query<BoardActivityQuery>) -> ApiResult<BoardActivityPageResponse> {
     let pool = database(&state)?;
-    ensure_board_layout_access(pool, board_id, current.id).await?;
+    ensure_board_full_access(pool, board_id, current.id).await?;
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(40).clamp(10, 100);
     let offset = (page - 1).saturating_mul(per_page);
@@ -2907,7 +2948,7 @@ async fn update_board(State(state): State<AppState>, current: CurrentUser, Path(
 
 async fn delete_board(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
-    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    ensure_board_full_access(pool, board_id, current.id).await?;
     let keys = sqlx::query_scalar::<_, String>("SELECT a.object_key FROM attachments a JOIN cards c ON c.id = a.card_id WHERE c.board_id = $1 AND a.object_key IS NOT NULL UNION ALL SELECT cb.object_key FROM card_backgrounds cb JOIN cards c ON c.id = cb.card_id WHERE c.board_id = $1")
         .bind(board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let result = sqlx::query("DELETE FROM boards WHERE id = $1 AND archived_at IS NULL")
@@ -2919,7 +2960,7 @@ async fn delete_board(State(state): State<AppState>, current: CurrentUser, Path(
 }
 
 async fn update_board_background(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardBackgroundRequest>) -> Result<StatusCode, ApiError> {
-    ensure_board_permission(database(&state)?, board_id, current.id, "manage_permissions").await?;
+    ensure_board_full_access(database(&state)?, board_id, current.id).await?;
     let url = match request.background_image_url {
         Some(value) if !value.trim().is_empty() => {
             let value = value.trim();
@@ -2947,7 +2988,7 @@ async fn update_board_background(State(state): State<AppState>, current: Current
 
 async fn upload_board_background(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, mut multipart: Multipart) -> ApiResult<BoardBackgroundUploadResponse> {
     let pool = database(&state)?;
-    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    ensure_board_full_access(pool, board_id, current.id).await?;
     let field = multipart.next_field().await.map_err(|_| ApiError::bad_request("Background upload form is invalid."))?
         .ok_or_else(|| ApiError::bad_request("Background image file is required."))?;
     if field.name() != Some("file") { return Err(ApiError::bad_request("Background image field must be named file.")); }
@@ -2990,7 +3031,7 @@ async fn download_board_background(State(state): State<AppState>, current: Viewe
 }
 
 async fn update_board_visibility(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardVisibilityRequest>) -> Result<StatusCode, ApiError> {
-    ensure_board_permission(database(&state)?, board_id, current.id, "manage_permissions").await?;
+    ensure_board_full_access(database(&state)?, board_id, current.id).await?;
     let visibility = match request.visibility.as_str() { "public" => "public", "private" => "private", _ => return Err(ApiError::bad_request("Visibility must be public or private.")) };
     let result = sqlx::query("UPDATE boards b SET visibility = $1::board_visibility, updated_at = now() FROM board_members m WHERE b.id = $2 AND m.board_id = b.id AND m.user_id = $3 AND b.archived_at IS NULL")
         .bind(visibility).bind(board_id).bind(current.id).execute(database(&state)?).await.map_err(ApiError::internal)?;
@@ -3001,7 +3042,7 @@ async fn update_board_visibility(State(state): State<AppState>, current: Current
 
 async fn list_discord_integrations(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<DiscordIntegrationResponse>> {
     let pool = database(&state)?;
-    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    ensure_board_full_access(pool, board_id, current.id).await?;
     let integrations = sqlx::query_as::<_, DiscordIntegrationResponse>(
         "SELECT id, name, default_list_id, created_at::text AS created_at, last_used_at::text AS last_used_at, NULL::text AS token FROM discord_integrations WHERE board_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC",
     )
@@ -3011,7 +3052,7 @@ async fn list_discord_integrations(State(state): State<AppState>, current: Curre
 
 async fn create_discord_integration(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateDiscordIntegrationRequest>) -> ApiResult<DiscordIntegrationResponse> {
     let pool = database(&state)?;
-    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    ensure_board_full_access(pool, board_id, current.id).await?;
     let name = valid_text(&request.name, "name", 120)?;
     if let Some(default_list_id) = request.default_list_id {
         let belongs_to_board: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)")
@@ -3029,7 +3070,7 @@ async fn create_discord_integration(State(state): State<AppState>, current: Curr
 
 async fn revoke_discord_integration(State(state): State<AppState>, current: CurrentUser, Path((board_id, integration_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
-    ensure_board_permission(pool, board_id, current.id, "manage_permissions").await?;
+    ensure_board_full_access(pool, board_id, current.id).await?;
     let result = sqlx::query("UPDATE discord_integrations SET revoked_at = now() WHERE id = $1 AND board_id = $2 AND revoked_at IS NULL")
         .bind(integration_id).bind(board_id).execute(pool).await.map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "discord_integration_not_found", "Discord integration was not found.".to_owned())); }
@@ -3055,7 +3096,7 @@ fn trello_label_color(color: Option<&str>) -> String {
 }
 
 async fn import_trello_board(State(state): State<AppState>, current: CurrentUser, Path(workspace_id): Path<Uuid>, Json(document): Json<Value>) -> ApiResult<ImportBoardResponse> {
-    ensure_workspace_owner(database(&state)?, workspace_id, current.id).await?;
+    ensure_workspace_full_access(database(&state)?, workspace_id, current.id).await?;
     let board_title = import_string(&document, "name", 200).ok_or_else(|| ApiError::bad_request("Import file must contain a board name."))?;
     let source_lists = document.get("lists").and_then(Value::as_array).ok_or_else(|| ApiError::bad_request("Import file must contain a lists array."))?;
     let source_cards = document.get("cards").and_then(Value::as_array).ok_or_else(|| ApiError::bad_request("Import file must contain a cards array."))?;
@@ -3129,7 +3170,7 @@ async fn import_trello_board(State(state): State<AppState>, current: CurrentUser
 }
 
 async fn export_board(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Value> {
-    ensure_board_permission(database(&state)?, board_id, current.id, "manage_permissions").await?; let pool = database(&state)?;
+    ensure_board_full_access(database(&state)?, board_id, current.id).await?; let pool = database(&state)?;
     let board = sqlx::query_as::<_, BoardAccess>("SELECT id, workspace_id, title, background_image_url, background_fit, background_position, visibility::text AS visibility FROM boards WHERE id = $1 AND archived_at IS NULL").bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
     let lists = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', id::text, 'name', title, 'closed', false, 'pos', position) ORDER BY position), '[]'::jsonb) FROM lists WHERE board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     let labels = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', id::text, 'name', name, 'color', color) ORDER BY name), '[]'::jsonb) FROM labels WHERE board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
@@ -4769,7 +4810,7 @@ async fn update_card_completion(State(state): State<AppState>, current: CurrentU
 
 async fn update_card_public_visibility(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardPublicVisibilityRequest>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
-    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    ensure_card_full_access(pool, card_id, current.id).await?;
     let updated = sqlx::query("UPDATE cards SET is_public = $1, updated_at = now() WHERE id = $2 AND archived_at IS NULL")
         .bind(request.is_public)
         .bind(card_id)
