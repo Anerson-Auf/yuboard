@@ -210,14 +210,15 @@ function inlineMarkdown(value: string, highlightMentions = false): ReactNode[] {
   return value.split(token).filter(Boolean).map((part, index) => {
     const image = /^!\[([^\]]*)\]\(([^\s)]+)/.exec(part);
     if (image) {
+      const mediaUrl = assetUrl(image[2]);
       const isVideo = image[1].startsWith('video:');
       const isAudio = image[1].startsWith('audio:');
       const name = image[1].replace(/^(?:video|audio):/, '') || (isVideo ? 'Видео' : isAudio ? 'Голосовое сообщение' : 'Изображение');
       return isAudio
-        ? <audio className="markdown-media markdown-audio" key={index} controls preload="metadata" src={image[2]} aria-label={name} />
+        ? <div className="markdown-audio-wrap" key={index}><audio className="markdown-media markdown-audio" controls preload="metadata" src={mediaUrl} aria-label={name} /><a href={mediaUrl} target="_blank" rel="noreferrer">Открыть аудио</a></div>
         : isVideo
-        ? <video className="markdown-media markdown-video" key={index} controls preload="metadata" src={image[2]} aria-label={name} />
-        : <a className="markdown-image-link" key={index} href={image[2]} target="_blank" rel="noreferrer"><img className="markdown-media" src={image[2]} alt={name} /></a>;
+        ? <video className="markdown-media markdown-video" key={index} controls preload="metadata" src={mediaUrl} aria-label={name} />
+        : <a className="markdown-image-link" key={index} href={mediaUrl} target="_blank" rel="noreferrer"><img className="markdown-media" src={mediaUrl} alt={name} /></a>;
     }
     const link = /^\[([^\]]+)\]\(([^\s)]+)/.exec(part);
     if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;

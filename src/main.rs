@@ -4531,7 +4531,7 @@ async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, 
 
 async fn download_attachment(State(state): State<AppState>, current: Viewer, Path(attachment_id): Path<Uuid>) -> Result<Response, ApiError> {
     let attachment = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
-        "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
+        "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
     )
     .bind(attachment_id)
     .bind(current.0.map(|user| user.id))
