@@ -89,7 +89,7 @@ function homeGreetingForLocalTime(date = new Date()) {
   return 'Рад видеть вас в столь поздний час';
 }
 
-type StarfallParticle = { x: number; y: number; vx: number; vy: number; radius: number; alpha: number; kind: 'dot' | 'glow'; phase: number };
+type StarfallParticle = { x: number; y: number; vx: number; vy: number; size: number; alpha: number; spin: number; rotation: number; phase: number };
 
 function AmbientStarfall() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -104,19 +104,20 @@ function AmbientStarfall() {
     let lastTime = performance.now();
     let lastPaint = 0;
     let particles: StarfallParticle[] = [];
+    let coinReady = false;
     const random = (min: number, max: number) => min + Math.random() * (max - min);
     const createParticle = (spread: boolean): StarfallParticle => {
       const speed = random(70, 185);
       const angle = random(108, 162) * Math.PI / 180;
-      const isDot = Math.random() < .42;
       return {
         x: spread ? random(-width * .15, width + 320) : random(-width * .05, width + 280),
         y: spread ? random(-height * .45, height * 1.05) : random(-height * .35, height * .65),
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        radius: isDot ? random(1.6, 4.2) : random(12, 24),
-        alpha: isDot ? random(.4, .7) : random(.14, .32),
-        kind: isDot ? 'dot' : 'glow',
+        size: random(14, 33),
+        alpha: random(.3, .72),
+        spin: random(-2.8, 2.8),
+        rotation: random(0, Math.PI * 2),
         phase: random(0, Math.PI * 2),
       };
     };
@@ -131,18 +132,15 @@ function AmbientStarfall() {
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       particles = Array.from({ length: 48 }, () => createParticle(true));
     };
+    const coin = new Image();
     const drawParticle = (particle: StarfallParticle, time: number) => {
-      const alpha = particle.alpha * (.84 + Math.sin(time * 4.5 + particle.phase) * .16);
-      if (particle.kind === 'dot') {
-        context.fillStyle = `rgb(244 162 193 / ${alpha})`;
-        context.beginPath(); context.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2); context.fill();
-        return;
-      }
-      const glow = context.createRadialGradient(particle.x, particle.y, 0, particle.x, particle.y, particle.radius * 2.4);
-      glow.addColorStop(0, `rgb(255 180 204 / ${alpha})`);
-      glow.addColorStop(1, 'rgb(242 126 171 / 0)');
-      context.fillStyle = glow;
-      context.beginPath(); context.arc(particle.x, particle.y, particle.radius * 2.4, 0, Math.PI * 2); context.fill();
+      if (!coinReady) return;
+      context.save();
+      context.globalAlpha = particle.alpha * (.84 + Math.sin(time * 4.5 + particle.phase) * .16);
+      context.translate(particle.x, particle.y);
+      context.rotate(particle.rotation + particle.spin * time);
+      context.drawImage(coin, -particle.size / 2, -particle.size / 2, particle.size, particle.size);
+      context.restore();
     };
     const paint = (now: number, delta: number) => {
       context.clearRect(0, 0, width, height);
@@ -161,8 +159,10 @@ function AmbientStarfall() {
       frameId = window.requestAnimationFrame(render);
     };
 
-    resize();
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    coin.onload = () => { coinReady = true; if (reducedMotion) paint(0, 0); };
+    coin.src = '/flowboard-coin.png';
+    resize();
     if (reducedMotion) paint(0, 0); else frameId = window.requestAnimationFrame(render);
     window.addEventListener('resize', resize);
     return () => { window.cancelAnimationFrame(frameId); window.removeEventListener('resize', resize); };
