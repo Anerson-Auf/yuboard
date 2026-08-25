@@ -8,13 +8,13 @@ type EntityId = number | string;
 type Member = { id: EntityId; initials: string; color: string; name: string; avatarUrl?: string | null };
 type Label = { id: string; name: string; color: string };
 type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; labels: Label[]; checklist?: string; comments?: number; attachments?: number; members: Member[] };
-type Column = { id: EntityId; title: string; cards: Card[] };
+type Column = { id: EntityId; title: string; gridColumn: number; gridRow: number; cards: Card[] };
 type View = 'home' | 'board';
 type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
 type BoardBackgroundPosition = 'center' | 'top' | 'bottom';
 type ApiMember = { id: string; username: string; avatar_url?: string | null };
-type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; labels: Label[]; members: ApiMember[]; lists: { id: string; title: string; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; labels: Label[]; assignees: ApiMember[] }[] }[] };
+type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; labels: Label[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; labels: Label[]; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
@@ -543,7 +543,18 @@ export default function Home() {
     return { ...column, cards: [...cards].sort((left, right) => cardSort === 'priority'
       ? (right.priority ?? 0) - (left.priority ?? 0)
       : activityTime(right) - activityTime(left)) };
-  }), [cardSort, columns, currentMember.id, filterMode, query]);
+  }).sort((left, right) => left.gridColumn - right.gridColumn || left.gridRow - right.gridRow), [cardSort, columns, currentMember.id, filterMode, query]);
+
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    board.querySelectorAll<HTMLElement>(':scope > .column').forEach((element, index) => {
+      const column = visibleColumns[index];
+      if (!column) return;
+      element.style.gridColumn = String(column.gridColumn);
+      element.style.gridRow = String(column.gridRow);
+    });
+  }, [visibleColumns]);
 
   useEffect(() => {
     async function connectToApi() {
@@ -945,11 +956,9 @@ export default function Home() {
     setColumns((current) => {
       const moving = current.find((column) => column.id === columnId);
       if (!moving) return current;
-      const without = current.filter((column) => column.id !== columnId);
-      const insertionIndex = beforeColumnId === undefined ? without.length : Math.max(0, without.findIndex((column) => column.id === beforeColumnId));
-      const next = [...without];
-      next.splice(insertionIndex, 0, moving);
-      return next;
+      const target = beforeColumnId === undefined ? Math.max(0, ...current.map((column) => column.gridColumn)) + 1 : current.find((column) => column.id === beforeColumnId)?.gridColumn;
+      if (!target || moving.gridColumn === target) return current;
+      return current.map((column) => column.id === moving.id ? { ...column, gridColumn: target, gridRow: 1 } : column.id !== moving.id && column.gridColumn >= target ? { ...column, gridColumn: column.gridColumn + 1 } : column);
     });
     clearColumnDragState();
     if (persistence === 'connected' && typeof columnId === 'string') {
@@ -958,16 +967,20 @@ export default function Home() {
         .catch(() => showToast('Порядок колонок не сохранён: обновите доску'));
     }
   }
-  function addColumn() {
+  function addColumn(belowColumn?: Column) {
     const title = `Новая колонка ${columns.length + 1}`;
     if (persistence === 'connected' && boardId) {
-      void fetch(`${API_URL}/v1/boards/${boardId}/lists`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })
-        .then(async (response) => { if (!response.ok) throw new Error('save failed'); return response.json() as Promise<{ id: string; title: string }>; })
-        .then((saved) => { setColumns((current) => [...current, { id: saved.id, title: saved.title, cards: [] }]); showToast('Колонка добавлена'); })
+      void fetch(`${API_URL}/v1/boards/${boardId}/lists`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, below_list_id: typeof belowColumn?.id === 'string' ? belowColumn.id : null }) })
+        .then(async (response) => { if (!response.ok) throw new Error('save failed'); return response.json() as Promise<{ id: string; title: string; grid_column: number; grid_row: number }>; })
+        .then((saved) => { setColumns((current) => [...current, { id: saved.id, title: saved.title, gridColumn: saved.grid_column, gridRow: saved.grid_row, cards: [] }]); showToast(belowColumn ? 'Колонка добавлена ниже' : 'Колонка добавлена'); })
         .catch(() => showToast('Не удалось сохранить колонку'));
       return;
     }
-    setColumns((current) => [...current, { id: current.length + 1, title, cards: [] }]); showToast('Колонка добавлена');
+    setColumns((current) => {
+      const gridColumn = belowColumn?.gridColumn ?? Math.max(0, ...current.map((column) => column.gridColumn)) + 1;
+      const gridRow = belowColumn ? Math.max(0, ...current.filter((column) => column.gridColumn === gridColumn).map((column) => column.gridRow)) + 1 : 1;
+      return [...current, { id: current.length + 1, title, gridColumn, gridRow, cards: [] }];
+    }); showToast(belowColumn ? 'Колонка добавлена ниже' : 'Колонка добавлена');
   }
   function openCard(card: Card) {
     setSelected(card);
@@ -1699,7 +1712,7 @@ export default function Home() {
   }
 
   function applyBoard(data: ApiBoard) {
-    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, members: card.assignees.map(memberFromApi) })) })));
+    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, gridColumn: list.grid_column, gridRow: list.grid_row, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, members: card.assignees.map(memberFromApi) })) })));
     setBoardLabels(data.labels);
     setWorkspaceMembers(data.members.map(memberFromApi));
     setWorkspaceId(data.workspace_id);
@@ -2089,7 +2102,7 @@ export default function Home() {
     </div>}
     {imagePreview && <div className="image-preview-backdrop" role="presentation" onMouseDown={() => setImagePreview(null)}><figure className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Просмотр ${imagePreview.name}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" onClick={() => setImagePreview(null)} aria-label="Закрыть просмотр">×</button><img src={imagePreview.url} alt={imagePreview.name} /><figcaption>{imagePreview.name}</figcaption></figure></div>}
     {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button>{!isPublicViewer && <><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button></>}</div>}
-    {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}
+    {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); addColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Добавить колонку ниже</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }

@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet, VecDeque}, convert::Infallible, env, path::PathBuf, sync::Arc, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet, VecDeque}, convert::Infallible, env, net::{IpAddr, SocketAddr}, path::PathBuf, sync::Arc, time::{Duration, Instant}};
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -6,8 +6,8 @@ use argon2::{
 };
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, State},
-    http::{header, request::Parts, HeaderName, HeaderValue, Method, StatusCode},
+    extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, State},
+    http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::{sse::{Event, Sse}, IntoResponse, Response},
     routing::{get, patch, post, put},
     Json, Router,
@@ -31,11 +31,15 @@ struct AppState {
     external_http: reqwest::Client,
     events: broadcast::Sender<()>,
     auth_rate_limiter: RateLimiter,
+    trust_proxy: bool,
 }
 
 #[derive(Clone)]
 struct RateLimiter {
     attempts: Arc<Mutex<HashMap<String, VecDeque<Instant>>>>,
+    window: Duration,
+    limit: usize,
+    max_buckets: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -371,6 +375,8 @@ struct BoardAccess {
 #[derive(Deserialize)]
 struct CreateListRequest {
     title: String,
+    #[serde(default)]
+    below_list_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -383,6 +389,8 @@ struct MoveListRequest {
 struct ListResponse {
     id: Uuid,
     title: String,
+    grid_column: i32,
+    grid_row: i32,
 }
 
 #[derive(Deserialize)]
@@ -909,6 +917,8 @@ struct BoardDetail {
 struct BoardList {
     id: Uuid,
     title: String,
+    grid_column: i32,
+    grid_row: i32,
     cards: Vec<BoardCard>,
 }
 
@@ -920,6 +930,7 @@ async fn main() {
     tokio::fs::create_dir_all(&upload_dir).await.expect("could not create FLOWBOARD_UPLOAD_DIR");
 
     let cookie_secure = env::var("FLOWBOARD_COOKIE_SECURE").map(|value| value != "false").unwrap_or(false);
+    let trust_proxy = env::var("FLOWBOARD_TRUST_PROXY").map(|value| value.eq_ignore_ascii_case("true")).unwrap_or(false);
     let frontend_origin = env::var("FLOWBOARD_API_ORIGIN").unwrap_or_else(|_| "http://localhost:3000".to_owned());
     let database = match env::var("FLOWBOARD_DATABASE_URL") {
         Ok(url) => Some(connect_database(&url).await),
@@ -1039,7 +1050,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, auth_rate_limiter: RateLimiter { attempts: Arc::new(Mutex::new(HashMap::new())) } })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -1049,7 +1060,7 @@ async fn main() {
         .await
         .expect("FLOWBOARD_BIND_ADDR must be available");
     println!("Flowboard API is listening on http://{bind_address}");
-    axum::serve(listener, app).await.expect("API server failed");
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.expect("API server failed");
 }
 
 async fn connect_database(url: &str) -> PgPool {
@@ -1128,17 +1139,43 @@ fn token_hash(value: &str) -> Vec<u8> {
 }
 
 impl RateLimiter {
-    async fn check(&self, action: &str, subject: &str) -> Result<(), ApiError> {
-        const WINDOW: Duration = Duration::from_secs(10 * 60);
-        const LIMIT: usize = 10;
-        let now = Instant::now();
+    fn new() -> Self {
+        Self::with_limits(Duration::from_secs(10 * 60), 10, 4_096)
+    }
+
+    fn with_limits(window: Duration, limit: usize, max_buckets: usize) -> Self {
+        Self { attempts: Arc::new(Mutex::new(HashMap::new())), window, limit, max_buckets }
+    }
+
+    async fn check(&self, action: &str, source: IpAddr) -> Result<(), ApiError> {
+        self.check_at(action, source, Instant::now()).await
+    }
+
+    async fn check_at(&self, action: &str, source: IpAddr, now: Instant) -> Result<(), ApiError> {
         let mut attempts = self.attempts.lock().await;
-        let entries = attempts.entry(format!("{action}:{subject}")).or_default();
-        while entries.front().is_some_and(|time| now.duration_since(*time) > WINDOW) { entries.pop_front(); }
-        if entries.len() >= LIMIT { return Err(ApiError::too_many_requests("Too many attempts. Try again in a few minutes.")); }
-        entries.push_back(now);
+        attempts.retain(|_, entries| {
+            while entries.front().is_some_and(|time| now.saturating_duration_since(*time) > self.window) { entries.pop_front(); }
+            !entries.is_empty()
+        });
+        let key = format!("{action}:{source}");
+        if let Some(entries) = attempts.get_mut(&key) {
+            if entries.len() >= self.limit { return Err(ApiError::too_many_requests("Too many attempts. Try again in a few minutes.")); }
+            entries.push_back(now);
+            return Ok(());
+        }
+        if attempts.len() >= self.max_buckets { return Err(ApiError::too_many_requests("Too many attempts. Try again in a few minutes.")); }
+        attempts.insert(key, VecDeque::from([now]));
         Ok(())
     }
+}
+
+fn request_source_ip(headers: &HeaderMap, peer: SocketAddr, trust_proxy: bool) -> IpAddr {
+    if trust_proxy {
+        if let Some(source) = headers.get("x-forwarded-for").and_then(|value| value.to_str().ok()).and_then(|value| value.split(',').next()).and_then(|value| value.trim().parse().ok()) {
+            return source;
+        }
+    }
+    peer.ip()
 }
 
 fn new_token() -> String {
@@ -1224,22 +1261,33 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
 
 async fn register(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     jar: CookieJar,
     Json(request): Json<RegisterRequest>,
 ) -> Result<(CookieJar, Json<AuthResponse>), ApiError> {
     let username = valid_username(&request.username)?;
     let password = valid_password(&request.password)?;
-    state.auth_rate_limiter.check("register", &username).await?;
+    state.auth_rate_limiter.check("register", request_source_ip(&headers, peer, state.trust_proxy)).await?;
     let pool = database(&state)?;
-    if has_registered_account(pool).await? {
-        return Err(ApiError::forbidden("Registration is invite-only after the first workspace owner is created."));
-    }
     let salt = SaltString::generate(&mut OsRng);
     let password_hash = Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map_err(|_| ApiError::internal(sqlx::Error::Protocol("password hash failed".into())))?
         .to_string();
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(6_372_084_913_i64)
+        .execute(&mut *transaction)
+        .await
+        .map_err(ApiError::internal)?;
+    let registration_closed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE password_hash IS NOT NULL)")
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(ApiError::internal)?;
+    if registration_closed {
+        return Err(ApiError::forbidden("Registration is invite-only after the first workspace owner is created."));
+    }
     let existing = sqlx::query_as::<_, PasswordAccount>(
         "SELECT id, username, display_name, password_hash, disabled_at, avatar_key, avatar_media_type, is_system_owner FROM users WHERE lower(username) = lower($1) FOR UPDATE",
     )
@@ -1252,7 +1300,7 @@ async fn register(
             return Err(ApiError::bad_request("Этот ник уже занят."));
         }
         sqlx::query_as::<_, PasswordAccount>(
-            "UPDATE users SET username = $1, display_name = $1, password_hash = $2, disabled_at = NULL WHERE id = $3 RETURNING id, username, display_name, password_hash, disabled_at, avatar_key, avatar_media_type, is_system_owner",
+            "UPDATE users SET username = $1, display_name = $1, password_hash = $2, disabled_at = NULL, is_system_owner = TRUE WHERE id = $3 RETURNING id, username, display_name, password_hash, disabled_at, avatar_key, avatar_media_type, is_system_owner",
         )
         .bind(username)
         .bind(password_hash)
@@ -1282,11 +1330,13 @@ async fn auth_setup(State(state): State<AppState>) -> ApiResult<AuthSetupRespons
 
 async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     jar: CookieJar,
     Json(request): Json<LoginRequest>,
 ) -> Result<(CookieJar, Json<AuthResponse>), ApiError> {
     let username = valid_username(&request.username)?;
-    state.auth_rate_limiter.check("login", &username).await?;
+    state.auth_rate_limiter.check("login", request_source_ip(&headers, peer, state.trust_proxy)).await?;
     let account = sqlx::query_as::<_, PasswordAccount>(
         "SELECT id, username, display_name, password_hash, disabled_at, avatar_key, avatar_media_type, is_system_owner FROM users WHERE lower(username) = lower($1) LIMIT 1",
     )
@@ -1303,13 +1353,15 @@ async fn login(
 
 async fn accept_account_invitation(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     jar: CookieJar,
     Json(request): Json<AcceptInvitationRequest>,
 ) -> Result<(CookieJar, Json<AuthResponse>), ApiError> {
     if request.token.len() < 32 || request.token.len() > 200 {
         return Err(ApiError::bad_request("Invitation token is invalid."));
     }
-    state.auth_rate_limiter.check("invite", &request.token).await?;
+    state.auth_rate_limiter.check("invite", request_source_ip(&headers, peer, state.trust_proxy)).await?;
     let username = valid_username(&request.username)?;
     let password = valid_password(&request.password)?;
     let pool = database(&state)?;
@@ -1931,7 +1983,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
-    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title FROM lists WHERE board_id = $1 ORDER BY position")
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row FROM lists WHERE board_id = $1 ORDER BY grid_column, grid_row, position")
         .bind(board_id)
         .fetch_all(pool)
         .await
@@ -1998,6 +2050,8 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     let lists = lists.into_iter().map(|list| BoardList {
         id: list.id,
         title: list.title,
+        grid_column: list.grid_column,
+        grid_row: list.grid_row,
         cards: cards.iter().filter(|card| card.list_id == list.id).cloned().collect(),
     }).collect();
     let uploaded_background_url = format!("/v1/boards/{}/background/file", board.id);
@@ -2234,8 +2288,8 @@ async fn import_trello_board(State(state): State<AppState>, current: CurrentUser
     for (index, list) in source_lists.iter().filter(|list| !list.get("closed").and_then(Value::as_bool).unwrap_or(false)).enumerate() {
         let Some(source_id) = import_string(list, "id", 128) else { continue; };
         let list_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO lists (id, board_id, title, position) VALUES ($1, $2, $3, $4)")
-            .bind(list_id).bind(board_id).bind(import_string(list, "name", 200).unwrap_or_else(|| "Без названия".to_owned())).bind(((index + 1) * 1000) as i64).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("INSERT INTO lists (id, board_id, title, position, grid_column, grid_row) VALUES ($1, $2, $3, $4, $5, 1)")
+            .bind(list_id).bind(board_id).bind(import_string(list, "name", 200).unwrap_or_else(|| "Без названия".to_owned())).bind(((index + 1) * 1000) as i64).bind((index + 1) as i32).execute(&mut *transaction).await.map_err(ApiError::internal)?;
         list_ids.insert(source_id, list_id); imported_lists += 1;
     }
     if list_ids.is_empty() { return Err(ApiError::bad_request("Import contains no active lists.")); }
@@ -2292,17 +2346,29 @@ async fn export_board(State(state): State<AppState>, current: CurrentUser, Path(
 }
 
 async fn create_list(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateListRequest>) -> ApiResult<ListResponse> {
-    ensure_board_permission(database(&state)?, board_id, current.id, "create_lists").await?;
-    let actor_id = current.id;
+    let pool = database(&state)?;
+    ensure_board_permission(pool, board_id, current.id, "create_lists").await?;
     let title = valid_text(&request.title, "title", 200)?;
+    let (grid_column, grid_row) = match request.below_list_id {
+        Some(below_list_id) => {
+            let grid_column = sqlx::query_scalar::<_, i32>("SELECT grid_column FROM lists WHERE id = $1 AND board_id = $2")
+                .bind(below_list_id).bind(board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::bad_request("Target list is unavailable."))?;
+            let grid_row = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_row), 0) + 1 FROM lists WHERE board_id = $1 AND grid_column = $2")
+                .bind(board_id).bind(grid_column).fetch_one(pool).await.map_err(ApiError::internal)?;
+            (grid_column, grid_row)
+        }
+        None => {
+            let grid_column = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_column), 0) + 1 FROM lists WHERE board_id = $1")
+                .bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+            (grid_column, 1)
+        }
+    };
     let list = sqlx::query_as::<_, ListResponse>(
-        "INSERT INTO lists (id, board_id, title, position) SELECT $1, b.id, $2, COALESCE((SELECT MAX(position) FROM lists WHERE board_id = b.id), 0) + 1000 FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE b.id = $3 AND m.user_id = $4 RETURNING id, title",
+        "INSERT INTO lists (id, board_id, title, position, grid_column, grid_row) VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) FROM lists WHERE board_id = $2), 0) + 1000, $4, $5) RETURNING id, title, grid_column, grid_row",
     )
-    .bind(Uuid::new_v4()).bind(title).bind(board_id).bind(actor_id)
-    .fetch_optional(database(&state)?)
-    .await
-    .map_err(ApiError::internal)?
-    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
+    .bind(Uuid::new_v4()).bind(board_id).bind(title).bind(grid_column).bind(grid_row)
+    .fetch_one(pool).await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(Json(list))
 }
@@ -2360,7 +2426,7 @@ async fn update_list(State(state): State<AppState>, current: CurrentUser, Path(l
     let actor_id = current.id;
     let title = valid_text(&request.title, "title", 200)?;
     let list = sqlx::query_as::<_, ListResponse>(
-        "UPDATE lists l SET title = $1, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE l.id = $2 AND l.board_id = b.id AND m.user_id = $3 RETURNING l.id, l.title",
+        "UPDATE lists l SET title = $1, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE l.id = $2 AND l.board_id = b.id AND m.user_id = $3 RETURNING l.id, l.title, l.grid_column, l.grid_row",
     )
     .bind(title)
     .bind(list_id)
@@ -2377,28 +2443,26 @@ async fn move_list(State(state): State<AppState>, current: CurrentUser, Path(lis
     let pool = database(&state)?;
     ensure_list_permission(pool, list_id, current.id, "create_lists").await?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
-    let board_id = sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM lists WHERE id = $1 FOR UPDATE")
+    let list = sqlx::query_as::<_, (Uuid, i32)>("SELECT board_id, grid_column FROM lists WHERE id = $1 FOR UPDATE")
         .bind(list_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "list_not_found", "List was not found.".to_owned()))?;
-    let mut list_ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM lists WHERE board_id = $1 ORDER BY position, id FOR UPDATE")
-        .bind(board_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
-    list_ids.retain(|id| *id != list_id);
-    let insertion_index = match request.before_list_id {
-        Some(before_list_id) if before_list_id == list_id => list_ids.len(),
-        Some(before_list_id) => list_ids.iter().position(|id| *id == before_list_id).ok_or_else(|| ApiError::bad_request("Target list is unavailable."))?,
-        None => list_ids.len(),
+    let target_column = match request.before_list_id {
+        Some(before_list_id) if before_list_id == list_id => { transaction.commit().await.map_err(ApiError::internal)?; return Ok(StatusCode::NO_CONTENT); }
+        Some(before_list_id) => sqlx::query_scalar::<_, i32>("SELECT grid_column FROM lists WHERE id = $1 AND board_id = $2 FOR UPDATE")
+            .bind(before_list_id).bind(list.0).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::bad_request("Target list is unavailable."))?,
+        None => sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_column), 0) + 1 FROM lists WHERE board_id = $1")
+            .bind(list.0).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?,
     };
-    list_ids.insert(insertion_index, list_id);
-    // `lists` has a UNIQUE(board_id, position) constraint. Assigning the final
-    // positions one at a time can collide with a neighbour's still-current
-    // position, which rolls the entire transaction back. Move every list out
-    // of the positive ordering range first, then write the canonical order.
-    sqlx::query("UPDATE lists SET position = -position - 1, updated_at = now() WHERE board_id = $1")
-        .bind(board_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    for (index, id) in list_ids.into_iter().enumerate() {
-        sqlx::query("UPDATE lists SET position = $1, updated_at = now() WHERE id = $2")
-            .bind(((index + 1) as i32) * 1000).bind(id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    }
+    if list.1 == target_column { transaction.commit().await.map_err(ApiError::internal)?; return Ok(StatusCode::NO_CONTENT); }
+    // Keep the grid manual: only make room at the chosen horizontal coordinate.
+    // The temporary positive offset avoids colliding with the unique grid index.
+    sqlx::query("UPDATE lists SET grid_column = grid_column + 1000000, updated_at = now() WHERE board_id = $1 AND grid_column >= $2 AND id <> $3")
+        .bind(list.0).bind(target_column).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    sqlx::query("UPDATE lists SET grid_column = grid_column - 999999, updated_at = now() WHERE board_id = $1 AND grid_column >= 1000000 AND id <> $2")
+        .bind(list.0).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    sqlx::query("UPDATE lists SET grid_column = $1, grid_row = 1, updated_at = now() WHERE id = $2")
+        .bind(target_column).bind(list_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     transaction.commit().await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
@@ -2442,7 +2506,9 @@ async fn delete_list(State(state): State<AppState>, current: CurrentUser, Path(l
 }
 
 async fn ensure_card_access(pool: &PgPool, card_id: Uuid, user_id: Uuid) -> Result<(), ApiError> {
-    ensure_card_public_read(pool, card_id, Some(user_id)).await
+    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards c JOIN boards b ON b.id = c.board_id LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NULL AND b.archived_at IS NULL AND (bm.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))))")
+        .bind(card_id).bind(user_id).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
+    if allowed { Ok(()) } else { Err(ApiError::forbidden("This card is not available to this account.")) }
 }
 
 async fn ensure_card_public_read(pool: &PgPool, card_id: Uuid, user_id: Option<Uuid>) -> Result<(), ApiError> {
@@ -2887,7 +2953,7 @@ async fn create_discord_card(State(state): State<AppState>, integration: Discord
 }
 
 async fn list_discord_board_lists(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<ListResponse>> {
-    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title FROM lists WHERE board_id = $1 ORDER BY position")
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row FROM lists WHERE board_id = $1 ORDER BY grid_column, grid_row, position")
         .bind(integration.board_id)
         .fetch_all(database(&state)?)
         .await
@@ -3878,4 +3944,36 @@ async fn move_card(State(state): State<AppState>, current: CurrentUser, Path(car
     record_card_activity(pool, card.id, actor_id, "Перемещена задача", "Изменена колонка или порядок").await;
     let _ = state.events.send(());
     Ok(Json(card))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    #[tokio::test]
+    async fn rate_limiter_scopes_attempts_to_source_and_reclaims_expired_buckets() {
+        let limiter = RateLimiter::with_limits(Duration::from_secs(60), 2, 2);
+        let started = Instant::now();
+        let first = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1));
+        let second = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 2));
+        let third = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 3));
+
+        assert!(limiter.check_at("login", first, started).await.is_ok());
+        assert!(limiter.check_at("login", first, started).await.is_ok());
+        assert!(limiter.check_at("login", first, started).await.is_err());
+        assert!(limiter.check_at("login", second, started).await.is_ok());
+        assert!(limiter.check_at("login", third, started).await.is_err());
+        assert!(limiter.check_at("login", third, started + Duration::from_secs(61)).await.is_ok());
+    }
+
+    #[test]
+    fn request_source_ip_only_uses_forwarded_header_for_trusted_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.7"));
+        let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8080));
+
+        assert_eq!(request_source_ip(&headers, peer, false), peer.ip());
+        assert_eq!(request_source_ip(&headers, peer, true), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)));
+    }
 }
