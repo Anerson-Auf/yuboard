@@ -3239,6 +3239,33 @@ async fn record_card_activity(pool: &PgPool, card_id: Uuid, actor_id: Uuid, acti
     notify_card_watchers(pool, card_id, Some(actor_id), action, detail).await;
 }
 
+// Text fields are autosaved. A person pausing to think must not turn one edit
+// into a wall of identical console entries (or watcher notifications). Fold
+// consecutive text updates from the same person into the latest activity for
+// ten minutes; another card action starts a new, meaningful history entry.
+async fn record_card_edit_activity(pool: &PgPool, card_id: Uuid, actor_id: Uuid, detail: &str) {
+    match sqlx::query(
+        "UPDATE card_activity SET detail = $3 \
+         WHERE id = (SELECT id FROM card_activity WHERE card_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1) \
+           AND actor_id = $2 \
+           AND action = 'Изменена задача' \
+           AND created_at > now() - interval '10 minutes'",
+    )
+    .bind(card_id)
+    .bind(actor_id)
+    .bind(detail)
+    .execute(pool)
+    .await
+    {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => record_card_activity(pool, card_id, actor_id, "Изменена задача", detail).await,
+        Err(error) => {
+            tracing::error!(?error, card_id = %card_id, "card edit activity coalescing failed");
+            record_card_activity(pool, card_id, actor_id, "Изменена задача", detail).await;
+        }
+    }
+}
+
 async fn record_external_card_activity(pool: &PgPool, card_id: Uuid, action: &str, detail: &str) {
     if let Err(error) = sqlx::query("INSERT INTO card_activity (id, card_id, actor_id, action, detail) VALUES ($1, $2, NULL, $3, $4)")
         .bind(Uuid::new_v4())
@@ -4377,7 +4404,11 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
     if description_changed { replace_card_mentions(database(&state)?, card.id, actor_id, "card_description", card.id, &card.description).await?; }
-    record_card_activity(database(&state)?, card.id, actor_id, "Изменена задача", priority_detail.as_deref().unwrap_or("Название или описание")).await;
+    if priority_detail.is_some() {
+        record_card_activity(database(&state)?, card.id, actor_id, "Изменена задача", priority_detail.as_deref().unwrap()).await;
+    } else {
+        record_card_edit_activity(database(&state)?, card.id, actor_id, "Название или описание").await;
+    }
     let _ = state.events.send(());
     Ok(Json(card))
 }

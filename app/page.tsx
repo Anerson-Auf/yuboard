@@ -1130,7 +1130,9 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       const updated = { title: cardTitleDraft.trim(), description: cardDescriptionDraft };
       persistCardDraft(selected, updated);
-    }, 650);
+    // Save promptly enough to protect a long description, but treat a short
+    // pause as part of the same editing session instead of a new activity.
+    }, 2_500);
     return () => window.clearTimeout(timer);
   }, [cardDescriptionDraft, cardTitleDraft, persistence, selected]);
 
