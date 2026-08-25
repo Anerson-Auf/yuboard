@@ -370,3 +370,6 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .column { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
 .column-head, .composer, .add-task { flex: 0 0 auto; }
 .card-list { min-height: 0; max-height: none; flex: 1 1 auto; }
+
+/* A diagram is opened from a card modal, so it must sit above that modal. */
+.diagram-backdrop { z-index: 140; }
