@@ -552,6 +552,7 @@ export default function Home() {
   const freeformLiveSentAtRef = useRef(0);
   const freeformLiveSocketRef = useRef<WebSocket | null>(null);
   const freeformLiveExpiryTimersRef = useRef<Map<string, number>>(new Map());
+  const freeformDrawingRef = useRef<FreeformDrawing>({ strokes: [] });
   const freeformDrawingDirtyRef = useRef(false);
   const freeformEraseForeignRef = useRef(false);
   const freeformDrawingSaveTimerRef = useRef<number | null>(null);
@@ -717,7 +718,7 @@ export default function Home() {
             if (!freeformInkRef.current && !freeformDrawingDirtyRef.current) {
               void fetch(`${API_URL}/v1/boards/${boardId}/freeform/drawing`)
                 .then(async (drawingResponse) => { if (!drawingResponse.ok) throw new Error('drawing refresh failed'); return drawingResponse.json() as Promise<{ document: FreeformDrawing }>; })
-                .then((drawing) => setFreeformDrawing({ strokes: Array.isArray(drawing.document?.strokes) ? drawing.document.strokes : [] }))
+                .then((drawing) => replaceFreeformDrawing({ strokes: Array.isArray(drawing.document?.strokes) ? drawing.document.strokes : [] }))
                 .catch(() => undefined);
             }
           }
@@ -827,6 +828,31 @@ export default function Home() {
   }, [backgroundDraft, boardBackgroundFit, boardBackgroundPosition, boardBackgroundUrl, boardId]);
 
   function showToast(message: string) { setToast(message); window.setTimeout(() => setToast(''), 2600); }
+  function replaceFreeformDrawing(next: FreeformDrawing | ((current: FreeformDrawing) => FreeformDrawing)) {
+    const resolved = typeof next === 'function' ? next(freeformDrawingRef.current) : next;
+    freeformDrawingRef.current = resolved;
+    setFreeformDrawing(resolved);
+  }
+  function saveFreeformDrawing(document: FreeformDrawing, eraseForeign: boolean) {
+    if (!boardId || authState !== 'signed-in' || boardViewMode !== 'freeform') return;
+    void fetch(`${API_URL}/v1/boards/${boardId}/freeform/drawing`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ document, erase_foreign: eraseForeign }) })
+      .then((response) => { if (!response.ok) throw new Error('drawing save failed'); })
+      .catch(() => {
+        freeformDrawingDirtyRef.current = true;
+        freeformEraseForeignRef.current ||= eraseForeign;
+        window.setTimeout(() => replaceFreeformDrawing({ ...freeformDrawingRef.current, strokes: [...freeformDrawingRef.current.strokes] }), 1_000);
+        showToast('Рисунок не сохранён: попробуйте ещё раз');
+      });
+  }
+  function flushFreeformDrawing() {
+    if (!freeformDrawingDirtyRef.current) return;
+    if (freeformDrawingSaveTimerRef.current !== null) window.clearTimeout(freeformDrawingSaveTimerRef.current);
+    freeformDrawingSaveTimerRef.current = null;
+    freeformDrawingDirtyRef.current = false;
+    const eraseForeign = freeformEraseForeignRef.current;
+    freeformEraseForeignRef.current = false;
+    saveFreeformDrawing(freeformDrawingRef.current, eraseForeign);
+  }
   function persistCardDraft(card: Card, updated: { title: string; description: string }) {
     setCardSaveStatus('saving');
     setSelected((current) => current?.id === card.id ? { ...current, ...updated } : current);
@@ -865,7 +891,7 @@ export default function Home() {
     if (!boardId || authState !== 'signed-in') {
       setBoardViewMode('standard');
       setFreeformLayout({});
-      setFreeformDrawing({ strokes: [] });
+      replaceFreeformDrawing({ strokes: [] });
       setFreeformLive({ cursors: [], pings: [] });
       return;
     }
@@ -886,8 +912,8 @@ export default function Home() {
     let active = true;
     void fetch(`${API_URL}/v1/boards/${boardId}/freeform/drawing`)
       .then(async (response) => { if (!response.ok) throw new Error('drawing load failed'); return response.json() as Promise<{ document: FreeformDrawing }>; })
-      .then((drawing) => { if (active) setFreeformDrawing({ strokes: Array.isArray(drawing.document?.strokes) ? drawing.document.strokes : [] }); })
-      .catch(() => { if (active) setFreeformDrawing({ strokes: [] }); });
+      .then((drawing) => { if (active) replaceFreeformDrawing({ strokes: Array.isArray(drawing.document?.strokes) ? drawing.document.strokes : [] }); })
+      .catch(() => { if (active) replaceFreeformDrawing({ strokes: [] }); });
     return () => { active = false; };
   }, [authState, boardId]);
 
@@ -969,15 +995,7 @@ export default function Home() {
   useEffect(() => {
     if (!freeformDrawingDirtyRef.current || !boardId || authState !== 'signed-in' || boardViewMode !== 'freeform') return;
     if (freeformDrawingSaveTimerRef.current !== null) window.clearTimeout(freeformDrawingSaveTimerRef.current);
-    freeformDrawingSaveTimerRef.current = window.setTimeout(() => {
-      freeformDrawingSaveTimerRef.current = null;
-      freeformDrawingDirtyRef.current = false;
-      const eraseForeign = freeformEraseForeignRef.current;
-      freeformEraseForeignRef.current = false;
-      void fetch(`${API_URL}/v1/boards/${boardId}/freeform/drawing`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ document: freeformDrawing, erase_foreign: eraseForeign }) })
-        .then((response) => { if (!response.ok) throw new Error('drawing save failed'); })
-        .catch(() => { freeformDrawingDirtyRef.current = true; freeformEraseForeignRef.current ||= eraseForeign; window.setTimeout(() => setFreeformDrawing((current) => ({ ...current })), 1_000); showToast('Рисунок не сохранён: попробуйте ещё раз'); });
-    }, 520);
+    freeformDrawingSaveTimerRef.current = window.setTimeout(() => flushFreeformDrawing(), 520);
     return () => { if (freeformDrawingSaveTimerRef.current !== null) window.clearTimeout(freeformDrawingSaveTimerRef.current); };
   }, [authState, boardId, boardViewMode, freeformDrawing]);
 
@@ -1034,7 +1052,7 @@ export default function Home() {
     if (erasing) { eraseFreeformAt(point); publishFreeformCursor(point); event.preventDefault(); event.stopPropagation(); return; }
     const stroke: FreeformStroke = { id: globalThis.crypto.randomUUID(), author_id: account?.user.id, points: [point], color: freeformInkColor, width: freeformInkWidth };
     freeformDrawingDirtyRef.current = true;
-    setFreeformDrawing((current) => ({ strokes: [...current.strokes, stroke] }));
+    replaceFreeformDrawing((current) => ({ strokes: [...current.strokes, stroke] }));
     publishFreeformCursor(point);
     event.preventDefault(); event.stopPropagation();
   }
@@ -1045,7 +1063,7 @@ export default function Home() {
     if (!point) return;
     if (interaction.erasing) { eraseFreeformAt(point); publishFreeformCursor(point); event.preventDefault(); event.stopPropagation(); return; }
     freeformDrawingDirtyRef.current = true;
-    setFreeformDrawing((current) => {
+    replaceFreeformDrawing((current) => {
       if (!current.strokes.length) return current;
       const strokes = [...current.strokes];
       const last = strokes.length - 1;
@@ -1059,41 +1077,42 @@ export default function Home() {
     event.preventDefault(); event.stopPropagation();
   }
   function finishFreeformInk(event: ReactPointerEvent<SVGSVGElement>) {
-    if (freeformInkRef.current?.pointerId !== event.pointerId) return;
+    const interaction = freeformInkRef.current;
+    if (interaction?.pointerId !== event.pointerId) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     freeformInkRef.current = null;
+    if (interaction.erasing) flushFreeformDrawing();
     event.preventDefault(); event.stopPropagation();
   }
   function eraseFreeformAt(point: FreeformPosition) {
     const radius = Math.max(14, freeformInkWidth * 4);
     let removedForeign = false;
-    setFreeformDrawing((current) => {
-      let changed = false;
-      const strokes = current.strokes.flatMap((stroke) => {
-        const chunks: DiagramPoint[][] = [];
-        let chunk: DiagramPoint[] = [];
-        let hit = false;
-        const flush = () => { if (chunk.length >= 2) chunks.push(chunk); chunk = []; };
-        stroke.points.forEach((item) => {
-          if (Math.hypot(item.x - point.x, item.y - point.y) <= radius + stroke.width / 2) { hit = true; flush(); }
-          else chunk.push(item);
-        });
-        flush();
-        if (!hit) return [stroke];
-        changed = true;
-        if (stroke.author_id !== account?.user.id) removedForeign = true;
-        return chunks.map((points, index) => ({ ...stroke, id: index === 0 ? stroke.id : globalThis.crypto.randomUUID(), points }));
+    const current = freeformDrawingRef.current;
+    let changed = false;
+    const strokes = current.strokes.flatMap((stroke) => {
+      const chunks: DiagramPoint[][] = [];
+      let chunk: DiagramPoint[] = [];
+      let hit = false;
+      const flush = () => { if (chunk.length >= 2) chunks.push(chunk); chunk = []; };
+      stroke.points.forEach((item) => {
+        if (Math.hypot(item.x - point.x, item.y - point.y) <= radius + stroke.width / 2) { hit = true; flush(); }
+        else chunk.push(item);
       });
-      if (!changed) return current;
-      freeformDrawingDirtyRef.current = true;
-      freeformEraseForeignRef.current ||= removedForeign;
-      return { strokes };
+      flush();
+      if (!hit) return [stroke];
+      changed = true;
+      if (stroke.author_id !== account?.user.id) removedForeign = true;
+      return chunks.map((points, index) => ({ ...stroke, id: index === 0 ? stroke.id : globalThis.crypto.randomUUID(), points }));
     });
+    if (!changed) return;
+    freeformDrawingDirtyRef.current = true;
+    freeformEraseForeignRef.current ||= removedForeign;
+    replaceFreeformDrawing({ strokes });
   }
   function clearOwnFreeformInk() {
     if (!window.confirm('Стереть только ваши линии на свободной доске?')) return;
     freeformDrawingDirtyRef.current = true;
-    setFreeformDrawing((current) => ({ strokes: current.strokes.filter((stroke) => stroke.author_id !== account?.user.id) }));
+    replaceFreeformDrawing((current) => ({ strokes: current.strokes.filter((stroke) => stroke.author_id !== account?.user.id) }));
   }
 
   function defaultFreeformPosition(layout: Record<string, FreeformPosition>, listId: EntityId) {
