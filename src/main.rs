@@ -2888,7 +2888,7 @@ async fn list_board_activity(State(state): State<AppState>, current: CurrentUser
          INNER JOIN cards c ON c.id = a.card_id \
          LEFT JOIN users u ON u.id = a.actor_id \
          WHERE c.board_id = $1 AND ($2::uuid IS NULL OR a.actor_id = $2) \
-         GROUP BY a.card_id, c.title, a.action, a.detail, a.actor_id, u.username, u.avatar_key, date_trunc('minute', a.created_at) \
+         GROUP BY a.card_id, c.title, a.action, a.detail, a.actor_id, u.id, u.username, u.avatar_key, date_trunc('minute', a.created_at) \
          ORDER BY MAX(a.created_at) DESC, MIN(a.id::text) DESC LIMIT $3 OFFSET $4"
     ))
     .bind(board_id)
