@@ -2395,22 +2395,26 @@ export default function Home() {
     const accepted = files.filter(isSupportedMedia);
     if (!accepted.length) return;
     setUploadingAttachment(true);
-    const uploaded: Attachment[] = [];
-    for (const file of accepted) {
-      if (file.size > 50 * 1024 * 1024) { showToast(`«${file.name}» больше 50 МиБ`); continue; }
-      const form = new FormData();
-      form.append('file', file);
-      try {
-        const response = await fetch(`${API_URL}/v1/cards/${selected.id}/attachments`, { method: 'POST', body: form });
-        if (!response.ok) throw new Error('upload failed');
-        const attachment = await response.json() as Attachment;
-        uploaded.push(attachment);
-        setAttachments((current) => [attachment, ...current]);
-        incrementAttachmentCount();
-      } catch { showToast(`Не удалось загрузить «${file.name}»`); }
+    try {
+      const uploaded: Attachment[] = [];
+      for (const file of accepted) {
+        if (file.size > 50 * 1024 * 1024) { showToast(`«${file.name}» больше 50 МиБ`); continue; }
+        const form = new FormData();
+        form.append('file', file);
+        try {
+          const response = await fetch(`${API_URL}/v1/cards/${selected.id}/attachments`, { method: 'POST', body: form });
+          if (!response.ok) throw new Error('upload failed');
+          const attachment = await response.json() as Attachment;
+          uploaded.push(attachment);
+          setAttachments((current) => [attachment, ...current]);
+          incrementAttachmentCount();
+        } catch { showToast(`Не удалось загрузить «${file.name}»`); }
+      }
+      if (target) appendEmbeddedMedia(target, uploaded);
+    } finally {
+      // A rejected parse or a state update must never leave the card in its loading appearance.
+      setUploadingAttachment(false);
     }
-    if (target) appendEmbeddedMedia(target, uploaded);
-    setUploadingAttachment(false);
   }
   async function uploadAttachments(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
