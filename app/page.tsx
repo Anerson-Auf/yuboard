@@ -215,7 +215,7 @@ function inlineMarkdown(value: string, highlightMentions = false): ReactNode[] {
       const isAudio = image[1].startsWith('audio:');
       const name = image[1].replace(/^(?:video|audio):/, '') || (isVideo ? 'Видео' : isAudio ? 'Голосовое сообщение' : 'Изображение');
       return isAudio
-        ? <div className="markdown-audio-wrap" key={index}><audio className="markdown-media markdown-audio" controls preload="metadata" src={mediaUrl} aria-label={name} /><a href={mediaUrl} target="_blank" rel="noreferrer">Открыть аудио</a></div>
+        ? <audio className="markdown-media markdown-audio" controls preload="metadata" src={mediaUrl} aria-label={name} />
         : isVideo
         ? <video className="markdown-media markdown-video" key={index} controls preload="metadata" src={mediaUrl} aria-label={name} />
         : <a className="markdown-image-link" key={index} href={mediaUrl} target="_blank" rel="noreferrer"><img className="markdown-media" src={mediaUrl} alt={name} /></a>;
