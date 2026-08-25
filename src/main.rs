@@ -895,6 +895,7 @@ struct BoardCardRow {
     due_at: Option<String>,
     cover_attachment_id: Option<Uuid>,
     cover_url: Option<String>,
+    cover_media_type: Option<String>,
     cover_mode: String,
     completed_at: Option<String>,
     checklist_total: i64,
@@ -985,6 +986,7 @@ struct BoardCard {
     due_at: Option<String>,
     cover_attachment_id: Option<Uuid>,
     cover_url: Option<String>,
+    cover_media_type: Option<String>,
     cover_mode: String,
     completed_at: Option<String>,
     checklist_total: i64,
@@ -2544,7 +2546,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -2593,6 +2595,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         due_at: card.due_at,
         cover_attachment_id: card.cover_attachment_id,
         cover_url: card.cover_url,
+        cover_media_type: card.cover_media_type,
         cover_mode: card.cover_mode,
         completed_at: card.completed_at,
         checklist_total: card.checklist_total,
@@ -4333,15 +4336,15 @@ async fn set_discord_card_cover(State(state): State<AppState>, integration: Disc
     }
     let pool = database(&state)?;
     let attachment_id = if let Some(attachment_id) = request.attachment_id {
-        let is_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE a.id = $1 AND a.card_id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND a.media_type LIKE 'image/%')")
+        let is_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE a.id = $1 AND a.card_id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND (a.media_type LIKE 'image/%' OR a.media_type LIKE 'video/%'))")
             .bind(attachment_id).bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
-        if !is_valid { return Err(ApiError::bad_request("Attachment must be an image on this card in the token's board.")); }
+        if !is_valid { return Err(ApiError::bad_request("Attachment must be an image or video on this card in the token's board.")); }
         attachment_id
     } else {
         let attachment_url = request.attachment_url.as_deref().unwrap().trim();
-        sqlx::query_scalar::<_, Uuid>("SELECT a.id FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE a.card_id = $1 AND c.board_id = $2 AND c.archived_at IS NULL AND a.external_url = $3 AND a.media_type LIKE 'image/%' ORDER BY a.created_at DESC LIMIT 1")
+        sqlx::query_scalar::<_, Uuid>("SELECT a.id FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE a.card_id = $1 AND c.board_id = $2 AND c.archived_at IS NULL AND a.external_url = $3 AND (a.media_type LIKE 'image/%' OR a.media_type LIKE 'video/%') ORDER BY a.created_at DESC LIMIT 1")
             .bind(card_id).bind(integration.board_id).bind(attachment_url).fetch_optional(pool).await.map_err(ApiError::internal)?
-            .ok_or_else(|| ApiError::bad_request("Image attachment URL was not found on this card."))?
+            .ok_or_else(|| ApiError::bad_request("Image or video attachment URL was not found on this card."))?
     };
     let updated = sqlx::query("UPDATE cards SET cover_attachment_id = $1, cover_mode = $2, updated_at = now() WHERE id = $3 AND board_id = $4 AND archived_at IS NULL")
         .bind(attachment_id).bind(&request.mode).bind(card_id).bind(integration.board_id).execute(pool).await.map_err(ApiError::internal)?;
@@ -4734,9 +4737,9 @@ async fn update_card_cover(State(state): State<AppState>, current: CurrentUser, 
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
     if request.mode != "full" && request.mode != "top" { return Err(ApiError::bad_request("Cover mode must be full or top.")); }
     if let Some(attachment_id) = request.attachment_id {
-        let is_image: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM attachments WHERE id = $1 AND card_id = $2 AND media_type LIKE 'image/%')")
+        let is_supported_cover: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM attachments WHERE id = $1 AND card_id = $2 AND (media_type LIKE 'image/%' OR media_type LIKE 'video/%'))")
             .bind(attachment_id).bind(card_id).fetch_one(pool).await.map_err(ApiError::internal)?;
-        if !is_image { return Err(ApiError::bad_request("Card cover must be an image attached to this card.")); }
+        if !is_supported_cover { return Err(ApiError::bad_request("Card cover must be an image or video attached to this card.")); }
     }
     let result = sqlx::query("UPDATE cards SET cover_attachment_id = $1, cover_mode = $2, updated_at = now() WHERE id = $3 AND archived_at IS NULL")
         .bind(request.attachment_id).bind(request.mode).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
