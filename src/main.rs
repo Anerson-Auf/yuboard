@@ -2874,6 +2874,15 @@ async fn replace_discord_card_labels(State(state): State<AppState>, integration:
     let matching_labels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM labels WHERE board_id = $1 AND id = ANY($2)")
         .bind(integration.board_id).bind(&label_ids).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
     if matching_labels != label_ids.len() as i64 { return Err(ApiError::bad_request("Every label must belong to this Discord integration board.")); }
+    let current_label_ids: HashSet<Uuid> = sqlx::query_scalar("SELECT label_id FROM card_labels WHERE card_id = $1")
+        .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?.into_iter().collect();
+    let requested_label_ids: HashSet<Uuid> = label_ids.iter().copied().collect();
+    if current_label_ids == requested_label_ids {
+        let labels = sqlx::query_as::<_, LabelResponse>("SELECT l.id, l.name, l.color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name")
+            .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
+        transaction.commit().await.map_err(ApiError::internal)?;
+        return Ok(Json(labels));
+    }
     sqlx::query("DELETE FROM card_labels WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     if !label_ids.is_empty() {
         sqlx::query("INSERT INTO card_labels (card_id, label_id) SELECT $1, label_id FROM UNNEST($2::uuid[]) AS selected_labels(label_id) ON CONFLICT DO NOTHING")
@@ -2991,15 +3000,21 @@ async fn list_discord_card_sync_events(State(state): State<AppState>, integratio
     Ok(Json(events))
 }
 
+async fn load_discord_card_status(pool: &PgPool, integration: DiscordIntegration, card_id: Uuid) -> Result<DiscordCardStatusResponse, ApiError> {
+    sqlx::query_as::<_, DiscordCardStatusResponse>("SELECT id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL")
+        .bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))
+}
+
 async fn get_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> ApiResult<DiscordCardStatusResponse> {
-    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("SELECT id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL")
-        .bind(card_id).bind(integration.board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
+    let card = load_discord_card_status(database(&state)?, integration, card_id).await?;
     Ok(Json(card))
 }
 
 async fn set_discord_card_completion(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardCompletionRequest>) -> ApiResult<DiscordCardStatusResponse> {
     let pool = database(&state)?;
+    let current = load_discord_card_status(pool, integration, card_id).await?;
+    if current.is_completed == request.is_completed { return Ok(Json(current)); }
     let card = sqlx::query_as::<_, DiscordCardStatusResponse>("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = $2 AND board_id = $3 AND archived_at IS NULL RETURNING id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at")
         .bind(request.is_completed).bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
@@ -3011,6 +3026,8 @@ async fn set_discord_card_completion(State(state): State<AppState>, integration:
 async fn set_discord_card_priority(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardPriorityRequest>) -> ApiResult<DiscordCardStatusResponse> {
     if !(0..=5).contains(&request.priority) { return Err(ApiError::bad_request("priority must be between 0 and 5.")); }
     let pool = database(&state)?;
+    let current = load_discord_card_status(pool, integration, card_id).await?;
+    if current.priority == request.priority { return Ok(Json(current)); }
     let card = sqlx::query_as::<_, DiscordCardStatusResponse>("UPDATE cards SET priority = $1, updated_at = now() WHERE id = $2 AND board_id = $3 AND archived_at IS NULL RETURNING id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at")
         .bind(request.priority).bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;

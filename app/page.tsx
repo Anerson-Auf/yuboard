@@ -517,7 +517,7 @@ export default function Home() {
     if (cardSort === 'manual') return { ...column, cards };
     const activityTime = (card: Card) => card.lastActivityAt ? new Date(card.lastActivityAt).getTime() || 0 : 0;
     return { ...column, cards: [...cards].sort((left, right) => cardSort === 'priority'
-      ? (right.priority ?? 0) - (left.priority ?? 0) || activityTime(right) - activityTime(left)
+      ? (right.priority ?? 0) - (left.priority ?? 0)
       : activityTime(right) - activityTime(left)) };
   }), [cardSort, columns, currentMember.id, filterMode, query]);
 
