@@ -2880,7 +2880,7 @@ async fn list_board_activity(State(state): State<AppState>, current: CurrentUser
         .await
         .map_err(ApiError::internal)?;
     let items = sqlx::query_as::<_, BoardActivityItemResponse>(&format!(
-        "SELECT MIN(a.id)::text AS id, a.card_id, c.title AS card_title, a.action, a.detail, a.actor_id, \
+        "SELECT MIN(a.id::text) AS id, a.card_id, c.title AS card_title, a.action, a.detail, a.actor_id, \
                 COALESCE(u.username, 'Deleted user') AS actor_name, \
                 CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS actor_avatar_url, \
                 MAX(a.created_at)::text AS created_at, COUNT(*)::bigint AS count \
@@ -2889,7 +2889,7 @@ async fn list_board_activity(State(state): State<AppState>, current: CurrentUser
          LEFT JOIN users u ON u.id = a.actor_id \
          WHERE c.board_id = $1 AND ($2::uuid IS NULL OR a.actor_id = $2) \
          GROUP BY a.card_id, c.title, a.action, a.detail, a.actor_id, u.username, u.avatar_key, date_trunc('minute', a.created_at) \
-         ORDER BY MAX(a.created_at) DESC, MIN(a.id) DESC LIMIT $3 OFFSET $4"
+         ORDER BY MAX(a.created_at) DESC, MIN(a.id::text) DESC LIMIT $3 OFFSET $4"
     ))
     .bind(board_id)
     .bind(query.user_id)
