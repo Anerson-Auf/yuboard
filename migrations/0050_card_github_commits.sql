@@ -1,5 +1,5 @@
 -- A card keeps a safe, immutable summary of commits that were explicitly
--- attached to it. The GitHub repository URL and credentials never enter the
+-- attached to it.  The GitHub repository URL and credentials never enter the
 -- database or the browser response.
 CREATE TABLE IF NOT EXISTS card_github_commits (
     id UUID PRIMARY KEY,
