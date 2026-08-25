@@ -1126,6 +1126,35 @@ struct CardDetail {
     watching: bool,
 }
 
+#[derive(Deserialize)]
+struct BoardActivityQuery {
+    user_id: Option<Uuid>,
+    page: Option<i64>,
+    per_page: Option<i64>,
+}
+
+#[derive(Serialize, FromRow)]
+struct BoardActivityItemResponse {
+    id: String,
+    card_id: Uuid,
+    card_title: String,
+    action: String,
+    detail: String,
+    actor_id: Option<Uuid>,
+    actor_name: String,
+    actor_avatar_url: Option<String>,
+    created_at: String,
+    count: i64,
+}
+
+#[derive(Serialize)]
+struct BoardActivityPageResponse {
+    items: Vec<BoardActivityItemResponse>,
+    page: i64,
+    per_page: i64,
+    total: i64,
+}
+
 #[derive(Serialize, FromRow)]
 struct CardNotificationResponse {
     id: Uuid,
@@ -1260,6 +1289,7 @@ async fn main() {
         .route("/v1/boards/{board_id}/integrations/discord/{integration_id}", axum::routing::delete(revoke_discord_integration))
         .route("/v1/boards/{board_id}/export", get(export_board))
         .route("/v1/boards/{board_id}/archived-cards", get(list_archived_cards))
+        .route("/v1/boards/{board_id}/activity", get(list_board_activity))
         .route("/v1/boards/{board_id}/events", get(board_events))
         .route("/v1/boards/{board_id}/labels", post(create_label))
         .route("/v1/boards/{board_id}/milestones", post(create_milestone))
@@ -2728,6 +2758,43 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
         .bind(board_id).bind(SqlJson(&request.document)).execute(database(&state)?).await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(Json(BoardFreeformDrawingResponse { document: request.document }))
+}
+
+async fn list_board_activity(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Query(query): Query<BoardActivityQuery>) -> ApiResult<BoardActivityPageResponse> {
+    let pool = database(&state)?;
+    ensure_board_layout_access(pool, board_id, current.id).await?;
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(40).clamp(10, 100);
+    let offset = (page - 1).saturating_mul(per_page);
+    // Each row represents one human-readable action. Repeated identical
+    // actions on the same card during one minute become a single feed entry.
+    let grouped = "SELECT a.card_id, a.action, a.detail, a.actor_id, date_trunc('minute', a.created_at) AS minute_bucket FROM card_activity a INNER JOIN cards c ON c.id = a.card_id WHERE c.board_id = $1 AND ($2::uuid IS NULL OR a.actor_id = $2) GROUP BY a.card_id, a.action, a.detail, a.actor_id, date_trunc('minute', a.created_at)";
+    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM ({grouped}) grouped"))
+        .bind(board_id)
+        .bind(query.user_id)
+        .fetch_one(pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let items = sqlx::query_as::<_, BoardActivityItemResponse>(&format!(
+        "SELECT MIN(a.id)::text AS id, a.card_id, c.title AS card_title, a.action, a.detail, a.actor_id, \
+                COALESCE(u.username, 'Deleted user') AS actor_name, \
+                CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS actor_avatar_url, \
+                MAX(a.created_at)::text AS created_at, COUNT(*)::bigint AS count \
+         FROM card_activity a \
+         INNER JOIN cards c ON c.id = a.card_id \
+         LEFT JOIN users u ON u.id = a.actor_id \
+         WHERE c.board_id = $1 AND ($2::uuid IS NULL OR a.actor_id = $2) \
+         GROUP BY a.card_id, c.title, a.action, a.detail, a.actor_id, u.username, u.avatar_key, date_trunc('minute', a.created_at) \
+         ORDER BY MAX(a.created_at) DESC, MIN(a.id) DESC LIMIT $3 OFFSET $4"
+    ))
+    .bind(board_id)
+    .bind(query.user_id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(BoardActivityPageResponse { items, page, per_page, total }))
 }
 
 async fn board_events(State(state): State<AppState>, viewer: Viewer, Path(board_id): Path<Uuid>) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -4389,6 +4456,12 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
         None => None,
     };
     if title.is_none() && description.is_none() && priority.is_none() { return Err(ApiError::bad_request("At least one editable field is required.")); }
+    let text_change_detail = match (title.is_some(), description.is_some()) {
+        (true, true) => "Название и описание карточки",
+        (true, false) => "Название карточки",
+        (false, true) => "Описание карточки",
+        (false, false) => "",
+    };
     let description_changed = description.is_some();
     let priority_detail = priority.map(|value| if value == 0 { "Приоритет снят".to_owned() } else { format!("Приоритет: {value}/5") });
     let card = sqlx::query_as::<_, CardResponse>(
@@ -4407,7 +4480,7 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
     if priority_detail.is_some() {
         record_card_activity(database(&state)?, card.id, actor_id, "Изменена задача", priority_detail.as_deref().unwrap()).await;
     } else {
-        record_card_edit_activity(database(&state)?, card.id, actor_id, "Название или описание").await;
+        record_card_edit_activity(database(&state)?, card.id, actor_id, text_change_detail).await;
     }
     let _ = state.events.send(());
     Ok(Json(card))
