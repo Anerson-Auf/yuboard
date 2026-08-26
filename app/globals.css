@@ -389,6 +389,8 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .card-public-visibility label { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--text); font-size: 12px; font-weight: 750; }
 .card-public-visibility input { width: 16px; height: 16px; accent-color: var(--primary); }
 .card-public-visibility p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.card-public-visibility label:has(select) { display: grid; grid-template-columns: 1fr; align-items: start; gap: 5px; padding: 8px 10px; }
+.card-public-visibility select { width: 100%; min-height: 31px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised); color: var(--text); font: inherit; font-weight: 650; }
 .task-card { position: relative; }
 .card-mention-dot { position: absolute; z-index: 5; top: 9px; right: 10px; width: 10px; height: 10px; border: 2px solid var(--surface-raised); border-radius: 50%; background: #ef5b68; box-shadow: 0 0 0 3px rgb(239 91 104 / 18%); }
 .card-comment-unread-dot { position: absolute; z-index: 5; top: 50%; right: 11px; width: 8px; height: 8px; border: 2px solid var(--surface-raised); border-radius: 50%; background: #ef5b68; box-shadow: 0 0 0 3px rgb(239 91 104 / 18%); transform: translateY(-50%); }
