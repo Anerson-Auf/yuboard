@@ -5365,6 +5365,7 @@ async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, 
             if error.kind() != std::io::ErrorKind::NotFound { tracing::error!(?error, "attachment file removal failed"); }
         }
     }
+    record_card_activity(pool, card_id, actor_id, "Удалено вложение", "").await;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
@@ -6365,6 +6366,11 @@ async fn replace_card_labels(State(state): State<AppState>, current: CurrentUser
     if matching_labels != label_ids.len() as i64 {
         return Err(ApiError::bad_request("Every label must belong to this board."));
     }
+    let previous_labels = sqlx::query_as::<_, (Uuid, String)>("SELECT l.id, l.name FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1")
+        .bind(card_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(ApiError::internal)?;
     sqlx::query("DELETE FROM card_labels WHERE card_id = $1")
         .bind(card_id)
         .execute(&mut *transaction)
@@ -6384,6 +6390,20 @@ async fn replace_card_labels(State(state): State<AppState>, current: CurrentUser
     .await
     .map_err(ApiError::internal)?;
     transaction.commit().await.map_err(ApiError::internal)?;
+    let previous_label_ids: HashSet<Uuid> = previous_labels.iter().map(|(id, _)| *id).collect();
+    let requested_label_ids: HashSet<Uuid> = label_ids.iter().copied().collect();
+    if previous_label_ids != requested_label_ids {
+        let added = labels.iter()
+            .filter(|label| !previous_label_ids.contains(&label.id))
+            .map(|label| format!("+{}", label.name))
+            .collect::<Vec<_>>();
+        let removed = previous_labels.iter()
+            .filter(|(id, _)| !requested_label_ids.contains(id))
+            .map(|(_, name)| format!("−{name}"))
+            .collect::<Vec<_>>();
+        let detail = added.into_iter().chain(removed).collect::<Vec<_>>().join(", ");
+        record_card_activity(pool, card_id, current.id, "Обновлены метки карточки", &detail).await;
+    }
     let _ = state.events.send(());
     Ok(Json(labels))
 }
