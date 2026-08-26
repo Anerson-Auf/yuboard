@@ -791,6 +791,7 @@ export default function Home() {
   const [isComposerOpen, setComposerOpen] = useState<EntityId | null>(null);
   const [draft, setDraft] = useState('');
   const [selected, setSelected] = useState<Card | null>(null);
+  const [lastOpenedCard, setLastOpenedCard] = useState<Card | null>(null);
   const [unavailableCardBackgroundUrls, setUnavailableCardBackgroundUrls] = useState<Set<string>>(() => new Set());
   const [isCardAdditionalOptionsOpen, setCardAdditionalOptionsOpen] = useState(false);
   const [toast, setToast] = useState('');
@@ -1550,7 +1551,24 @@ export default function Home() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, select, [contenteditable="true"]') || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (event.altKey && !event.ctrlKey && !event.metaKey) {
+        const key = event.key.toLowerCase();
+        if (event.key === '1') {
+          event.preventDefault();
+          setBoardContentMode('columns');
+          if (isPublicViewer) setBoardViewMode('standard');
+          else changeBoardViewMode('standard');
+          return;
+        }
+        if (key === 'o') {
+          event.preventDefault();
+          if (lastOpenedCard) openCard(lastOpenedCard);
+          return;
+        }
+        return;
+      }
+      if (event.ctrlKey || event.metaKey) return;
       const key = event.key.toLowerCase();
       if (key === 'c' && canEditBoard && columns[0]) { event.preventDefault(); setComposerOpen(columns[0].id); }
       else if (key === 'f') { event.preventDefault(); setFilterOpen(true); }
@@ -1560,7 +1578,7 @@ export default function Home() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [canEditBoard, columns, isPublicViewer, selected]);
+  }, [canEditBoard, columns, isPublicViewer, lastOpenedCard, selected]);
 
   function updateStickerPickerPosition(target: 'comment' | 'thread') {
     const trigger = stickerComposerButtonRefs.current[target];
@@ -2433,6 +2451,7 @@ export default function Home() {
   }
 
   function openCard(card: Card) {
+    setLastOpenedCard(card);
     setSelected(card);
     setCardAdditionalOptionsOpen(false);
     setEditingCardDescription(false);

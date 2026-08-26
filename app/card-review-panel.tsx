@@ -58,9 +58,10 @@ export default function CardReviewPanel({ cardId, canEdit, members, compact = fa
     {error && <p role="alert">{error}</p>}
   </>;
 
-  if (compact) return <section className={`card-review-panel compact status-${review.status} ${isCompactOpen ? 'open' : ''}`} aria-label="Проверка карточки"><button type="button" className="review-compact-trigger" title={statusLabels[review.status]} aria-label={statusLabels[review.status]} onClick={() => setCompactOpen((current) => !current)}><span aria-hidden="true">{review.status === 'approved' ? '✓' : review.status === 'changes_requested' ? '!' : review.status === 'requested' ? '?' : '○'}</span><small>{review.reviewers.length || ''}</small></button>{isCompactOpen && <div className="review-compact-popover">{controls}</div>}</section>;
+  // The historical full-width panel is still mounted by legacy card markup.
+  // Never render it: review is now represented only by the compact control
+  // beside the priority indicator.
+  if (!compact) return null;
 
-  return <section className={`card-review-panel status-${review.status}`} aria-label="Проверка карточки">
-    {controls}
-  </section>;
+  return <section className={`card-review-panel compact status-${review.status} ${isCompactOpen ? 'open' : ''}`} aria-label="Проверка карточки"><button type="button" className="review-compact-trigger" title={statusLabels[review.status]} aria-label={statusLabels[review.status]} onClick={() => setCompactOpen((current) => !current)}><span aria-hidden="true">{review.status === 'approved' ? '✓' : review.status === 'changes_requested' ? '!' : review.status === 'requested' ? '?' : '○'}</span><small>{review.reviewers.length || ''}</small></button>{isCompactOpen && <div className="review-compact-popover">{controls}</div>}</section>;
 }
