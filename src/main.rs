@@ -472,6 +472,8 @@ struct BoardAutomationResponse {
     name: String,
     list_id: Uuid,
     list_title: String,
+    action_type: String,
+    action_priority: Option<i16>,
     enabled: bool,
     created_at: String,
 }
@@ -480,6 +482,16 @@ struct BoardAutomationResponse {
 struct CreateBoardAutomationRequest {
     name: String,
     list_id: Uuid,
+    action_type: String,
+    #[serde(default)]
+    action_priority: Option<i16>,
+}
+
+#[derive(FromRow)]
+struct BoardAutomationExecution {
+    name: String,
+    action_type: String,
+    action_priority: Option<i16>,
 }
 
 #[derive(Deserialize)]
@@ -3489,7 +3501,7 @@ async fn export_board(State(state): State<AppState>, current: CurrentUser, Path(
 async fn list_board_automations(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<BoardAutomationResponse>> {
     ensure_board_full_access(database(&state)?, board_id, current.id).await?;
     let automations = sqlx::query_as::<_, BoardAutomationResponse>(
-        "SELECT a.id, a.name, (a.condition->>'list_id')::uuid AS list_id, l.title AS list_title, a.enabled, a.created_at::text AS created_at FROM board_automations a INNER JOIN lists l ON l.id = (a.condition->>'list_id')::uuid WHERE a.board_id = $1 ORDER BY a.created_at DESC",
+        "SELECT a.id, a.name, (a.condition->>'list_id')::uuid AS list_id, l.title AS list_title, a.action_type, (a.action->>'priority')::smallint AS action_priority, a.enabled, a.created_at::text AS created_at FROM board_automations a INNER JOIN lists l ON l.id = (a.condition->>'list_id')::uuid WHERE a.board_id = $1 ORDER BY a.created_at DESC",
     ).bind(board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
     Ok(Json(automations))
 }
@@ -3497,9 +3509,20 @@ async fn list_board_automations(State(state): State<AppState>, current: CurrentU
 async fn create_board_automation(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateBoardAutomationRequest>) -> ApiResult<BoardAutomationResponse> {
     ensure_board_full_access(database(&state)?, board_id, current.id).await?;
     let name = valid_text(&request.name, "name", 120)?;
+    let action_type = match request.action_type.as_str() {
+        "complete_card" | "reopen_card" | "set_priority" | "archive_card" => request.action_type,
+        _ => return Err(ApiError::bad_request("Unsupported automation action.")),
+    };
+    let action_priority = match action_type.as_str() {
+        "set_priority" => match request.action_priority {
+            Some(value) if (0..=5).contains(&value) => Some(value),
+            _ => return Err(ApiError::bad_request("Priority automation requires a priority from 0 to 5.")),
+        },
+        _ => None,
+    };
     let automation = sqlx::query_as::<_, BoardAutomationResponse>(
-        "INSERT INTO board_automations (id, board_id, name, trigger_type, condition, action_type, action, created_by) SELECT $1, $2, $3, 'card_moved', jsonb_build_object('list_id', $4::text), 'complete_card', '{}'::jsonb, $5 WHERE EXISTS(SELECT 1 FROM lists WHERE id = $4 AND board_id = $2) RETURNING id, name, (condition->>'list_id')::uuid AS list_id, (SELECT title FROM lists WHERE id = (condition->>'list_id')::uuid) AS list_title, enabled, created_at::text AS created_at",
-    ).bind(Uuid::new_v4()).bind(board_id).bind(name).bind(request.list_id).bind(current.id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        "INSERT INTO board_automations (id, board_id, name, trigger_type, condition, action_type, action, created_by) SELECT $1, $2, $3, 'card_moved', jsonb_build_object('list_id', $4::text), $5, jsonb_build_object('priority', $6), $7 WHERE EXISTS(SELECT 1 FROM lists WHERE id = $4 AND board_id = $2) RETURNING id, name, (condition->>'list_id')::uuid AS list_id, (SELECT title FROM lists WHERE id = (condition->>'list_id')::uuid) AS list_title, action_type, (action->>'priority')::smallint AS action_priority, enabled, created_at::text AS created_at",
+    ).bind(Uuid::new_v4()).bind(board_id).bind(name).bind(request.list_id).bind(action_type).bind(action_priority).bind(current.id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::bad_request("The selected column is not part of this project."))?;
     let _ = state.events.send(());
     Ok(Json(automation))
@@ -3508,7 +3531,7 @@ async fn create_board_automation(State(state): State<AppState>, current: Current
 async fn update_board_automation(State(state): State<AppState>, current: CurrentUser, Path((board_id, automation_id)): Path<(Uuid, Uuid)>, Json(request): Json<UpdateBoardAutomationRequest>) -> ApiResult<BoardAutomationResponse> {
     ensure_board_full_access(database(&state)?, board_id, current.id).await?;
     let automation = sqlx::query_as::<_, BoardAutomationResponse>(
-        "UPDATE board_automations a SET enabled = $1, updated_at = now() WHERE a.id = $2 AND a.board_id = $3 RETURNING a.id, a.name, (a.condition->>'list_id')::uuid AS list_id, (SELECT title FROM lists WHERE id = (a.condition->>'list_id')::uuid) AS list_title, a.enabled, a.created_at::text AS created_at",
+        "UPDATE board_automations a SET enabled = $1, updated_at = now() WHERE a.id = $2 AND a.board_id = $3 RETURNING a.id, a.name, (a.condition->>'list_id')::uuid AS list_id, (SELECT title FROM lists WHERE id = (a.condition->>'list_id')::uuid) AS list_title, a.action_type, (a.action->>'priority')::smallint AS action_priority, a.enabled, a.created_at::text AS created_at",
     ).bind(request.enabled).bind(automation_id).bind(board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "automation_not_found", "Automation was not found.".to_owned()))?;
     let _ = state.events.send(());
@@ -3524,12 +3547,31 @@ async fn delete_board_automation(State(state): State<AppState>, current: Current
 }
 
 async fn run_card_move_automations(pool: &PgPool, board_id: Uuid, card_id: Uuid, target_list_id: Uuid, actor_id: Uuid) {
-    let names = match sqlx::query_scalar::<_, String>("SELECT name FROM board_automations WHERE board_id = $1 AND trigger_type = 'card_moved' AND action_type = 'complete_card' AND enabled AND condition->>'list_id' = $2::text")
-        .bind(board_id).bind(target_list_id).fetch_all(pool).await { Ok(names) => names, Err(error) => { tracing::error!(?error, "automation lookup failed"); return; } };
-    if names.is_empty() || ensure_card_has_no_active_blockers(pool, card_id).await.is_err() { return; }
-    let updated = match sqlx::query("UPDATE cards SET completed_at = now(), updated_at = now() WHERE id = $1 AND archived_at IS NULL AND completed_at IS NULL")
-        .bind(card_id).execute(pool).await { Ok(updated) => updated.rows_affected() > 0, Err(error) => { tracing::error!(?error, "automation completion failed"); false } };
-    if updated { record_card_activity(pool, card_id, actor_id, "Автоматизация завершила задачу", &names.join(", ")).await; }
+    let automations = match sqlx::query_as::<_, BoardAutomationExecution>("SELECT name, action_type, (action->>'priority')::smallint AS action_priority FROM board_automations WHERE board_id = $1 AND trigger_type = 'card_moved' AND enabled AND condition->>'list_id' = $2::text ORDER BY created_at")
+        .bind(board_id).bind(target_list_id).fetch_all(pool).await { Ok(items) => items, Err(error) => { tracing::error!(?error, "automation lookup failed"); return; } };
+    for automation in automations {
+        let (changed, action, detail) = match automation.action_type.as_str() {
+            "complete_card" if ensure_card_has_no_active_blockers(pool, card_id).await.is_ok() => {
+                let changed = sqlx::query("UPDATE cards SET completed_at = now(), updated_at = now() WHERE id = $1 AND archived_at IS NULL AND completed_at IS NULL").bind(card_id).execute(pool).await.map(|result| result.rows_affected() > 0).unwrap_or(false);
+                (changed, "Автоматизация завершила задачу", String::new())
+            }
+            "reopen_card" => {
+                let changed = sqlx::query("UPDATE cards SET completed_at = NULL, updated_at = now() WHERE id = $1 AND archived_at IS NULL AND completed_at IS NOT NULL").bind(card_id).execute(pool).await.map(|result| result.rows_affected() > 0).unwrap_or(false);
+                (changed, "Автоматизация открыла задачу", String::new())
+            }
+            "set_priority" if automation.action_priority.is_some() => {
+                let priority = automation.action_priority.unwrap();
+                let changed = sqlx::query("UPDATE cards SET priority = $1, updated_at = now() WHERE id = $2 AND archived_at IS NULL AND priority IS DISTINCT FROM $1").bind(priority).bind(card_id).execute(pool).await.map(|result| result.rows_affected() > 0).unwrap_or(false);
+                (changed, "Автоматизация изменила приоритет", format!("Приоритет: {priority}/5"))
+            }
+            "archive_card" => {
+                let changed = sqlx::query("UPDATE cards SET archived_at = now(), updated_at = now() WHERE id = $1 AND archived_at IS NULL").bind(card_id).execute(pool).await.map(|result| result.rows_affected() > 0).unwrap_or(false);
+                (changed, "Автоматизация архивировала задачу", String::new())
+            }
+            _ => (false, "", String::new()),
+        };
+        if changed { record_card_activity(pool, card_id, actor_id, action, &format!("{}{}", automation.name, if detail.is_empty() { String::new() } else { format!(" · {detail}") })).await; }
+    }
 }
 
 async fn create_list(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateListRequest>) -> ApiResult<ListResponse> {
