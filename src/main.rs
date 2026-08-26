@@ -6323,11 +6323,20 @@ async fn notify_card_waiting_targets(pool: &PgPool, card_id: Uuid, actor_id: Uui
             Err(error) => { tracing::error!(?error, card_id = %card_id, "waiting recipient lookup failed"); return; }
         }
     } else { vec![] };
+    // A card has one current waiting target. Remove previous pending notices
+    // before adding recipients for the current target; otherwise changing a
+    // role to a person was silently hidden by the old unread role notice.
+    if let Err(error) = sqlx::query("DELETE FROM card_notifications WHERE card_id = $1 AND action = 'Ожидают вашего действия' AND read_at IS NULL")
+        .bind(card_id)
+        .execute(pool)
+        .await
+    {
+        tracing::error!(?error, card_id = %card_id, "waiting notification cleanup failed");
+        return;
+    }
     for user_id in recipients.into_iter().filter(|user_id| *user_id != actor_id) {
         let result = sqlx::query(
-            "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail) \
-             SELECT $1, $2, $3, $4, 'Ожидают вашего действия', $5 \
-             WHERE NOT EXISTS (SELECT 1 FROM card_notifications WHERE user_id = $2 AND card_id = $3 AND action = 'Ожидают вашего действия' AND read_at IS NULL)",
+            "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail) VALUES ($1, $2, $3, $4, 'Ожидают вашего действия', $5)",
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
