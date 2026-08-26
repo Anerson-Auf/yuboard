@@ -21,3 +21,4 @@ coverage/
 Thumbs.db
 .idea/
 .vscode/
+public/release-history.generated.json

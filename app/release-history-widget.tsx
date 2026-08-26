@@ -33,9 +33,15 @@ export default function ReleaseHistoryWidget() {
 
   useEffect(() => {
     let active = true;
-    void fetch('/release-history.json', { cache: 'no-store' })
-      .then((response) => response.ok ? response.json() as Promise<ReleaseHistory> : null)
-      .then((data) => { if (active && data) setHistory(data); })
+    void (async () => {
+      for (const url of ['/release-history.generated.json', '/release-history.json']) {
+        const response = await fetch(url, { cache: 'no-store' }).catch(() => null);
+        if (!response?.ok) continue;
+        const data = await response.json() as ReleaseHistory;
+        if (active) setHistory(data);
+        return;
+      }
+    })()
       .catch(() => undefined);
     return () => { active = false; };
   }, []);

@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const output = resolve(root, 'public', 'release-history.json');
+const output = resolve(root, 'public', 'release-history.generated.json');
 const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 
 function git(args) {
