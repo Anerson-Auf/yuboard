@@ -4654,6 +4654,6 @@ export default function Home() {
       myTasks={{ disabled: authState !== 'signed-in', onSelect: () => setMyTasksOpen(true) }}
       filters={{ disabled: view !== 'board', onSelect: () => setFilterOpen(true) }}
     />
-    <ReleaseHistoryWidget />
+    {!isPublicViewer && <ReleaseHistoryWidget />}
   </main>;
 }
