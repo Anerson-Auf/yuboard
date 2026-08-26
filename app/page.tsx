@@ -1066,6 +1066,10 @@ export default function Home() {
   const [freeformInkWidth, setFreeformInkWidth] = useState(4);
   const [freeformZoom, setFreeformZoom] = useState(1);
   const [freeformViewport, setFreeformViewport] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const freeformZoomRef = useRef(1);
+  const freeformLiveRef = useRef<FreeformLive>({ cursors: [], pings: [] });
+  const freeformViewportRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
+  const freeformViewportFrameRef = useRef<number | null>(null);
   const [isBoardPanning, setBoardPanning] = useState(false);
   const [columnMenuId, setColumnMenuId] = useState<EntityId | null>(null);
   const [columnLimitDraft, setColumnLimitDraft] = useState('0');
@@ -1113,6 +1117,8 @@ export default function Home() {
   const freeformLiveSentAtRef = useRef(0);
   const freeformLiveSocketRef = useRef<WebSocket | null>(null);
   const freeformLiveExpiryTimersRef = useRef<Map<string, number>>(new Map());
+  const freeformLiveCursorPendingRef = useRef<Map<string, FreeformLiveCursor>>(new Map());
+  const freeformLiveCursorFlushTimerRef = useRef<number | null>(null);
   const freeformDrawingRef = useRef<FreeformDrawing>({ strokes: [] });
   const freeformDrawingDirtyRef = useRef(false);
   const freeformEraseForeignRef = useRef(false);
@@ -2022,6 +2028,23 @@ export default function Home() {
     return () => { active = false; };
   }, [authState, boardId]);
 
+  useEffect(() => { freeformLiveRef.current = freeformLive; }, [freeformLive]);
+  useEffect(() => { freeformZoomRef.current = freeformZoom; }, [freeformZoom]);
+
+  function refreshFreeformViewport(forceRender = false) {
+    const board = boardRef.current;
+    if (!board) return;
+    const zoom = freeformZoomRef.current;
+    const next = { x: board.scrollLeft / zoom, y: board.scrollTop / zoom, width: board.clientWidth / zoom, height: board.clientHeight / zoom };
+    freeformViewportRef.current = next;
+    if (!forceRender && freeformLiveRef.current.pings.length === 0) return;
+    if (freeformViewportFrameRef.current !== null) return;
+    freeformViewportFrameRef.current = window.requestAnimationFrame(() => {
+      freeformViewportFrameRef.current = null;
+      setFreeformViewport(freeformViewportRef.current);
+    });
+  }
+
   useEffect(() => {
     if (!boardId || authState !== 'signed-in' || boardViewMode !== 'freeform') {
       setFreeformLive({ cursors: [], pings: [] });
@@ -2042,10 +2065,20 @@ export default function Home() {
     };
     const applyEvent = (event: FreeformLiveSocketEvent) => {
       if (event.type === 'cursor') {
-        setFreeformLive((current) => ({ ...current, cursors: [...current.cursors.filter((cursor) => cursor.user_id !== event.user_id), event] }));
+        freeformLiveCursorPendingRef.current.set(event.user_id, event);
+        if (freeformLiveCursorFlushTimerRef.current === null) {
+          freeformLiveCursorFlushTimerRef.current = window.setTimeout(() => {
+            freeformLiveCursorFlushTimerRef.current = null;
+            const pending = [...freeformLiveCursorPendingRef.current.values()];
+            freeformLiveCursorPendingRef.current.clear();
+            if (!pending.length || !active) return;
+            setFreeformLive((current) => ({ ...current, cursors: [...current.cursors.filter((cursor) => !pending.some((next) => next.user_id === cursor.user_id)), ...pending] }));
+          }, 64);
+        }
         scheduleExpiry(`cursor:${event.user_id}`, 12_200, () => setFreeformLive((current) => ({ ...current, cursors: current.cursors.filter((cursor) => cursor.user_id !== event.user_id) })));
         return;
       }
+      refreshFreeformViewport(true);
       setFreeformLive((current) => ({ ...current, pings: [...current.pings.filter((ping) => ping.id !== event.id), event] }));
       scheduleExpiry(`ping:${event.id}`, Math.max(100, event.expires_in_ms), () => setFreeformLive((current) => ({ ...current, pings: current.pings.filter((ping) => ping.id !== event.id) })));
     };
@@ -2054,7 +2087,9 @@ export default function Home() {
         .then(async (response) => { if (!response.ok) throw new Error('live snapshot failed'); return response.json() as Promise<FreeformLive>; })
         .then((live) => {
           if (!active) return;
+          freeformLiveCursorPendingRef.current.clear();
           setFreeformLive(live);
+          refreshFreeformViewport(true);
           live.cursors.forEach((cursor) => scheduleExpiry(`cursor:${cursor.user_id}`, 12_200, () => setFreeformLive((current) => ({ ...current, cursors: current.cursors.filter((item) => item.user_id !== cursor.user_id) }))));
           live.pings.forEach((ping) => scheduleExpiry(`ping:${ping.id}`, Math.max(100, ping.expires_in_ms), () => setFreeformLive((current) => ({ ...current, pings: current.pings.filter((item) => item.id !== ping.id) }))));
         })
@@ -2085,6 +2120,9 @@ export default function Home() {
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (freeformLiveSocketRef.current === socket) freeformLiveSocketRef.current = null;
       socket?.close();
+      if (freeformLiveCursorFlushTimerRef.current !== null) window.clearTimeout(freeformLiveCursorFlushTimerRef.current);
+      freeformLiveCursorFlushTimerRef.current = null;
+      freeformLiveCursorPendingRef.current.clear();
       expiryTimers.forEach((timer) => window.clearTimeout(timer));
       expiryTimers.clear();
     };
@@ -2094,7 +2132,7 @@ export default function Home() {
     if (boardViewMode !== 'freeform') return;
     const board = boardRef.current;
     if (!board) return;
-    setFreeformViewport({ x: board.scrollLeft / freeformZoom, y: board.scrollTop / freeformZoom, width: board.clientWidth / freeformZoom, height: board.clientHeight / freeformZoom });
+    refreshFreeformViewport(true);
   }, [boardId, boardViewMode, freeformZoom]);
 
   useEffect(() => {
@@ -2130,7 +2168,7 @@ export default function Home() {
   function publishFreeformCursor(point: FreeformPosition, ping = false) {
     if (!boardId || authState !== 'signed-in' || boardViewMode !== 'freeform') return;
     const now = Date.now();
-    if (!ping && now - freeformLiveSentAtRef.current < 32) return;
+    if (!ping && now - freeformLiveSentAtRef.current < 48) return;
     freeformLiveSentAtRef.current = now;
     const socket = freeformLiveSocketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
@@ -4502,7 +4540,7 @@ export default function Home() {
       {isBulkMode && <aside className="bulk-actions bulk-actions-compact" aria-label="Массовые действия"><header><b>Выбрано: {bulkCardIds.length}</b><span>ЛКМ ведите по карточкам · ПКМ добавляет</span><button type="button" className="bulk-close" onClick={() => { setBulkMode(false); setBulkCardIds([]); }}>×</button></header><footer><button type="button" onClick={() => void applyBulkAction('complete')} disabled={!bulkCardIds.length || isApplyingBulkAction}>✓ Выполнить</button><label>Приоритет<select defaultValue="" onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) void applyBulkAction('priority', value); event.currentTarget.value = ''; }} disabled={!bulkCardIds.length || isApplyingBulkAction}><option value="" disabled>Выбрать</option>{[0, 1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value || 'Снять'}</option>)}</select></label><label>Перенести<select value={bulkTargetListId} onChange={(event) => setBulkTargetListId(event.target.value)} disabled={isApplyingBulkAction}><option value="">Выбрать колонку</option>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select></label><button type="button" onClick={() => void applyBulkAction('move')} disabled={!bulkCardIds.length || !bulkTargetListId || isApplyingBulkAction}>→ Перенести</button><button type="button" className="danger-action" onClick={() => void applyBulkAction('archive')} disabled={!bulkCardIds.length || isApplyingBulkAction}>Архив</button></footer></aside>}
       {account && boardId && <PinnedCardsShelf storageKey={`flowboard.pinned-cards.${account.user.id}.${boardId}`} cards={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title, completed: Boolean(card.completedAt) })))} onOpen={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} />}
       {boardContentMode === 'schedule' && <div className="board-schedule"><ScheduleView cards={columns.flatMap((column) => column.cards.map((card) => ({ id: card.id, title: card.title, listTitle: column.title, startAt: card.startAt, dueAt: card.dueAt, completedAt: card.completedAt })))} onDateChange={saveCalendarDueDate} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === String(cardId)); if (card) openCard(card); }} /></div>}
-      <section className={`board ${isBoardPanning ? 'board-panning' : ''} ${boardViewMode === 'freeform' ? 'board-freeform' : ''} ${boardContentMode === 'schedule' ? 'board-schedule-hidden' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={(event) => { moveBoardPan(event); updateFreeformCursor(event); }} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan} onLostPointerCapture={stopBoardPan} onScroll={(event) => { if (boardViewMode === 'freeform') { const board = event.currentTarget; setFreeformViewport({ x: board.scrollLeft / freeformZoom, y: board.scrollTop / freeformZoom, width: board.clientWidth / freeformZoom, height: board.clientHeight / freeformZoom }); } }}>
+      <section className={`board ${isBoardPanning ? 'board-panning' : ''} ${boardViewMode === 'freeform' ? 'board-freeform' : ''} ${boardContentMode === 'schedule' ? 'board-schedule-hidden' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={(event) => { moveBoardPan(event); updateFreeformCursor(event); }} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan} onLostPointerCapture={stopBoardPan} onScroll={() => { if (boardViewMode === 'freeform') refreshFreeformViewport(); }}>
         {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : boardContentMode === 'members' ? renderMemberBoard() : boardViewMode === 'dependencies' ? <DependencyGraph boardId={boardId} nodes={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title, completed: Boolean(card.completedAt), priority: card.priority })))} canEdit={!isPublicViewer} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} /> : <div ref={freeformCanvasRef} className={boardViewMode === 'freeform' ? 'freeform-canvas' : 'board-columns'} style={boardViewMode === 'freeform' ? { width: freeformCanvasSize.width * freeformZoom, height: freeformCanvasSize.height * freeformZoom } : undefined} onContextMenu={(event) => { if (boardViewMode !== 'freeform' || isPublicViewer || (event.target instanceof Element && event.target.closest('.column, .freeform-detached-card'))) return; const point = getFreeformPoint(event.clientX, event.clientY); if (!point) return; event.preventDefault(); setFreeformContextMenu({ x: Math.min(event.clientX, window.innerWidth - 230), y: Math.min(event.clientY, window.innerHeight - 170), position: point }); }} onDragOver={(event) => { if (boardViewMode === 'freeform' && dragging && !(event.target instanceof Element && event.target.closest('.column, .freeform-detached-card'))) event.preventDefault(); }} onDrop={detachDraggedCard}>
           <div className={boardViewMode === 'freeform' ? 'freeform-scene' : undefined} style={boardViewMode === 'freeform' ? { width: freeformCanvasSize.width, height: freeformCanvasSize.height, transform: `scale(${freeformZoom})` } : { display: 'contents' }}>
           {boardViewMode === 'freeform' && <><svg className={`freeform-ink ${isFreeformDrawing || isFreeformErasing ? 'active' : ''} ${isFreeformErasing ? 'erasing' : ''}`} width={freeformCanvasSize.width} height={freeformCanvasSize.height} viewBox={`0 0 ${freeformCanvasSize.width} ${freeformCanvasSize.height}`} onPointerDown={startFreeformInk} onPointerMove={continueFreeformInk} onPointerUp={finishFreeformInk} onPointerCancel={finishFreeformInk}>{freeformDrawing.strokes.map((stroke, index) => <polyline key={stroke.id ?? index} points={stroke.points.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke={stroke.color} strokeWidth={stroke.width} strokeLinecap="round" strokeLinejoin="round" />)}</svg>{freeformLive.cursors.filter((cursor) => cursor.user_id !== account?.user.id).map((cursor) => <div className="freeform-cursor" key={cursor.user_id} style={{ left: cursor.x, top: cursor.y }}><span>⌖</span><b>@{cursor.username}</b></div>)}{freeformLive.pings.map((ping) => <span className="freeform-ping" key={ping.id} style={{ left: ping.x, top: ping.y }} title={`@${ping.username} зовёт сюда`}><i />@{ping.username}</span>)}{freeformLive.pings.map((ping) => { const dx = ping.x - freeformViewport.x; const dy = ping.y - freeformViewport.y; if (dx >= 0 && dx <= freeformViewport.width && dy >= 0 && dy <= freeformViewport.height) return null; const horizontal = Math.abs(dx - freeformViewport.width / 2) > Math.abs(dy - freeformViewport.height / 2); const arrow = horizontal ? dx < 0 ? '←' : '→' : dy < 0 ? '↑' : '↓'; return <span className="freeform-ping-direction" key={`${ping.id}-direction`} style={{ left: freeformViewport.x + Math.max(16, Math.min(Math.max(16, freeformViewport.width - 150), dx)), top: freeformViewport.y + Math.max(16, Math.min(Math.max(16, freeformViewport.height - 38), dy)) }}>{arrow} @{ping.username}</span>; })}</>}

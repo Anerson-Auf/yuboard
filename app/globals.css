@@ -144,8 +144,8 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .board.board-freeform { height: calc(100vh - 178px); min-height: 540px; overflow: auto; cursor: grab; overscroll-behavior: none; touch-action: none; }
 .freeform-canvas { position: relative; min-width: 980px; min-height: calc(100vh - 190px); }
 .freeform-scene { position: relative; transform-origin: 0 0; }
-.board-freeform .column { position: absolute; z-index: 2; margin: 0; touch-action: none; }
-.freeform-detached-card { position: absolute; z-index: 4; width: 310px; margin: 0; cursor: grab; touch-action: none; }.freeform-detached-card:active { cursor: grabbing; }
+.board-freeform .column { position: absolute; z-index: 2; margin: 0; touch-action: none; content-visibility: auto; contain-intrinsic-size: 320px 560px; }
+.freeform-detached-card { position: absolute; z-index: 4; width: 310px; margin: 0; cursor: grab; touch-action: none; content-visibility: auto; contain-intrinsic-size: 310px 260px; }.freeform-detached-card:active { cursor: grabbing; }
 .board-freeform .add-column { position: absolute; width: 220px; }
 .board-freeform .column-head { cursor: move; touch-action: none; }
 .board-freeform .column-dragging { z-index: 3; opacity: .9; box-shadow: 0 18px 42px rgb(0 0 0 / 32%); }
