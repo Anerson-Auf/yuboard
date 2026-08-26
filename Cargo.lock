@@ -425,6 +425,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "futures-util",
+ "hmac",
  "reqwest",
  "serde",
  "serde_json",

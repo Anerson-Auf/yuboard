@@ -16,6 +16,7 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::{DateTime, Datelike, FixedOffset, Utc};
 use futures_util::SinkExt;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -45,11 +46,12 @@ struct AppState {
 #[derive(Clone)]
 struct DiscordAttachmentRefresh {
     endpoint: reqwest::Url,
-    token: String,
+    signing_secret: String,
 }
 
 #[derive(Serialize)]
 struct DiscordAttachmentRefreshRequest<'a> {
+    integration_id: Uuid,
     channel_id: &'a str,
     message_id: &'a str,
     attachment_id: &'a str,
@@ -70,6 +72,7 @@ struct AttachmentDownloadRecord {
     discord_channel_id: Option<String>,
     discord_message_id: Option<String>,
     discord_attachment_id: Option<String>,
+    discord_integration_id: Option<Uuid>,
 }
 
 #[derive(Clone)]
@@ -2016,14 +2019,14 @@ fn is_external_attachment_url(url: &reqwest::Url) -> bool {
 
 fn discord_attachment_refresh_from_env() -> Option<DiscordAttachmentRefresh> {
     let endpoint = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_URL").ok().filter(|value| !value.trim().is_empty());
-    let token = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_TOKEN").ok().filter(|value| !value.trim().is_empty());
-    let (Some(endpoint), Some(token)) = (endpoint, token) else {
+    let signing_secret = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_SIGNING_SECRET").ok().filter(|value| value.trim().len() >= 32);
+    let (Some(endpoint), Some(signing_secret)) = (endpoint, signing_secret) else {
         return None;
     };
     match reqwest::Url::parse(&endpoint) {
-        Ok(endpoint) if endpoint.scheme() == "https" => Some(DiscordAttachmentRefresh { endpoint, token }),
+        Ok(endpoint) if endpoint.scheme() == "https" => Some(DiscordAttachmentRefresh { endpoint, signing_secret }),
         _ => {
-            tracing::warn!("Discord attachment refresh is disabled: FLOWBOARD_DISCORD_MEDIA_REFRESH_URL must be an HTTPS URL");
+            tracing::warn!("Discord attachment refresh is disabled: use an HTTPS URL and a signing secret of at least 32 characters");
             None
         }
     }
@@ -5071,7 +5074,7 @@ async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, 
 
 async fn download_attachment(State(state): State<AppState>, current: Viewer, Path(attachment_id): Path<Uuid>) -> Result<Response, ApiError> {
     let attachment = sqlx::query_as::<_, AttachmentDownloadRecord>(
-        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
+        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id, c.discord_integration_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
     )
     .bind(attachment_id)
     .bind(current.0.map(|user| user.id))
@@ -5175,12 +5178,13 @@ async fn proxy_external_attachment_with_refresh(
         Ok(response) => Ok(response),
         Err(error) if error.1 == "attachment_not_found" => {
             let Some(refresh) = &state.discord_attachment_refresh else { return Err(error); };
-            let (Some(channel_id), Some(message_id), Some(discord_attachment_id)) = (
+            let (Some(integration_id), Some(channel_id), Some(message_id), Some(discord_attachment_id)) = (
+                attachment.discord_integration_id,
                 attachment.discord_channel_id.as_deref(),
                 attachment.discord_message_id.as_deref(),
                 attachment.discord_attachment_id.as_deref(),
             ) else { return Err(error); };
-            let refreshed_url = refresh_discord_attachment_url(&state.external_http, refresh, channel_id, message_id, discord_attachment_id).await?;
+            let refreshed_url = refresh_discord_attachment_url(&state.external_http, refresh, integration_id, channel_id, message_id, discord_attachment_id).await?;
             sqlx::query("UPDATE attachments SET external_url = $1 WHERE id = $2 AND external_url = $3")
                 .bind(&refreshed_url).bind(attachment_id).bind(url)
                 .execute(database(state)?).await.map_err(ApiError::internal)?;
@@ -5193,15 +5197,23 @@ async fn proxy_external_attachment_with_refresh(
 async fn refresh_discord_attachment_url(
     client: &reqwest::Client,
     refresh: &DiscordAttachmentRefresh,
+    integration_id: Uuid,
     channel_id: &str,
     message_id: &str,
     attachment_id: &str,
 ) -> Result<String, ApiError> {
-    let payload = serde_json::to_vec(&DiscordAttachmentRefreshRequest { channel_id, message_id, attachment_id })
+    let payload = serde_json::to_vec(&DiscordAttachmentRefreshRequest { integration_id, channel_id, message_id, attachment_id })
         .map_err(|_| ApiError::storage())?;
+    let timestamp = Utc::now().timestamp().to_string();
+    let mut mac = Hmac::<Sha256>::new_from_slice(refresh.signing_secret.as_bytes()).map_err(|_| ApiError::storage())?;
+    mac.update(timestamp.as_bytes());
+    mac.update(b".");
+    mac.update(&payload);
+    let signature: String = mac.finalize().into_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
     let response = client.post(refresh.endpoint.clone())
-        .bearer_auth(&refresh.token)
         .header(header::CONTENT_TYPE, "application/json")
+        .header("x-flowboard-timestamp", timestamp)
+        .header("x-flowboard-signature", signature)
         .body(payload)
         .send().await.map_err(|error| {
             tracing::warn!(?error, "Discord attachment refresh request failed");
@@ -5518,7 +5530,7 @@ fn rewrite_discord_outbound_comment_bodies(comments: &mut [CommentResponse]) {
 
 async fn download_discord_card_attachment(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, attachment_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
     let attachment = sqlx::query_as::<_, AttachmentDownloadRecord>(
-        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN comments cm ON cm.card_id = c.id WHERE a.id = $1 AND c.id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' LIMIT 1",
+        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id, c.discord_integration_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN comments cm ON cm.card_id = c.id WHERE a.id = $1 AND c.id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' LIMIT 1",
     )
     .bind(attachment_id).bind(card_id).bind(integration.board_id)
     .fetch_optional(database(&state)?).await.map_err(ApiError::internal)?

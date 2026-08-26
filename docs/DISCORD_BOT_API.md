@@ -276,20 +276,23 @@ Discord CDN links can expire. Configure Flowboard with these server-only variabl
 
 ```dotenv
 FLOWBOARD_DISCORD_MEDIA_REFRESH_URL=https://yufu.su/api/flowboard/attachments/refresh
-FLOWBOARD_DISCORD_MEDIA_REFRESH_TOKEN=the-shared-bridge-secret
+FLOWBOARD_DISCORD_MEDIA_REFRESH_SIGNING_SECRET=a-random-secret-with-at-least-32-characters
 ```
+
+This is one server-to-server secret, not a token of a board. It authenticates Flowboard itself; each request also names the concrete board integration. The raw board token remains hash-only and is still used only by the bot when it calls Flowboard.
 
 When a stored Discord URL returns `403` or `404`, Flowboard makes **one** authenticated `POST` to that bridge URL with:
 
 ```json
 {
+  "integration_id": "flowboard-discord-integration-uuid",
   "channel_id": "123456789012345678",
   "message_id": "234567890123456789",
   "attachment_id": "345678901234567890"
 }
 ```
 
-The bridge must verify `Authorization: Bearer …`, read the original Discord message through the Discord API, and return `{ "url": "https://cdn.discordapp.com/...", "proxy_url": "..." }`. Flowboard validates and uses the canonical Discord `url`, saves only that refreshed URL, then retries the media request once. It never downloads the media into `uploads/`.
+Flowboard sends `X-Flowboard-Timestamp` (Unix seconds) and `X-Flowboard-Signature`, where the signature is lowercase `HMAC-SHA256(secret, timestamp + "." + raw_request_body)`. The bridge must reject stale timestamps (for example, over five minutes) and invalid signatures, then read the original Discord message through the Discord API and return `{ "url": "https://cdn.discordapp.com/...", "proxy_url": "..." }`. Flowboard validates and uses the canonical Discord `url`, saves only that refreshed URL, then retries the media request once. It never downloads the media into `uploads/`.
 
 Attachments imported before these three source IDs existed cannot be refreshed automatically: ask the bot to replay the original message once, or reattach the file.
 
