@@ -1,0 +1,24 @@
+.theme-picker { display: grid; gap: 6px; min-width: 0; color: var(--text, #b6c2cf); }
+.theme-picker > label { color: var(--muted, #9fadbc); font-size: 12px; font-weight: 750; }
+.theme-picker > select { min-height: 38px; width: 100%; padding: 0 34px 0 10px; border: 1px solid var(--line, #3f4448); border-radius: 9px; outline: 0; appearance: none; background: var(--surface-raised, #282e33) linear-gradient(45deg, transparent 50%, var(--primary, #579dff) 50%), linear-gradient(135deg, var(--primary, #579dff) 50%, transparent 50%); background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; color: var(--text, #b6c2cf); font-size: 12px; font-weight: 700; }
+.theme-picker > select:hover, .theme-picker > select:focus { border-color: var(--primary, #579dff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #579dff) 18%, transparent); }
+.theme-picker > select option { background: var(--surface, #22272b); color: var(--text, #b6c2cf); }
+.theme-picker > p { margin: 0; color: var(--faint, #738496); font-size: 11px; line-height: 1.35; }
+.top-theme-picker { width: 142px; }.top-theme-picker > label, .top-theme-picker > p { display: none; }.top-theme-picker > select { min-height: 34px; font-size: 11px; }
+
+html[data-flowboard-theme='dark'] .app-shell { --canvas: #1d2125; --surface: #22272b; --surface-raised: #282e33; --surface-soft: #2c333a; --line: #3f4448; --text: #b6c2cf; --muted: #9fadbc; --faint: #738496; --primary: #579dff; --primary-ink: #0c1f37; --shadow: 0 18px 46px rgb(9 13 17 / 32%); }
+html[data-flowboard-theme='light'] .app-shell { --canvas: #f7f8f9; --surface: #fff; --surface-raised: #fff; --surface-soft: #f1f2f4; --line: #dcdfe4; --text: #172b4d; --muted: #44546f; --faint: #6b778c; --primary: #0c66e4; --primary-ink: #fff; --shadow: 0 14px 30px rgb(9 30 66 / 9%); }
+html[data-flowboard-theme='trello-dark'] .app-shell { --canvas: #0f1720; --surface: #17212b; --surface-raised: #1d2a37; --surface-soft: #243544; --line: #36516a; --text: #d8e6f3; --muted: #9fb4c9; --faint: #71889f; --primary: #4c9aff; --primary-ink: #071827; --shadow: 0 20px 50px rgb(0 11 22 / 46%); }
+html[data-flowboard-theme='oled'] .app-shell { --canvas: #000; --surface: #090909; --surface-raised: #111; --surface-soft: #1a1a1a; --line: #303030; --text: #f3f3f3; --muted: #b4b4b4; --faint: #7e7e7e; --primary: #7ab7ff; --primary-ink: #001a35; --shadow: 0 20px 50px rgb(0 0 0 / 76%); }
+html[data-flowboard-theme='pastel'] .app-shell { --canvas: #f8f3fb; --surface: #fffaff; --surface-raised: #fff; --surface-soft: #f3eafa; --line: #dfd1eb; --text: #3d3048; --muted: #705c7e; --faint: #917fa0; --primary: #9164cc; --primary-ink: #fff; --shadow: 0 16px 35px rgb(101 69 133 / 13%); }
+html[data-flowboard-theme='high-contrast'] .app-shell { --canvas: #000; --surface: #000; --surface-raised: #111; --surface-soft: #1c1c1c; --line: #fff; --text: #fff; --muted: #fff; --faint: #dedede; --primary: #ffea00; --primary-ink: #000; --shadow: 0 0 0 2px #fff; }
+
+html[data-flowboard-theme='current'][data-flowboard-resolved-theme='dark'] .app-shell { --canvas: #1d2125; --surface: #22272b; --surface-raised: #282e33; --surface-soft: #2c333a; --line: #3f4448; --text: #b6c2cf; --muted: #9fadbc; --faint: #738496; --primary: #579dff; --primary-ink: #0c1f37; --shadow: 0 18px 46px rgb(9 13 17 / 32%); }
+html[data-flowboard-theme='current'][data-flowboard-resolved-theme='light'] .app-shell { --canvas: #f7f8f9; --surface: #fff; --surface-raised: #fff; --surface-soft: #f1f2f4; --line: #dcdfe4; --text: #172b4d; --muted: #44546f; --faint: #6b778c; --primary: #0c66e4; --primary-ink: #fff; --shadow: 0 14px 30px rgb(9 30 66 / 9%); }
+
+html[data-flowboard-resolved-theme='light'] body { background: #f7f8f9; }
+html[data-flowboard-resolved-theme='dark'] body { background: #1d2125; }
+html[data-flowboard-theme='trello-dark'] body { background: #0f1720; }
+html[data-flowboard-theme='oled'] body, html[data-flowboard-theme='high-contrast'] body { background: #000; }
+html[data-flowboard-theme='pastel'] body { background: #f8f3fb; }
+@media (max-width: 900px) { .top-theme-picker { display: none; } }
