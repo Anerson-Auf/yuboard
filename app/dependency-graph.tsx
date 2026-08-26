@@ -139,6 +139,20 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
   }, [zoom]); // zoomAt deliberately follows the current zoom level.
 
   useEffect(() => {
+    const cancelInterruptedDrag = () => {
+      panDragRef.current = null;
+      nodeDragRef.current = null;
+    };
+    const cancelWhenHidden = () => { if (document.hidden) cancelInterruptedDrag(); };
+    window.addEventListener('blur', cancelInterruptedDrag);
+    document.addEventListener('visibilitychange', cancelWhenHidden);
+    return () => {
+      window.removeEventListener('blur', cancelInterruptedDrag);
+      document.removeEventListener('visibilitychange', cancelWhenHidden);
+    };
+  }, []);
+
+  useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       dismissMenus();
@@ -253,7 +267,10 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
         return;
       }
       if (panDragRef.current?.id === event.pointerId) { panDragRef.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }
-    }} onContextMenu={(event) => {
+    }} onPointerCancel={(event) => {
+      if (panDragRef.current?.id === event.pointerId) panDragRef.current = null;
+      if (nodeDragRef.current?.id === event.pointerId) nodeDragRef.current = null;
+    }} onLostPointerCapture={() => { panDragRef.current = null; nodeDragRef.current = null; }} onContextMenu={(event) => {
       event.stopPropagation();
       if (!canEdit || (event.target instanceof Element && event.target.closest('.dependency-node, .dependency-line, .dependency-menu'))) return;
       event.preventDefault();
