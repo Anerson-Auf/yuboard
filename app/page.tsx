@@ -1017,6 +1017,9 @@ export default function Home() {
   // overwriting an optimistic cover update made in the open card.
   const cardCoverRevisionRef = useRef<Record<string, number>>({});
   const cardAttachmentRevisionRef = useRef<Record<string, number>>({});
+  // Realtime refreshes may arrive while an attachment upload is still being
+  // committed. Do not let that intermediate response repaint the open card.
+  const uploadingAttachmentCardIdRef = useRef<string | null>(null);
   const boardBackgroundDisplayRef = useRef<{ fit: BoardBackgroundFit; position: BoardBackgroundPosition }>({ fit: 'cover', position: 'center' });
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1; speed: number } | null>(null);
   const boardRef = useRef<HTMLElement | null>(null);
@@ -1256,7 +1259,7 @@ export default function Home() {
   }, [columns, pendingNotificationCardId]);
 
   useEffect(() => {
-    if (persistence !== 'connected' || typeof selectedCardId !== 'string') return;
+    if (persistence !== 'connected' || typeof selectedCardId !== 'string' || uploadingAttachmentCardIdRef.current === selectedCardId) return;
     let cancelled = false;
     const coverRevisionAtRequest = cardCoverRevisionRef.current[selectedCardId] ?? 0;
     const attachmentRevisionAtRequest = cardAttachmentRevisionRef.current[selectedCardId] ?? 0;
@@ -1281,7 +1284,7 @@ export default function Home() {
         const hasNewerCoverChange = (cardCoverRevisionRef.current[selectedCardId] ?? 0) !== coverRevisionAtRequest;
         const mergedCardMeta = hasNewerCoverChange ? cardMeta : { ...cardMeta, ...coverMeta };
         if (!hasNewerCoverChange) setCoverModeDraft(detail.cover_mode);
-        setSelected((current) => current ? { ...current, ...mergedCardMeta } : current);
+        setSelected((current) => current?.id === selectedCardId ? { ...current, ...mergedCardMeta } : current);
         setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, ...mergedCardMeta } : card) })));
         if (detail.unread_mention_source_ids.length && account && !isPublicViewer) {
           setSelected((current) => current?.id === selectedCardId ? { ...current, hasUnreadMentions: false } : current);
@@ -1298,7 +1301,7 @@ export default function Home() {
       .catch(() => { if (!cancelled) showToast('Не удалось загрузить детали карточки'); })
       .finally(() => { if (!cancelled) setDetailsLoading(false); });
     return () => { cancelled = true; };
-  }, [selectedCardId, persistence, cardDetailRevision, account, isPublicViewer]);
+  }, [selectedCardId, persistence, cardDetailRevision, account, isPublicViewer, isUploadingAttachment]);
 
   // Board realtime refreshes replace the card detail payload. Keep an open
   // thread in step with that payload, so external comments never reorder the
@@ -1363,7 +1366,7 @@ export default function Home() {
           }
           // The board payload only has comment counters. Reload an open card as
           // well, so Discord/API comments appear without closing the modal.
-          if (typeof selectedCardId === 'string') setCardDetailRevision((current) => current + 1);
+          if (typeof selectedCardId === 'string' && uploadingAttachmentCardIdRef.current !== selectedCardId) setCardDetailRevision((current) => current + 1);
           if (authState === 'signed-in') void loadNotifications();
         }).catch(() => undefined);
       }, 180);
@@ -3196,6 +3199,7 @@ export default function Home() {
     const accepted = files.filter(isSupportedMedia);
     if (!accepted.length) return [];
     cardAttachmentRevisionRef.current[cardId] = (cardAttachmentRevisionRef.current[cardId] ?? 0) + 1;
+    uploadingAttachmentCardIdRef.current = cardId;
     setUploadingAttachment(true);
     try {
       const uploaded: Attachment[] = [];
@@ -3215,10 +3219,11 @@ export default function Home() {
       if (target) appendEmbeddedMedia(target, uploaded);
       return uploaded;
     } finally {
+      if (uploadingAttachmentCardIdRef.current === cardId) uploadingAttachmentCardIdRef.current = null;
       setUploadingAttachment(false);
-      // Fetch one current snapshot after the batch; any earlier realtime
-      // response is ignored by the revision guard above.
-      setCardDetailRevision((current) => current + 1);
+      // The effect above takes one fresh snapshot after `isUploadingAttachment`
+      // changes back to false. Until then, optimistic attachment state stays
+      // intact and the card never flashes an incomplete visual state.
     }
   }
   async function uploadAttachments(event: ChangeEvent<HTMLInputElement>) {
