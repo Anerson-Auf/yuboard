@@ -1478,9 +1478,12 @@ export default function Home() {
       if (event.key !== 'Escape') return;
       setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setNotificationsOpen(false); setColumnMenuId(null); setSidebarPanel(null); setReactionPickerCommentId(null); setStickerPickerTarget(null);
     };
-    window.addEventListener('pointerdown', closePopovers);
+    // A limit field commits on blur. Closing a column menu on pointerdown
+    // unmounted that field before the blur event could run, so a typed value
+    // looked as if it had immediately disappeared. Click runs after blur.
+    window.addEventListener('click', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
-    return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
+    return () => { window.removeEventListener('click', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
   }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, reactionPickerCommentId, sidebarPanel, stickerPickerTarget]);
 
   useEffect(() => {
@@ -3587,11 +3590,24 @@ export default function Home() {
   function saveColumnLimit(column: Column) {
     const cardLimit = Math.max(0, Math.min(10_000, Number.parseInt(columnLimitDraft, 10) || 0));
     setColumnLimitDraft(String(cardLimit));
-    const apply = () => { setColumns((current) => current.map((item) => item.id === column.id ? { ...item, cardLimit } : item)); showToast(cardLimit ? `Лимит колонки: ${cardLimit}` : 'Лимит колонки снят'); };
-    if (persistence !== 'connected' || typeof column.id !== 'string') { apply(); return; }
+    if (cardLimit === column.cardLimit) return;
+    const apply = (nextLimit: number) => setColumns((current) => current.map((item) => item.id === column.id ? { ...item, cardLimit: nextLimit } : item));
+    apply(cardLimit);
+    if (persistence !== 'connected' || typeof column.id !== 'string') { showToast(cardLimit ? `Лимит колонки: ${cardLimit}` : 'Лимит колонки снят'); return; }
     void fetch(`${API_URL}/v1/lists/${column.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ card_limit: cardLimit }) })
-      .then((response) => { if (!response.ok) throw new Error('limit update failed'); apply(); })
-      .catch(() => showToast('Не удалось сохранить лимит колонки'));
+      .then(async (response) => {
+        if (!response.ok) throw new Error('limit update failed');
+        const saved = await response.json() as { card_limit?: number };
+        const savedLimit = saved.card_limit ?? cardLimit;
+        apply(savedLimit);
+        setColumnLimitDraft(String(savedLimit));
+        showToast(savedLimit ? `Лимит колонки: ${savedLimit}` : 'Лимит колонки снят');
+      })
+      .catch(() => {
+        apply(column.cardLimit);
+        setColumnLimitDraft(String(column.cardLimit));
+        showToast('Не удалось сохранить лимит колонки');
+      });
   }
   function saveColumnTitle(columnId: EntityId) {
     const title = columnTitleDraft.trim();
