@@ -1287,9 +1287,15 @@ export default function Home() {
         const coverMeta = { coverAttachmentId: detail.cover_attachment_id ?? undefined, coverMode: detail.cover_mode, coverUrl: cover?.url, coverMediaType: cover?.media_type, backgroundImageUrl: detail.background_image_url ?? undefined };
         const hasNewerCoverChange = (cardCoverRevisionRef.current[selectedCardId] ?? 0) !== coverRevisionAtRequest;
         const mergedCardMeta = hasNewerCoverChange ? cardMeta : { ...cardMeta, ...coverMeta };
-        if (!hasNewerCoverChange) setCoverModeDraft(detail.cover_mode);
-        setSelected((current) => current?.id === selectedCardId ? { ...current, ...mergedCardMeta } : current);
-        setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, ...mergedCardMeta } : card) })));
+        if (!hasNewerAttachmentChange && !hasNewerCoverChange) setCoverModeDraft(detail.cover_mode);
+        // An attachment upload changes card presentation too (cover/background
+        // may be referenced by the response). Do not merge *any* card metadata
+        // from a request that started before that upload; it can blank the open
+        // modal with a stale partial card row.
+        if (!hasNewerAttachmentChange && !hasNewerCoverChange) {
+          setSelected((current) => current?.id === selectedCardId ? { ...current, ...mergedCardMeta } : current);
+          setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, ...mergedCardMeta } : card) })));
+        }
         if (detail.unread_mention_source_ids.length && account && !isPublicViewer) {
           setSelected((current) => current?.id === selectedCardId ? { ...current, hasUnreadMentions: false } : current);
           setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, hasUnreadMentions: false } : card) })));
@@ -1305,7 +1311,7 @@ export default function Home() {
       .catch(() => { if (!cancelled) showToast('Не удалось загрузить детали карточки'); })
       .finally(() => { if (!cancelled) setDetailsLoading(false); });
     return () => { cancelled = true; };
-  }, [selectedCardId, persistence, cardDetailRevision, account, isPublicViewer, isUploadingAttachment]);
+  }, [selectedCardId, persistence, cardDetailRevision, account, isPublicViewer]);
 
   // Board realtime refreshes replace the card detail payload. Keep an open
   // thread in step with that payload, so external comments never reorder the
