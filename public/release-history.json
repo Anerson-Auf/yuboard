@@ -1,0 +1,2652 @@
+{
+  "version": "0.1.0",
+  "revision": "392c980",
+  "entries": [
+    {
+      "shortHash": "392c980",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: проект",
+      "summary": "Исправлена работа раздела «проект».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 27,
+      "deletions": 57
+    },
+    {
+      "shortHash": "7455a72",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интерфейс",
+      "summary": "Расширены возможности раздела «интерфейс».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 73,
+      "deletions": 9
+    },
+    {
+      "shortHash": "cebf930",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 39,
+      "deletions": 2
+    },
+    {
+      "shortHash": "830e7cc",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: обсуждения",
+      "summary": "Расширены возможности раздела «обсуждения».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0052_board_stickers.sql",
+        "src/main.rs"
+      ],
+      "additions": 280,
+      "deletions": 12
+    },
+    {
+      "shortHash": "1b788b2",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: обсуждения",
+      "summary": "Улучшен интерфейс раздела «обсуждения».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 40,
+      "deletions": 26
+    },
+    {
+      "shortHash": "5f55d28",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: метки и роли",
+      "summary": "Исправлена работа раздела «метки и роли».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 7,
+      "deletions": 4
+    },
+    {
+      "shortHash": "86cba0e",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: карточки",
+      "summary": "Исправлена работа раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 6,
+      "deletions": 6
+    },
+    {
+      "shortHash": "1b7a7b9",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: карточки",
+      "summary": "Исправлена работа раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 16,
+      "deletions": 10
+    },
+    {
+      "shortHash": "0ef341b",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: медиа и оформление",
+      "summary": "Исправлена работа раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "c88a420",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: медиа и оформление",
+      "summary": "Исправлена работа раздела «медиа и оформление».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "5099eca",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: медиа и оформление",
+      "summary": "Исправлена работа раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "3a84037",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: обсуждения",
+      "summary": "Исправлена работа раздела «обсуждения».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 3,
+      "deletions": 3
+    },
+    {
+      "shortHash": "aedd66b",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 33,
+      "deletions": 20
+    },
+    {
+      "shortHash": "19e5858",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: голосовые сообщения",
+      "summary": "Исправлена работа раздела «голосовые сообщения».",
+      "files": [
+        ".env.example",
+        "app/page.tsx",
+        "deploy/nginx.conf",
+        "docker-compose.production.yml",
+        "docs/DEPLOYMENT_GUIDE.md",
+        "docs/DEPLOY_CLOUDFLARE_TUNNEL.md",
+        "docs/DEPLOY_PM2_CLOUDFLARE.md",
+        "docs/DEPLOY_SSH.md"
+      ],
+      "additions": 21,
+      "deletions": 7
+    },
+    {
+      "shortHash": "3ada570",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 6,
+      "deletions": 5
+    },
+    {
+      "shortHash": "f8276a0",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: голосовые сообщения",
+      "summary": "Улучшен интерфейс раздела «голосовые сообщения».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "962ce68",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: голосовые сообщения",
+      "summary": "Улучшен интерфейс раздела «голосовые сообщения».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 4,
+      "deletions": 3
+    },
+    {
+      "shortHash": "adbf202",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: обсуждения",
+      "summary": "Расширены возможности раздела «обсуждения».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 93,
+      "deletions": 15
+    },
+    {
+      "shortHash": "8eee91b",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: обсуждения",
+      "summary": "Исправлена работа раздела «обсуждения».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 0
+    },
+    {
+      "shortHash": "398c5d2",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: обсуждения",
+      "summary": "Исправлена работа раздела «обсуждения».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 3,
+      "deletions": 3
+    },
+    {
+      "shortHash": "c7f7ad4",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: обсуждения",
+      "summary": "Расширены возможности раздела «обсуждения».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 17,
+      "deletions": 13
+    },
+    {
+      "shortHash": "4f63f3d",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: обсуждения",
+      "summary": "Расширены возможности раздела «обсуждения».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 9,
+      "deletions": 8
+    },
+    {
+      "shortHash": "de0fbe6",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: техническая инфраструктура",
+      "summary": "Исправлена работа раздела «техническая инфраструктура».",
+      "files": [
+        "migrations/0050_card_github_commits.sql"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "0f7c454",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: интеграция GitHub",
+      "summary": "Исправлена работа раздела «интеграция GitHub».",
+      "files": [
+        "migrations/0050_card_github_commits.sql"
+      ],
+      "additions": 3,
+      "deletions": 3
+    },
+    {
+      "shortHash": "57cc6fe",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: метки и роли",
+      "summary": "Исправлена работа раздела «метки и роли».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 6,
+      "deletions": 0
+    },
+    {
+      "shortHash": "ccaa7e4",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: обсуждения",
+      "summary": "Расширены возможности раздела «обсуждения».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0051_comment_read_states.sql",
+        "src/main.rs"
+      ],
+      "additions": 96,
+      "deletions": 5
+    },
+    {
+      "shortHash": "659b57c",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Техническое обслуживание: техническая инфраструктура",
+      "summary": "Выполнено техническое обслуживание раздела «техническая инфраструктура».",
+      "files": [
+        ".env.example",
+        "deploy/nginx.conf",
+        "docker-compose.production.yml",
+        "docs/DEPLOYMENT_GUIDE.md",
+        "docs/DEPLOY_CLOUDFLARE_TUNNEL.md",
+        "docs/DEPLOY_PM2_CLOUDFLARE.md",
+        "docs/DEPLOY_SSH.md"
+      ],
+      "additions": 6,
+      "deletions": 20
+    },
+    {
+      "shortHash": "b1199e1",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: обсуждения",
+      "summary": "Расширены возможности раздела «обсуждения».",
+      "files": [
+        ".env.example",
+        "app/globals.css",
+        "app/page.tsx",
+        "deploy/nginx.conf",
+        "docker-compose.production.yml",
+        "docs/DEPLOYMENT_GUIDE.md",
+        "docs/DEPLOY_CLOUDFLARE_TUNNEL.md",
+        "docs/DEPLOY_PM2_CLOUDFLARE.md",
+        "docs/DEPLOY_SSH.md",
+        "src/main.rs"
+      ],
+      "additions": 216,
+      "deletions": 26
+    },
+    {
+      "shortHash": "8f84574",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Техническое обслуживание: интеграция GitHub",
+      "summary": "Выполнено техническое обслуживание раздела «интеграция GitHub».",
+      "files": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0050_card_github_commits.sql",
+        "src/main.rs"
+      ],
+      "additions": 8,
+      "deletions": 486
+    },
+    {
+      "shortHash": "d818a97",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция GitHub",
+      "summary": "Расширены возможности раздела «интеграция GitHub».",
+      "files": [
+        ".gitignore",
+        "Cargo.lock",
+        "Cargo.toml",
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0050_card_github_commits.sql",
+        "src/main.rs"
+      ],
+      "additions": 522,
+      "deletions": 5
+    },
+    {
+      "shortHash": "4cf68f7",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: доски и колонки",
+      "summary": "Улучшен интерфейс раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 4,
+      "deletions": 5
+    },
+    {
+      "shortHash": "024c9e3",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "src/main.rs"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "94cfe8f",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "src/main.rs"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "194a7c9",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "1e521bf",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 60,
+      "deletions": 17
+    },
+    {
+      "shortHash": "99e3726",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: проект",
+      "summary": "Исправлена работа раздела «проект».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 74,
+      "deletions": 6
+    },
+    {
+      "shortHash": "31aaa95",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: метки и роли",
+      "summary": "Исправлена работа раздела «метки и роли».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "755bd76",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 142,
+      "deletions": 4
+    },
+    {
+      "shortHash": "9070d58",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: карточки",
+      "summary": "Исправлена работа раздела «карточки».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 35,
+      "deletions": 2
+    },
+    {
+      "shortHash": "84d45f3",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: метки и роли",
+      "summary": "Исправлена работа раздела «метки и роли».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "82fa508",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 38,
+      "deletions": 2
+    },
+    {
+      "shortHash": "81c156c",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "87560f3",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: перетаскивание и навигация",
+      "summary": "Исправлена работа раздела «перетаскивание и навигация».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 17,
+      "deletions": 15
+    },
+    {
+      "shortHash": "038fc35",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: перетаскивание и навигация",
+      "summary": "Расширены возможности раздела «перетаскивание и навигация».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 65,
+      "deletions": 3
+    },
+    {
+      "shortHash": "c63742f",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: перетаскивание и навигация",
+      "summary": "Исправлена работа раздела «перетаскивание и навигация».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 11,
+      "deletions": 0
+    },
+    {
+      "shortHash": "e6b35ac",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: перетаскивание и навигация",
+      "summary": "Исправлена работа раздела «перетаскивание и навигация».",
+      "files": [
+        "app/auth.css"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "1d82e7f",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: перетаскивание и навигация",
+      "summary": "Расширены возможности раздела «перетаскивание и навигация».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 26,
+      "deletions": 4
+    },
+    {
+      "shortHash": "c83e4c2",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: перетаскивание и навигация",
+      "summary": "Улучшен интерфейс раздела «перетаскивание и навигация».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 21,
+      "deletions": 2
+    },
+    {
+      "shortHash": "29fbd43",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: проект",
+      "summary": "Улучшен интерфейс раздела «проект».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 5,
+      "deletions": 1
+    },
+    {
+      "shortHash": "1d20814",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: медиа и оформление",
+      "summary": "Исправлена работа раздела «медиа и оформление».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 19,
+      "deletions": 15
+    },
+    {
+      "shortHash": "2e1ee3a",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: доски и колонки",
+      "summary": "Улучшен интерфейс раздела «доски и колонки».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 15,
+      "deletions": 4
+    },
+    {
+      "shortHash": "5493dae",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: обсуждения",
+      "summary": "Улучшен интерфейс раздела «обсуждения».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 3,
+      "deletions": 2
+    },
+    {
+      "shortHash": "4fdea1a",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: интерфейс",
+      "summary": "Исправлена работа раздела «интерфейс».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 4,
+      "deletions": 5
+    },
+    {
+      "shortHash": "0069034",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: метки и роли",
+      "summary": "Улучшен интерфейс раздела «метки и роли».",
+      "files": [
+        "app/auth.css"
+      ],
+      "additions": 1,
+      "deletions": 0
+    },
+    {
+      "shortHash": "9bcb6b6",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: метки и роли",
+      "summary": "Расширены возможности раздела «метки и роли».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 8,
+      "deletions": 3
+    },
+    {
+      "shortHash": "5d55487",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: метки и роли",
+      "summary": "Улучшен интерфейс раздела «метки и роли».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 14,
+      "deletions": 5
+    },
+    {
+      "shortHash": "7540e37",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: метки и роли",
+      "summary": "Расширены возможности раздела «метки и роли».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 9,
+      "deletions": 3
+    },
+    {
+      "shortHash": "6394e2e",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: метки и роли",
+      "summary": "Расширены возможности раздела «метки и роли».",
+      "files": [
+        "app/page.tsx",
+        "migrations/0049_label_role_icon_colors.sql",
+        "src/main.rs"
+      ],
+      "additions": 74,
+      "deletions": 43
+    },
+    {
+      "shortHash": "966b5d4",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: метки и роли",
+      "summary": "Расширены возможности раздела «метки и роли».",
+      "files": [
+        "app/page.tsx",
+        "migrations/0048_label_role_check_shapes.sql",
+        "src/main.rs"
+      ],
+      "additions": 18,
+      "deletions": 3
+    },
+    {
+      "shortHash": "3c7af84",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: метки и роли",
+      "summary": "Улучшен интерфейс раздела «метки и роли».",
+      "files": [
+        "app/auth.css"
+      ],
+      "additions": 1,
+      "deletions": 0
+    },
+    {
+      "shortHash": "ed022f7",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: метки и роли",
+      "summary": "Исправлена работа раздела «метки и роли».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx"
+      ],
+      "additions": 14,
+      "deletions": 2
+    },
+    {
+      "shortHash": "4be5622",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: метки и роли",
+      "summary": "Расширены возможности раздела «метки и роли».",
+      "files": [
+        "app/auth.css",
+        "app/page.tsx",
+        "migrations/0047_profile_roles.sql",
+        "src/main.rs"
+      ],
+      "additions": 327,
+      "deletions": 39
+    },
+    {
+      "shortHash": "3435403",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: проект",
+      "summary": "Исправлена работа раздела «проект».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 8,
+      "deletions": 8
+    },
+    {
+      "shortHash": "f402cc5",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: интерфейс",
+      "summary": "Улучшен интерфейс раздела «интерфейс».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 17,
+      "deletions": 17
+    },
+    {
+      "shortHash": "27ed1c3",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: проект",
+      "summary": "Расширены возможности раздела «проект».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 85,
+      "deletions": 1
+    },
+    {
+      "shortHash": "c831120",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: метки и роли",
+      "summary": "Улучшен интерфейс раздела «метки и роли».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "6836ecf",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: интерфейс",
+      "summary": "Улучшен интерфейс раздела «интерфейс».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 14,
+      "deletions": 6
+    },
+    {
+      "shortHash": "637e91d",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: метки и роли",
+      "summary": "Улучшен интерфейс раздела «метки и роли».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "d22a7bb",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: пространство работы",
+      "summary": "Расширены возможности раздела «пространство работы».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 17,
+      "deletions": 1
+    },
+    {
+      "shortHash": "55d4044",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: интерфейс",
+      "summary": "Улучшен интерфейс раздела «интерфейс».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "389ab6e",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: интерфейс",
+      "summary": "Улучшен интерфейс раздела «интерфейс».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 12,
+      "deletions": 4
+    },
+    {
+      "shortHash": "5e67f35",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: медиа и оформление",
+      "summary": "Улучшен интерфейс раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 8,
+      "deletions": 2
+    },
+    {
+      "shortHash": "f1bdaa2",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: медиа и оформление",
+      "summary": "Улучшен интерфейс раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 3,
+      "deletions": 0
+    },
+    {
+      "shortHash": "ef1f2cb",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: метки и роли",
+      "summary": "Улучшен интерфейс раздела «метки и роли».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 1
+    },
+    {
+      "shortHash": "129afcc",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: карточки",
+      "summary": "Улучшен интерфейс раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 16,
+      "deletions": 1
+    },
+    {
+      "shortHash": "69772b1",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0046_workspace_background_uploads.sql",
+        "src/main.rs"
+      ],
+      "additions": 86,
+      "deletions": 9
+    },
+    {
+      "shortHash": "c160b1b",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: карточки",
+      "summary": "Улучшен интерфейс раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 1
+    },
+    {
+      "shortHash": "3706a10",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: карточки",
+      "summary": "Улучшен интерфейс раздела «карточки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 3,
+      "deletions": 0
+    },
+    {
+      "shortHash": "4003566",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: карточки",
+      "summary": "Улучшен интерфейс раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 4,
+      "deletions": 6
+    },
+    {
+      "shortHash": "d8efcf8",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: чек-листы",
+      "summary": "Улучшен интерфейс раздела «чек-листы».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 0
+    },
+    {
+      "shortHash": "8f17b05",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Отмена изменения: пространство работы",
+      "summary": "Возвращено безопасное состояние раздела «пространство работы».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "0a69f1e",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: уведомления",
+      "summary": "Улучшен интерфейс раздела «уведомления».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 1
+    },
+    {
+      "shortHash": "dd9ae87",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: пространство работы",
+      "summary": "Улучшен интерфейс раздела «пространство работы».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "ecd97b4",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: уведомления",
+      "summary": "Исправлена работа раздела «уведомления».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "cf8259f",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: уведомления",
+      "summary": "Исправлена работа раздела «уведомления».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 0
+    },
+    {
+      "shortHash": "0ab258e",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: метки и роли",
+      "summary": "Исправлена работа раздела «метки и роли».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "018a364",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: карточки",
+      "summary": "Улучшен интерфейс раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "7088a78",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0045_workspace_card_backgrounds.sql",
+        "src/main.rs"
+      ],
+      "additions": 85,
+      "deletions": 15
+    },
+    {
+      "shortHash": "254240a",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: проект",
+      "summary": "Расширены возможности раздела «проект».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 39,
+      "deletions": 2
+    },
+    {
+      "shortHash": "134f226",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: уведомления",
+      "summary": "Расширены возможности раздела «уведомления».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0044_card_watchers_notifications.sql",
+        "src/main.rs"
+      ],
+      "additions": 193,
+      "deletions": 6
+    },
+    {
+      "shortHash": "3bdf44a",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0043_board_milestones.sql",
+        "src/main.rs"
+      ],
+      "additions": 193,
+      "deletions": 10
+    },
+    {
+      "shortHash": "ef95c3e",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 39,
+      "deletions": 1
+    },
+    {
+      "shortHash": "6517f59",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 13,
+      "deletions": 4
+    },
+    {
+      "shortHash": "5e89053",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: доски и колонки",
+      "summary": "Улучшен интерфейс раздела «доски и колонки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 51,
+      "deletions": 28
+    },
+    {
+      "shortHash": "65b9a60",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: свободная доска",
+      "summary": "Расширены возможности раздела «свободная доска».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0042_board_freeform_card_positions.sql",
+        "src/main.rs"
+      ],
+      "additions": 131,
+      "deletions": 11
+    },
+    {
+      "shortHash": "10b8e3c",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: свободная доска",
+      "summary": "Исправлена работа раздела «свободная доска».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 23,
+      "deletions": 10
+    },
+    {
+      "shortHash": "2df98c9",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: свободная доска",
+      "summary": "Исправлена работа раздела «свободная доска».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 24,
+      "deletions": 12
+    },
+    {
+      "shortHash": "f80fb60",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: свободная доска",
+      "summary": "Исправлена работа раздела «свободная доска».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 56,
+      "deletions": 37
+    },
+    {
+      "shortHash": "c1420a2",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: свободная доска",
+      "summary": "Расширены возможности раздела «свободная доска».",
+      "files": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 258,
+      "deletions": 22
+    },
+    {
+      "shortHash": "db34540",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: свободная доска",
+      "summary": "Исправлена работа раздела «свободная доска».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "88684d7",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: свободная доска",
+      "summary": "Исправлена работа раздела «свободная доска».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 11,
+      "deletions": 1
+    },
+    {
+      "shortHash": "fcf97e2",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: свободная доска",
+      "summary": "Исправлена работа раздела «свободная доска».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 19,
+      "deletions": 8
+    },
+    {
+      "shortHash": "7368770",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: свободная доска",
+      "summary": "Улучшен интерфейс раздела «свободная доска».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 91,
+      "deletions": 27
+    },
+    {
+      "shortHash": "61b9acf",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: свободная доска",
+      "summary": "Расширены возможности раздела «свободная доска».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0041_board_freeform_drawings.sql",
+        "src/main.rs"
+      ],
+      "additions": 297,
+      "deletions": 14
+    },
+    {
+      "shortHash": "8b3b2e7",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 8,
+      "deletions": 0
+    },
+    {
+      "shortHash": "4bd94ca",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: свободная доска",
+      "summary": "Расширены возможности раздела «свободная доска».",
+      "files": [
+        "app/page.tsx",
+        "migrations/0040_shared_freeform_board_layout.sql",
+        "src/main.rs"
+      ],
+      "additions": 45,
+      "deletions": 7
+    },
+    {
+      "shortHash": "baec44f",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: свободная доска",
+      "summary": "Расширены возможности раздела «свободная доска».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0039_personal_board_layouts.sql",
+        "src/main.rs"
+      ],
+      "additions": 273,
+      "deletions": 171
+    },
+    {
+      "shortHash": "c041a22",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 85,
+      "deletions": 2
+    },
+    {
+      "shortHash": "4d07471",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 52,
+      "deletions": 14
+    },
+    {
+      "shortHash": "011585f",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: перетаскивание и навигация",
+      "summary": "Расширены возможности раздела «перетаскивание и навигация».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 65,
+      "deletions": 0
+    },
+    {
+      "shortHash": "a7ef7f3",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0038_manual_column_grid.sql",
+        "src/main.rs"
+      ],
+      "additions": 197,
+      "deletions": 68
+    },
+    {
+      "shortHash": "f900aa6",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 5,
+      "deletions": 5
+    },
+    {
+      "shortHash": "44d8cba",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: метки и роли",
+      "summary": "Расширены возможности раздела «метки и роли».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 107,
+      "deletions": 4
+    },
+    {
+      "shortHash": "8d05ca1",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: проект",
+      "summary": "Исправлена работа раздела «проект».",
+      "files": [
+        "app/page.tsx",
+        "migrations/0037_viewer_read_only.sql",
+        "src/main.rs"
+      ],
+      "additions": 76,
+      "deletions": 11
+    },
+    {
+      "shortHash": "468f277",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 17,
+      "deletions": 3
+    },
+    {
+      "shortHash": "d144d2c",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: карточки",
+      "summary": "Исправлена работа раздела «карточки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 3,
+      "deletions": 4
+    },
+    {
+      "shortHash": "cf08ff5",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: схемы карточек",
+      "summary": "Исправлена работа раздела «схемы карточек».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 3,
+      "deletions": 0
+    },
+    {
+      "shortHash": "ccd471f",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 5,
+      "deletions": 0
+    },
+    {
+      "shortHash": "8e9a945",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: доски и колонки",
+      "summary": "Исправлена работа раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "889f00d",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: медиа и оформление",
+      "summary": "Исправлена работа раздела «медиа и оформление».",
+      "files": [
+        "src/main.rs"
+      ],
+      "additions": 22,
+      "deletions": 7
+    },
+    {
+      "shortHash": "7fa44c5",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: проект",
+      "summary": "Расширены возможности раздела «проект».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 4,
+      "deletions": 4
+    },
+    {
+      "shortHash": "4c8c0a5",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 14,
+      "deletions": 0
+    },
+    {
+      "shortHash": "eead4ad",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: проект",
+      "summary": "Улучшен интерфейс раздела «проект».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 6,
+      "deletions": 0
+    },
+    {
+      "shortHash": "3c8eceb",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: проект",
+      "summary": "Расширены возможности раздела «проект».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 0
+    },
+    {
+      "shortHash": "ebbe90f",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 10,
+      "deletions": 1
+    },
+    {
+      "shortHash": "1713938",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: карточки",
+      "summary": "Улучшен интерфейс раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 11,
+      "deletions": 2
+    },
+    {
+      "shortHash": "0376490",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "3974e0e",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 4,
+      "deletions": 9
+    },
+    {
+      "shortHash": "fb806a4",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 4,
+      "deletions": 4
+    },
+    {
+      "shortHash": "2f2cf9a",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: интеграция Discord",
+      "summary": "Исправлена работа раздела «интеграция Discord».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 21,
+      "deletions": 4
+    },
+    {
+      "shortHash": "b53e1cf",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "5f8d4f4",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 3,
+      "deletions": 0
+    },
+    {
+      "shortHash": "a2d28c7",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 3,
+      "deletions": 0
+    },
+    {
+      "shortHash": "d18d9f2",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: интеграция Discord",
+      "summary": "Исправлена работа раздела «интеграция Discord».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 3,
+      "deletions": 2
+    },
+    {
+      "shortHash": "43def24",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 45,
+      "deletions": 6
+    },
+    {
+      "shortHash": "f962ad9",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 14,
+      "deletions": 12
+    },
+    {
+      "shortHash": "aa7cf82",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 39,
+      "deletions": 17
+    },
+    {
+      "shortHash": "a104f49",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0036_card_priority.sql",
+        "src/main.rs"
+      ],
+      "additions": 56,
+      "deletions": 9
+    },
+    {
+      "shortHash": "2dd0462",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 0
+    },
+    {
+      "shortHash": "f729de3",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: проект",
+      "summary": "Улучшен интерфейс раздела «проект».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "6cc76f1",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: проект",
+      "summary": "Улучшен интерфейс раздела «проект».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 3,
+      "deletions": 1
+    },
+    {
+      "shortHash": "a8c4e6c",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: доски и колонки",
+      "summary": "Улучшен интерфейс раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "0e142ab",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "ae594d8",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: доски и колонки",
+      "summary": "Улучшен интерфейс раздела «доски и колонки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 7,
+      "deletions": 1
+    },
+    {
+      "shortHash": "ab74717",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 13,
+      "deletions": 0
+    },
+    {
+      "shortHash": "1f48354",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "public/flowboard-coin.png",
+        "public/flowboard-default-girl.png"
+      ],
+      "additions": 31,
+      "deletions": 1
+    },
+    {
+      "shortHash": "8e5a553",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0035_board_background_display.sql",
+        "src/main.rs"
+      ],
+      "additions": 36,
+      "deletions": 8
+    },
+    {
+      "shortHash": "ffd6e91",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: медиа и оформление",
+      "summary": "Улучшен интерфейс раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 37,
+      "deletions": 1
+    },
+    {
+      "shortHash": "766b76b",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/icon.png",
+        "app/layout.tsx"
+      ],
+      "additions": 5,
+      "deletions": 1
+    },
+    {
+      "shortHash": "d39a0d0",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 20,
+      "deletions": 9
+    },
+    {
+      "shortHash": "908f7cd",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 4
+    },
+    {
+      "shortHash": "a8d366b",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: уведомления",
+      "summary": "Расширены возможности раздела «уведомления».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0034_card_mentions.sql",
+        "src/main.rs"
+      ],
+      "additions": 155,
+      "deletions": 23
+    },
+    {
+      "shortHash": "3c0a969",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: интерфейс",
+      "summary": "Исправлена работа раздела «интерфейс».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 2,
+      "deletions": 2
+    },
+    {
+      "shortHash": "0f062e2",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 10,
+      "deletions": 1
+    },
+    {
+      "shortHash": "b244ce0",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: чек-листы",
+      "summary": "Исправлена работа раздела «чек-листы».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 8,
+      "deletions": 13
+    },
+    {
+      "shortHash": "49bb822",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 4,
+      "deletions": 3
+    },
+    {
+      "shortHash": "8867a20",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: чек-листы",
+      "summary": "Исправлена работа раздела «чек-листы».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 13,
+      "deletions": 8
+    },
+    {
+      "shortHash": "7b7d0a9",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "2657bdc",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/globals.css"
+      ],
+      "additions": 1,
+      "deletions": 1
+    },
+    {
+      "shortHash": "2b3956d",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 6,
+      "deletions": 3
+    },
+    {
+      "shortHash": "32dec3b",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 3,
+      "deletions": 0
+    },
+    {
+      "shortHash": "a372bd7",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: перетаскивание и навигация",
+      "summary": "Исправлена работа раздела «перетаскивание и навигация».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 7,
+      "deletions": 4
+    },
+    {
+      "shortHash": "1177b02",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: чек-листы",
+      "summary": "Расширены возможности раздела «чек-листы».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0033_checklist_item_details.sql",
+        "src/main.rs"
+      ],
+      "additions": 160,
+      "deletions": 14
+    },
+    {
+      "shortHash": "886061a",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: карточки",
+      "summary": "Улучшен интерфейс раздела «карточки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 6,
+      "deletions": 2
+    },
+    {
+      "shortHash": "73b0757",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 4,
+      "deletions": 4
+    },
+    {
+      "shortHash": "419b584",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: перетаскивание и навигация",
+      "summary": "Расширены возможности раздела «перетаскивание и навигация».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 9,
+      "deletions": 4
+    },
+    {
+      "shortHash": "28b1041",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0032_card_public_visibility.sql",
+        "src/main.rs"
+      ],
+      "additions": 57,
+      "deletions": 11
+    },
+    {
+      "shortHash": "30c7385",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "src/main.rs"
+      ],
+      "additions": 392,
+      "deletions": 19
+    },
+    {
+      "shortHash": "c155568",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: медиа и оформление",
+      "summary": "Исправлена работа раздела «медиа и оформление».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 33,
+      "deletions": 9
+    },
+    {
+      "shortHash": "51ae983",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "migrations/0031_discord_comment_avatar_links.sql",
+        "src/main.rs"
+      ],
+      "additions": 61,
+      "deletions": 2
+    },
+    {
+      "shortHash": "105428c",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: карточки",
+      "summary": "Исправлена работа раздела «карточки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 3
+    },
+    {
+      "shortHash": "ab8fc95",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 133,
+      "deletions": 0
+    },
+    {
+      "shortHash": "9280d29",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "migrations/0030_discord_card_threads.sql",
+        "src/main.rs"
+      ],
+      "additions": 182,
+      "deletions": 0
+    },
+    {
+      "shortHash": "40d1a29",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: медиа и оформление",
+      "summary": "Исправлена работа раздела «медиа и оформление».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 3,
+      "deletions": 3
+    },
+    {
+      "shortHash": "144b578",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Исправление: медиа и оформление",
+      "summary": "Исправлена работа раздела «медиа и оформление».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 59,
+      "deletions": 9
+    },
+    {
+      "shortHash": "bf7d799",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "migrations/0029_discord_comment_cursor_index.sql",
+        "src/main.rs"
+      ],
+      "additions": 36,
+      "deletions": 3
+    },
+    {
+      "shortHash": "c4d1606",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 59,
+      "deletions": 2
+    },
+    {
+      "shortHash": "9f790fa",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 27,
+      "deletions": 1
+    },
+    {
+      "shortHash": "4eb2908",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 51,
+      "deletions": 0
+    },
+    {
+      "shortHash": "e145c63",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: перетаскивание и навигация",
+      "summary": "Расширены возможности раздела «перетаскивание и навигация».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 26,
+      "deletions": 2
+    },
+    {
+      "shortHash": "16329c1",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "migrations/0028_card_background_uploads.sql",
+        "src/main.rs"
+      ],
+      "additions": 88,
+      "deletions": 19
+    },
+    {
+      "shortHash": "1079106",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: медиа и оформление",
+      "summary": "Расширены возможности раздела «медиа и оформление».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 4,
+      "deletions": 2
+    },
+    {
+      "shortHash": "fa9ac92",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "src/main.rs"
+      ],
+      "additions": 6,
+      "deletions": 0
+    },
+    {
+      "shortHash": "797ca7d",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 8,
+      "deletions": 6
+    },
+    {
+      "shortHash": "0d06465",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 41,
+      "deletions": 0
+    },
+    {
+      "shortHash": "fa26a33",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 18,
+      "deletions": 1
+    },
+    {
+      "shortHash": "87dc5b5",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "docs/DISCORD_BOT_API.md",
+        "src/main.rs"
+      ],
+      "additions": 27,
+      "deletions": 0
+    },
+    {
+      "shortHash": "609f58b",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "app/page.tsx",
+        "docs/DISCORD_BOT_API.md",
+        "migrations/0027_discord_board_scoped_tokens.sql",
+        "src/main.rs"
+      ],
+      "additions": 57,
+      "deletions": 24
+    },
+    {
+      "shortHash": "58def2d",
+      "date": "2026-08-25",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: метки и роли",
+      "summary": "Расширены возможности раздела «метки и роли».",
+      "files": [
+        "app/globals.css",
+        "migrations/0026_board_scoped_labels.sql",
+        "src/main.rs"
+      ],
+      "additions": 65,
+      "deletions": 17
+    },
+    {
+      "shortHash": "19b7a5d",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: доски и колонки",
+      "summary": "Расширены возможности раздела «доски и колонки».",
+      "files": [
+        "src/main.rs"
+      ],
+      "additions": 3,
+      "deletions": 1
+    },
+    {
+      "shortHash": "3037fef",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: техническая инфраструктура",
+      "summary": "Улучшен интерфейс раздела «техническая инфраструктура».",
+      "files": [
+        ".gitattributes"
+      ],
+      "additions": 12,
+      "deletions": 0
+    },
+    {
+      "shortHash": "a4ffcb8",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: карточки",
+      "summary": "Расширены возможности раздела «карточки».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 2,
+      "deletions": 18
+    },
+    {
+      "shortHash": "db80ad0",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: медиа и оформление",
+      "summary": "Улучшен интерфейс раздела «медиа и оформление».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 10,
+      "deletions": 5
+    },
+    {
+      "shortHash": "754eff6",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Исправление: карточки",
+      "summary": "Исправлена работа раздела «карточки».",
+      "files": [
+        "app/page.tsx",
+        "src/main.rs"
+      ],
+      "additions": 13,
+      "deletions": 17
+    },
+    {
+      "shortHash": "b8647c5",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Улучшение интерфейса: перетаскивание и навигация",
+      "summary": "Улучшен интерфейс раздела «перетаскивание и навигация».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx"
+      ],
+      "additions": 49,
+      "deletions": 6
+    },
+    {
+      "shortHash": "e0d3a3c",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Проверка: проект",
+      "summary": "Добавлены или обновлены проверки раздела «проект».",
+      "files": [
+        "app/page.tsx"
+      ],
+      "additions": 5,
+      "deletions": 1
+    },
+    {
+      "shortHash": "51fae5a",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: интеграция Discord",
+      "summary": "Расширены возможности раздела «интеграция Discord».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "docs/DISCORD_BOT_API.md",
+        "migrations/0025_discord_integration_api.sql",
+        "src/main.rs"
+      ],
+      "additions": 415,
+      "deletions": 7
+    },
+    {
+      "shortHash": "89aed1e",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: проект",
+      "summary": "Расширены возможности раздела «проект».",
+      "files": [
+        "README.md",
+        "app/globals.css",
+        "app/page.tsx",
+        "deploy/ecosystem.config.cjs",
+        "deploy/flowboard-pm2.sh",
+        "deploy/flowboard-tunnel.sh",
+        "docs/DEPLOY_CLOUDFLARE_TUNNEL.md",
+        "docs/DEPLOY_PM2_CLOUDFLARE.md",
+        "migrations/0024_board_background_uploads.sql",
+        "package-lock.json",
+        "package.json",
+        "src/main.rs"
+      ],
+      "additions": 696,
+      "deletions": 51
+    },
+    {
+      "shortHash": "7a74504",
+      "date": "2026-08-24",
+      "author": "Anerson-Auf",
+      "title": "Инициализация: проект",
+      "summary": "Создана начальная версия проекта «проект».",
+      "files": [
+        ".dockerignore",
+        ".env.example",
+        ".gitignore",
+        ".openai/hosting.json",
+        "Cargo.lock",
+        "Cargo.toml",
+        "Dockerfile.api",
+        "Dockerfile.web",
+        "README.md",
+        "app/auth.css",
+        "app/globals.css",
+        "app/layout.tsx",
+        "app/page.tsx",
+        "deploy/ecosystem.config.cjs",
+        "deploy/flowboard-pm2.sh",
+        "deploy/nginx.conf",
+        "docker-compose.production.yml",
+        "docker-compose.yml",
+        "docs/ACCEPTANCE_TEST.md",
+        "docs/CARD_CANVAS_RFC.md",
+        "docs/DEPLOYMENT_GUIDE.md",
+        "docs/DEPLOY_PM2_CLOUDFLARE.md",
+        "docs/DEPLOY_SSH.md",
+        "eslint.config.mjs",
+        "migrations/0001_core.sql",
+        "migrations/0002_identity.sql",
+        "migrations/0003_card_activity.sql",
+        "migrations/0004_profile.sql",
+        "migrations/0005_account_admin.sql",
+        "migrations/0006_workspace_permissions.sql",
+        "migrations/0007_identity_access_rebuild.sql",
+        "migrations/0008_workspace_permission_policy.sql",
+        "migrations/0009_workspace_lifecycle.sql",
+        "migrations/0010_card_diagrams.sql",
+        "migrations/0011_account_deletion_preserves_content.sql",
+        "migrations/0012_project_membership.sql",
+        "migrations/0013_revoke_legacy_project_visibility.sql",
+        "migrations/0014_named_checklists.sql",
+        "migrations/0015_card_cover.sql",
+        "migrations/0016_card_completion.sql"
+      ],
+      "additions": 17585,
+      "deletions": 0
+    }
+  ]
+}
