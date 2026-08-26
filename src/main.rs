@@ -1052,6 +1052,7 @@ struct MyTaskResponse {
     due_at: Option<String>,
     completed_at: Option<String>,
     updated_at: String,
+    reasons: Vec<String>,
 }
 
 #[derive(Serialize, FromRow)]
@@ -5883,12 +5884,31 @@ async fn download_discord_comment_avatar(State(state): State<AppState>, Path((to
 
 async fn list_my_tasks(State(state): State<AppState>, current: CurrentUser) -> ApiResult<Vec<MyTaskResponse>> {
     let tasks = sqlx::query_as::<_, MyTaskResponse>(
-        "SELECT c.id, c.board_id, b.title AS board_title, l.title AS list_title, c.title, c.priority, c.due_at::text AS due_at, c.completed_at::text AS completed_at, c.updated_at::text AS updated_at \
-         FROM card_assignees ca \
-         INNER JOIN cards c ON c.id = ca.card_id \
+        "SELECT c.id, c.board_id, b.title AS board_title, l.title AS list_title, c.title, c.priority, c.due_at::text AS due_at, c.completed_at::text AS completed_at, c.updated_at::text AS updated_at, \
+         ARRAY_REMOVE(ARRAY[ \
+           CASE WHEN EXISTS(SELECT 1 FROM card_assignees ca WHERE ca.card_id = c.id AND ca.user_id = $1) THEN 'Исполнитель' END, \
+           CASE WHEN EXISTS(SELECT 1 FROM card_profile_roles cpr INNER JOIN user_profile_roles upr ON upr.role_id = cpr.role_id WHERE cpr.card_id = c.id AND upr.user_id = $1) THEN 'Роль' END, \
+           CASE WHEN EXISTS(SELECT 1 FROM card_waiting_for cw WHERE cw.card_id = c.id AND cw.user_id = $1) THEN 'Ожидание' END, \
+           CASE WHEN EXISTS(SELECT 1 FROM card_waiting_for cw INNER JOIN user_profile_roles upr ON upr.role_id = cw.role_id WHERE cw.card_id = c.id AND upr.user_id = $1) THEN 'Ожидание роли' END, \
+           CASE WHEN EXISTS(SELECT 1 FROM card_reviewers cr WHERE cr.card_id = c.id AND cr.user_id = $1) THEN 'Проверка' END \
+         ], NULL::text) AS reasons \
+         FROM cards c \
          INNER JOIN boards b ON b.id = c.board_id \
          INNER JOIN lists l ON l.id = c.list_id \
-         WHERE ca.user_id = $1 AND c.archived_at IS NULL AND b.archived_at IS NULL \
+         WHERE c.archived_at IS NULL AND b.archived_at IS NULL \
+           AND ( \
+             EXISTS(SELECT 1 FROM card_assignees ca WHERE ca.card_id = c.id AND ca.user_id = $1) \
+             OR EXISTS(SELECT 1 FROM card_profile_roles cpr INNER JOIN user_profile_roles upr ON upr.role_id = cpr.role_id WHERE cpr.card_id = c.id AND upr.user_id = $1) \
+             OR EXISTS(SELECT 1 FROM card_waiting_for cw WHERE cw.card_id = c.id AND cw.user_id = $1) \
+             OR EXISTS(SELECT 1 FROM card_waiting_for cw INNER JOIN user_profile_roles upr ON upr.role_id = cw.role_id WHERE cw.card_id = c.id AND upr.user_id = $1) \
+             OR EXISTS(SELECT 1 FROM card_reviewers cr WHERE cr.card_id = c.id AND cr.user_id = $1) \
+           ) \
+           AND ( \
+             (b.visibility = 'public' AND c.is_public) \
+             OR EXISTS(SELECT 1 FROM users u WHERE u.id = $1 AND u.is_system_owner AND u.disabled_at IS NULL) \
+             OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $1 AND wm.role IN ('owner', 'full_access')) \
+             OR EXISTS(SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $1 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END) \
+           ) \
          ORDER BY c.completed_at IS NULL DESC, c.due_at NULLS LAST, c.updated_at DESC \
          LIMIT 300",
     )
