@@ -114,6 +114,7 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
     void savePosition(cardId, next);
   };
   const chooseRelation = (id: string) => { const item = relations.find((relation) => relation.id === id); setSelectedId(id); setNote(item?.note ?? ''); };
+  const dismissMenus = () => { setCanvasMenu(null); setSourceMenu(null); setTargetMenu(null); setTypeMenu(null); setRelationMenu(null); setDraft(null); setDraftNote(''); };
   const reset = () => { setZoom(1); setPan(INITIAL_PAN); };
   const zoomAt = (x: number, y: number, next: number) => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -127,6 +128,7 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
     const viewport = viewportRef.current;
     if (!viewport) return;
     const preventPageScroll = (event: WheelEvent) => {
+      if (event.target instanceof Element && event.target.closest('.dependency-menu')) return;
       event.preventDefault();
       event.stopPropagation();
       const next = Math.min(1.8, Math.max(.38, zoom * (event.deltaY < 0 ? 1.12 : .89)));
@@ -135,6 +137,15 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
     viewport.addEventListener('wheel', preventPageScroll, { passive: false });
     return () => viewport.removeEventListener('wheel', preventPageScroll);
   }, [zoom]); // zoomAt deliberately follows the current zoom level.
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      dismissMenus();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  });
 
   const create = async (sourceId: string, targetId: string, relationType: RelationType, targetPoint?: Point) => {
     if (targetPoint) ensurePosition(targetId, targetPoint);
@@ -201,7 +212,12 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  return <section className="dependency-graph" aria-label="Граф зависимостей карточек">
+  return <section className="dependency-graph" aria-label="Граф зависимостей карточек" onPointerDownCapture={(event) => {
+    if (event.button !== 0 || !(canvasMenu || sourceMenu || targetMenu || typeMenu || relationMenu)) return;
+    if (event.target instanceof Element && event.target.closest('.dependency-menu, .dependency-node, .dependency-line, .dependency-output')) return;
+    dismissMenus();
+    event.stopPropagation();
+  }}>
     <header className="dependency-graph-header"><div><p className="eyebrow">СВЯЗИ КАРТОЧЕК</p><h2>Зависимости</h2><p>Свободное поле: расположение карточек не меняется при создании связи. ПКМ по пустому месту — выберите стартовую карточку, протяните связь и выберите целевую.</p></div><div className="dependency-header-actions"><button type="button" className="dependency-reset" onClick={reset}>↺ Исходный вид</button></div></header>
     <div className="dependency-legend">{TYPE_LIST.map((type) => <span key={type} className={`dependency-legend-item ${meta[type].className}`}><i />{meta[type].label}</span>)}</div>
     {selected && <aside className="dependency-selected-relation"><div><span><b>{byId.get(selected.source_card_id)?.title}</b> · {meta[selected.relation_type].label.toLowerCase()} · <b>{byId.get(selected.target_card_id)?.title}</b></span>{canEdit ? <label>Пояснение<textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} placeholder="Например, ждём API-метод" /></label> : selected.note && <p>{selected.note}</p>}</div>{canEdit && <div><button type="button" disabled={saving || note === selected.note} onClick={() => void saveNote()}>Сохранить</button><button type="button" disabled={saving} onClick={() => void remove()}>Удалить связь</button></div>}</aside>}
