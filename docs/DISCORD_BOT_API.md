@@ -36,7 +36,7 @@ Use one of these values as `list_id` when creating a card.
 GET /v1/integrations/discord/cards
 ```
 
-Returns active cards from this token's board only. Each entry contains `id`, `list_id`, `title`, `description`, and `priority` (`0`–`5`). Use the card `id` to retrieve or append its conversation.
+Returns active cards from this token's board only. Each entry contains `id`, `list_id`, `title`, `description`, `priority` (`0`–`5`), `is_completed`, and `completed_at`. Use `is_completed` for an inexpensive periodic completion check and the card `id` to retrieve or append its conversation.
 
 ## Manage labels
 
@@ -162,7 +162,7 @@ For the reverse direction, poll a durable cursor:
 GET /v1/integrations/discord/cards/sync?after=0&limit=100
 ```
 
-Each item contains `event_id`, `event_kind` (`thread_linked`, `archived`, or `restored`), `thread_id`, and current card state. Store the highest `event_id` only after Discord accepted the corresponding archive/unarchive action, then request `after={that-id}`. Thus a restore in Flowboard makes the bot reopen its thread without relying on an in-memory webhook.
+Each item contains `event_id`, `event_kind` (`thread_linked`, `archived`, `restored`, `completed`, or `reopened`), `thread_id`, and current card state. Store the highest `event_id` only after Discord accepted the corresponding action, then request `after={that-id}`. Thus a restore or completion in Flowboard reaches the bot without relying on an in-memory webhook.
 
 ## Create (or safely repeat) a suggestion card
 

@@ -1113,6 +1113,8 @@ struct DiscordCardListResponse {
     title: String,
     description: String,
     priority: i16,
+    is_completed: bool,
+    completed_at: Option<String>,
 }
 
 #[derive(Serialize, FromRow)]
@@ -4902,7 +4904,7 @@ async fn remove_discord_card_label(State(state): State<AppState>, integration: D
 }
 
 async fn list_discord_board_cards(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<DiscordCardListResponse>> {
-    let cards = sqlx::query_as::<_, DiscordCardListResponse>("SELECT id, list_id, title, description, priority FROM cards WHERE board_id = $1 AND archived_at IS NULL ORDER BY list_id, position")
+    let cards = sqlx::query_as::<_, DiscordCardListResponse>("SELECT id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at FROM cards WHERE board_id = $1 AND archived_at IS NULL ORDER BY list_id, position")
         .bind(integration.board_id)
         .fetch_all(database(&state)?)
         .await
@@ -6237,6 +6239,7 @@ async fn update_card_completion(State(state): State<AppState>, current: CurrentU
         .bind(request.is_completed).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
     record_card_activity(pool, card_id, current.id, if request.is_completed { "Задача выполнена" } else { "Задача возвращена в работу" }, "").await;
+    record_discord_card_thread_event(pool, card_id, if request.is_completed { "completed" } else { "reopened" }).await;
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
