@@ -33,6 +33,7 @@ struct AppState {
     external_http: reqwest::Client,
     events: broadcast::Sender<()>,
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
+    board_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, BoardPresence>>>>,
     freeform_live_events: broadcast::Sender<FreeformLiveEvent>,
     auth_rate_limiter: RateLimiter,
     trust_proxy: bool,
@@ -369,6 +370,30 @@ struct UpdateBoardBackgroundRequest {
 struct FreeformLiveBoard {
     cursors: HashMap<Uuid, FreeformCursorPresence>,
     pings: Vec<FreeformPingPresence>,
+}
+
+#[derive(Clone)]
+struct BoardPresence {
+    card_id: Option<Uuid>,
+    editing_description: bool,
+    last_seen: Instant,
+}
+
+#[derive(Deserialize)]
+struct UpdateBoardPresenceRequest {
+    #[serde(default)]
+    card_id: Option<Uuid>,
+    #[serde(default)]
+    editing_description: bool,
+}
+
+#[derive(Serialize)]
+struct BoardPresenceEntry {
+    user_id: Uuid,
+    username: String,
+    avatar_url: Option<String>,
+    card_id: Option<Uuid>,
+    editing_description: bool,
 }
 
 #[derive(Clone)]
@@ -1341,6 +1366,7 @@ async fn main() {
         .route("/v1/boards/{board_id}/freeform/cards/{card_id}", put(update_board_freeform_card_position).delete(clear_board_freeform_card_position))
         .route("/v1/boards/{board_id}/freeform/live", get(get_freeform_live).post(update_freeform_live))
         .route("/v1/boards/{board_id}/freeform/live/ws", get(freeform_live_websocket))
+        .route("/v1/boards/{board_id}/presence", get(get_board_presence).put(update_board_presence))
         .route("/v1/boards/{board_id}/freeform/drawing", get(get_board_freeform_drawing).put(replace_board_freeform_drawing))
         .route("/v1/boards/{board_id}/background", put(update_board_background))
         .route("/v1/boards/{board_id}/background/file", get(download_board_background).post(upload_board_background))
@@ -1418,7 +1444,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -2828,6 +2854,38 @@ async fn freeform_live_snapshot(state: &AppState, board_id: Uuid) -> ApiResult<F
 async fn get_freeform_live(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<FreeformLiveResponse> {
     ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
     freeform_live_snapshot(&state, board_id).await
+}
+
+async fn board_presence_snapshot(state: &AppState, board_id: Uuid) -> ApiResult<Vec<BoardPresenceEntry>> {
+    let active = {
+        let now = Instant::now();
+        let mut boards = state.board_presence.lock().await;
+        let board = boards.entry(board_id).or_default();
+        board.retain(|_, presence| now.duration_since(presence.last_seen) <= Duration::from_secs(35));
+        board.iter().map(|(user_id, presence)| (*user_id, presence.clone())).collect::<Vec<_>>()
+    };
+    if active.is_empty() { return Ok(Json(Vec::new())); }
+    let ids = active.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    let accounts = sqlx::query_as::<_, FreeformLiveAccount>("SELECT id, username, CASE WHEN avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || id::text END AS avatar_url FROM users WHERE id = ANY($1) AND disabled_at IS NULL")
+        .bind(&ids).fetch_all(database(state)?).await.map_err(ApiError::internal)?;
+    let accounts = accounts.into_iter().map(|account| (account.id, account)).collect::<HashMap<_, _>>();
+    Ok(Json(active.into_iter().filter_map(|(user_id, presence)| accounts.get(&user_id).map(|account| BoardPresenceEntry { user_id, username: account.username.clone(), avatar_url: account.avatar_url.clone(), card_id: presence.card_id, editing_description: presence.editing_description })).collect()))
+}
+
+async fn get_board_presence(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<BoardPresenceEntry>> {
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    board_presence_snapshot(&state, board_id).await
+}
+
+async fn update_board_presence(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardPresenceRequest>) -> ApiResult<Vec<BoardPresenceEntry>> {
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    if let Some(card_id) = request.card_id {
+        let belongs_to_board = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL)")
+            .bind(card_id).bind(board_id).fetch_one(database(&state)?).await.map_err(ApiError::internal)?;
+        if !belongs_to_board { return Err(ApiError::bad_request("The active card does not belong to this board.")); }
+    }
+    state.board_presence.lock().await.entry(board_id).or_default().insert(current.id, BoardPresence { card_id: request.card_id, editing_description: request.editing_description, last_seen: Instant::now() });
+    board_presence_snapshot(&state, board_id).await
 }
 
 async fn record_freeform_live_update(state: &AppState, board_id: Uuid, current: CurrentUser, x: i32, y: i32, ping: bool) -> Result<FreeformLiveEvent, ApiError> {
