@@ -1035,6 +1035,7 @@ export default function Home() {
   // Detail requests are asynchronous. Keep their older payload from
   // overwriting an optimistic cover update made in the open card.
   const cardCoverRevisionRef = useRef<Record<string, number>>({});
+  const pendingCardCoverRef = useRef<Record<string, { attachmentId?: string; mode: 'full' | 'top'; requestId: number }>>({});
   const cardAttachmentRevisionRef = useRef<Record<string, number>>({});
   const attachmentUploadInputRef = useRef<HTMLInputElement | null>(null);
   // Realtime refreshes may arrive while an attachment upload is still being
@@ -1400,7 +1401,10 @@ export default function Home() {
         const cover = detail.attachments.find((attachment) => attachment.id === detail.cover_attachment_id);
         const cardMeta = { checklist: checklistItems.length ? `${checklistItems.filter((item) => item.is_completed).length}/${checklistItems.length}` : undefined, comments: detail.comments.length || undefined, ...(hasNewerAttachmentChange ? {} : { attachments: detail.attachments.length || undefined }), hasUnreadComments: detail.comments.some((comment) => Boolean(comment.parent_comment_id) && comment.is_unread) };
         const coverMeta = { coverAttachmentId: detail.cover_attachment_id ?? undefined, coverMode: detail.cover_mode, coverUrl: cover?.url, coverMediaType: cover?.media_type, backgroundImageUrl: detail.background_image_url ?? undefined };
-        const hasNewerCoverChange = (cardCoverRevisionRef.current[selectedCardId] ?? 0) !== coverRevisionAtRequest;
+        const pendingCover = pendingCardCoverRef.current[selectedCardId];
+        const serverMatchesPendingCover = !pendingCover || (pendingCover.attachmentId ?? null) === (detail.cover_attachment_id ?? null) && pendingCover.mode === detail.cover_mode;
+        if (pendingCover && serverMatchesPendingCover) delete pendingCardCoverRef.current[selectedCardId];
+        const hasNewerCoverChange = !serverMatchesPendingCover || (cardCoverRevisionRef.current[selectedCardId] ?? 0) !== coverRevisionAtRequest;
         const mergedCardMeta = hasNewerCoverChange ? cardMeta : { ...cardMeta, ...coverMeta };
         if (!hasNewerAttachmentChange && !hasNewerCoverChange) setCoverModeDraft(detail.cover_mode);
         // An attachment upload changes card presentation too (cover/background
@@ -3646,14 +3650,16 @@ export default function Home() {
   function updateCardCover(attachment: Attachment | null, mode = coverModeDraft) {
     if (!selected || (attachment && !/^(image|video)\//.test(attachment.media_type))) return;
     const cardId = String(selected.id);
-    cardCoverRevisionRef.current[cardId] = (cardCoverRevisionRef.current[cardId] ?? 0) + 1;
+    const requestId = (cardCoverRevisionRef.current[cardId] ?? 0) + 1;
+    cardCoverRevisionRef.current[cardId] = requestId;
+    pendingCardCoverRef.current[cardId] = { attachmentId: attachment?.id, mode, requestId };
     const patch = attachment ? { coverAttachmentId: attachment.id, coverUrl: attachment.url, coverMediaType: attachment.media_type, coverMode: mode } : { coverAttachmentId: undefined, coverUrl: undefined, coverMediaType: undefined, coverMode: 'full' as const };
     updateSelectedCard(patch);
     setCoverModeDraft(mode);
     if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     void fetch(`${API_URL}/v1/cards/${selected.id}/cover`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attachment_id: attachment?.id ?? null, mode }) })
       .then((response) => { if (!response.ok) throw new Error('cover save failed'); setCardDetailRevision((current) => current + 1); showToast(attachment ? 'Обложка установлена' : 'Обложка снята'); })
-      .catch(() => { setCardDetailRevision((current) => current + 1); showToast('Не удалось сохранить обложку'); });
+      .catch(() => { if (pendingCardCoverRef.current[cardId]?.requestId === requestId) delete pendingCardCoverRef.current[cardId]; setCardDetailRevision((current) => current + 1); showToast('Не удалось сохранить обложку'); });
   }
   function clearCardBackground() {
     if (!selected) return;
