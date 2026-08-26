@@ -141,7 +141,9 @@ export default function CommandPalette({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      // `key` depends on the active keyboard layout (Russian layout yields
+      // "л" here), while `code` is the physical Ctrl+K key the UI promises.
+      if ((event.ctrlKey || event.metaKey) && (event.code === 'KeyK' || event.key.toLowerCase() === 'k')) {
         event.preventDefault();
         if (isOpen) close(); else open();
         return;
@@ -161,8 +163,9 @@ export default function CommandPalette({
         runAction(visibleActions[activeIndex]);
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    // Capture it before board/card hotkeys get a chance to stop propagation.
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [activeIndex, close, isOpen, open, runAction, visibleActions]);
 
   useEffect(() => {
