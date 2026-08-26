@@ -495,6 +495,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-priority-editor button:has(.priority-signal) { min-width: 43px; }
 .card-priority-editor .priority-signal { transform: scale(1.12); transform-origin: center; }
 .description-section .section-heading h3 { font-size: 17px; }
+.card-additional-options { margin-top: 17px; border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent); }.card-additional-options > button { display: inline-flex; align-items: center; gap: 7px; padding: 11px 0 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 750; }.card-additional-options > button:hover { color: var(--primary); }.card-additional-options > button span { color: var(--primary); font-size: 16px; transition: transform .18s ease; }.card-additional-options > button.open span { transform: rotate(180deg); }.card-additional-options > div { animation: card-additional-options-in .18s ease both; }@keyframes card-additional-options-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 .markdown-editable-description .markdown-description, .card-description-input { font-size: 14px; line-height: 1.65; }
 
 /* A workspace cover is artwork for the whole card, so never crop it to fill. */
