@@ -544,7 +544,7 @@ function MentionTextarea({ value, onValueChange, members, className, placeholder
   return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); else onSubmitShortcut(); } }} onBlur={() => { setQuery(null); setCommandQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); insertCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
 }
 
-type InlineStickerComposerHandle = { insertSticker: (sticker: DraftSticker) => void };
+type InlineStickerComposerHandle = { insertSticker: (sticker: DraftSticker) => void; getValue: () => string; clear: () => void };
 type InlineStickerComposerProps = {
   value: string;
   onValueChange: (value: string) => void;
@@ -556,7 +556,7 @@ type InlineStickerComposerProps = {
   onDragOver?: (event: ReactDragEvent<HTMLDivElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLDivElement>) => void;
   onPaste?: (event: ReactClipboardEvent<HTMLDivElement>) => void;
-  onSubmitShortcut?: () => void;
+  onSubmitShortcut?: (value: string) => void;
   commands?: { command: string; label: string }[];
 };
 
@@ -643,6 +643,8 @@ function renderComposerText(root: HTMLElement, value: string) {
 const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStickerComposerProps>(function InlineStickerComposer({ value, onValueChange, members, className, placeholder, ariaLabel, disabled, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }, ref) {
   const composerRef = useRef<HTMLDivElement | null>(null);
   const pendingCaret = useRef<number | null>(null);
+  const localValueRef = useRef(value);
+  const delayedValueTimerRef = useRef<number | null>(null);
   const [query, setQuery] = useState<string | null>(null);
   const [commandQuery, setCommandQuery] = useState<string | null>(null);
   const findQuery = (nextValue: string, caret: number) => {
@@ -654,13 +656,32 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
   };
   const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().startsWith(query)).slice(0, 7);
   const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
-  const updateValue = (next: string, caret: number) => { pendingCaret.current = caret; onValueChange(next); findQuery(next, caret); };
+  const flushValue = () => {
+    if (delayedValueTimerRef.current !== null) {
+      window.clearTimeout(delayedValueTimerRef.current);
+      delayedValueTimerRef.current = null;
+    }
+    onValueChange(localValueRef.current);
+  };
+  const updateValue = (next: string, caret: number) => {
+    pendingCaret.current = caret;
+    localValueRef.current = next;
+    if (delayedValueTimerRef.current !== null) window.clearTimeout(delayedValueTimerRef.current);
+    // The board may contain hundreds of cards. Keep typing local to this
+    // lightweight composer and synchronise the parent after a short pause.
+    delayedValueTimerRef.current = window.setTimeout(flushValue, 90);
+    findQuery(next, caret);
+  };
   useEffect(() => {
     const composer = composerRef.current;
     if (!composer) return;
-    if (composerText(composer) !== value) renderComposerText(composer, value);
+    if (value !== localValueRef.current) {
+      localValueRef.current = value;
+      if (composerText(composer) !== value) renderComposerText(composer, value);
+    }
     if (pendingCaret.current !== null) { placeComposerCaret(composer, pendingCaret.current); pendingCaret.current = null; }
   }, [value]);
+  useEffect(() => () => { if (delayedValueTimerRef.current !== null) window.clearTimeout(delayedValueTimerRef.current); }, []);
   useImperativeHandle(ref, () => ({
     insertSticker(sticker) {
       const composer = composerRef.current;
@@ -668,6 +689,14 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
       const caret = composer ? composerSelectionOffset(composer) : current.length;
       updateValue(`${current.slice(0, caret)}${sticker.body}${current.slice(caret)}`, caret + sticker.body.length);
       window.requestAnimationFrame(() => composerRef.current?.focus());
+    },
+    getValue() { return composerRef.current ? composerText(composerRef.current) : localValueRef.current; },
+    clear() {
+      if (delayedValueTimerRef.current !== null) window.clearTimeout(delayedValueTimerRef.current);
+      delayedValueTimerRef.current = null;
+      localValueRef.current = '';
+      pendingCaret.current = null;
+      if (composerRef.current) renderComposerText(composerRef.current, '');
     },
   }), [updateValue, value]);
   const replaceMention = (member: Member) => {
@@ -695,7 +724,7 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     updateValue(`${current.slice(0, start)}${current.slice(start + found[1].length)}`, start);
     return true;
   };
-  return <div className="mention-textarea inline-sticker-composer-wrap"><div ref={composerRef} className={`inline-sticker-composer ${className ?? ''}`} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-multiline="true" aria-label={ariaLabel} data-placeholder={placeholder} onInput={(event) => { const composer = event.currentTarget; const next = composerText(composer); updateValue(next, composerSelectionOffset(composer)); }} onClick={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyUp={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); return; } if (event.key === 'Backspace' && removeStickerNearCaret('backward')) { event.preventDefault(); return; } if (event.key === 'Delete' && removeStickerNearCaret('forward')) { event.preventDefault(); return; } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); return; } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); else onSubmitShortcut(); } }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} />{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); replaceMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); replaceCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
+  return <div className="mention-textarea inline-sticker-composer-wrap"><div ref={composerRef} className={`inline-sticker-composer ${className ?? ''}`} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-multiline="true" aria-label={ariaLabel} data-placeholder={placeholder} onInput={(event) => { const composer = event.currentTarget; const next = composerText(composer); updateValue(next, composerSelectionOffset(composer)); }} onClick={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyUp={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); return; } if (event.key === 'Backspace' && removeStickerNearCaret('backward')) { event.preventDefault(); return; } if (event.key === 'Delete' && removeStickerNearCaret('forward')) { event.preventDefault(); return; } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); return; } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); else { flushValue(); onSubmitShortcut(composerText(event.currentTarget)); } } }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} />{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); replaceMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); replaceCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
 });
 
 function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramElement) {
@@ -798,6 +827,7 @@ export default function Home() {
   const [toast, setToast] = useState('');
   const [query, setQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [labelFilterIds, setLabelFilterIds] = useState<string[]>([]);
   const [milestoneFilterId, setMilestoneFilterId] = useState<string | null>(null);
   const [cardSort, setCardSort] = useState<CardSort>('manual');
   const [boardContentMode, setBoardContentMode] = useState<BoardContentMode>('columns');
@@ -1153,6 +1183,7 @@ export default function Home() {
       if (focusCardId && !focusRelatedCardIds.includes(String(card.id))) return false;
       if (!card.title.toLowerCase().includes(query.toLowerCase())) return false;
       if (milestoneFilterId && card.milestone?.id !== milestoneFilterId) return false;
+      if (labelFilterIds.length && !labelFilterIds.some((labelId) => card.labels.some((label) => label.id === labelId))) return false;
       if (filterMode === 'assigned') return card.members.some((member) => member.id === currentMember.id);
       if (filterMode === 'my_roles') return card.roles.some((role) => myProfileRoleIds.includes(role.id));
       if (filterMode === 'due') return Boolean(card.dueAt);
@@ -1168,7 +1199,7 @@ export default function Home() {
     return { ...column, cards: [...cards].sort((left, right) => cardSort === 'priority'
       ? (right.priority ?? 0) - (left.priority ?? 0)
       : activityTime(right) - activityTime(left)) };
-  }), [cardSort, columns, currentMember.id, filterMode, focusCardId, focusRelatedCardIds, milestoneFilterId, myProfileRoleIds, query]);
+  }), [cardSort, columns, currentMember.id, filterMode, focusCardId, focusRelatedCardIds, labelFilterIds, milestoneFilterId, myProfileRoleIds, query]);
 
   const memberLanes = useMemo(() => {
     const cards = visibleColumns.flatMap((column) => column.cards);
@@ -3258,21 +3289,22 @@ export default function Home() {
         .catch(() => showToast('Удаление пункта не сохранено'));
     }
   }
-  function addComment(event?: FormEvent) {
+  function addComment(event?: FormEvent, draftOverride?: string) {
     event?.preventDefault();
-    const body = commentDraft.trim();
+    const body = (draftOverride ?? commentComposerRef.current?.getValue() ?? commentDraft).trim();
     if (!selected || selected.archived || !body || isSendingComment) return;
     if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) {
       const comment: Comment = { id: `local-comment-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: null, created_at: new Date().toISOString(), reactions: [] };
       setComments((current) => [comment, ...current]);
       if (isParkingCardId(selected.id)) updateParkingCard(selected.id, (card) => ({ ...card, comments: [{ id: String(comment.id), body, authorName: 'Вы', createdAt: comment.created_at ?? new Date().toISOString() }, ...(card.comments ?? [])] }));
+      commentComposerRef.current?.clear();
       setCommentDraft('');
       return;
     }
     setSendingComment(true);
     void fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
       .then(async (response) => { if (!response.ok) throw new Error('comment save failed'); return response.json() as Promise<Comment>; })
-      .then((comment) => { setComments((current) => [comment, ...current]); setCommentDraft(''); })
+      .then((comment) => { setComments((current) => [comment, ...current]); commentComposerRef.current?.clear(); setCommentDraft(''); })
       .catch(() => showToast('Не удалось отправить комментарий'))
       .finally(() => setSendingComment(false));
   }
@@ -3296,15 +3328,16 @@ export default function Home() {
       .catch(() => { setThreadRoot(null); showToast('Не удалось загрузить тред'); })
       .finally(() => setThreadLoading(false));
   }
-  function addThreadComment(event?: FormEvent) {
+  function addThreadComment(event?: FormEvent, draftOverride?: string) {
     event?.preventDefault();
-    const body = threadDraft.trim();
+    const body = (draftOverride ?? threadComposerRef.current?.getValue() ?? threadDraft).trim();
     if (!selected || !threadRoot || typeof threadRoot.id !== 'string' || !body || isSendingThread) return;
     const parentCommentId = threadRoot.id;
     const localComment: Comment = { id: `local-thread-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: parentCommentId, created_at: new Date().toISOString() };
     if (persistence !== 'connected' || typeof selected.id !== 'string') {
       setThreadComments((current) => [...current, localComment]);
       setComments((current) => [...current, localComment]);
+      threadComposerRef.current?.clear();
       setThreadDraft('');
       return;
     }
@@ -3316,6 +3349,7 @@ export default function Home() {
       .then((comment) => {
         setThreadComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
         setComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
+        threadComposerRef.current?.clear();
         setThreadDraft('');
       })
       .catch(() => {
@@ -4296,8 +4330,8 @@ export default function Home() {
           <SegmentedToggle className="board-segmented-toggle" label="Представление задач" options={boardContentToggleOptions} value={boardContentMode} onChange={(next) => setBoardContentMode(next as BoardContentMode)} />
           {!isPublicViewer && boardContentMode === 'columns' && <SegmentedToggle className="board-segmented-toggle" label="Режим расположения колонок" options={boardViewToggleOptions} value={boardViewMode} onChange={(next) => changeBoardViewMode(next as BoardViewMode)} />}
           <div className="filter-control">
-            <button className={`board-icon-button ${filterMode !== 'all' || cardSort !== 'manual' ? 'active-filter' : ''}`} type="button" title="Фильтры и сортировка" aria-label="Фильтры и сортировка" aria-expanded={isFilterOpen} onClick={() => setFilterOpen((current) => !current)}><BoardToolbarIcon type="filter" /></button>
-          {isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['my_roles', 'По моим ролям'], ['due', 'С дедлайном'], ['overdue', 'Просроченные'], ['unread', 'Непрочитанное и голосования']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}<p className="filter-popover-section">Порядок в колонках</p>{([['manual', 'Как на доске'], ['priority', 'Сначала важные'], ['activity', 'Недавно обновлённые']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => setCardSort(mode)}>{label}{cardSort === mode && <b>✓</b>}</button>)}</div>}
+            <button className={`board-icon-button ${filterMode !== 'all' || cardSort !== 'manual' || labelFilterIds.length ? 'active-filter' : ''}`} type="button" title="Фильтры и сортировка" aria-label="Фильтры и сортировка" aria-expanded={isFilterOpen} onClick={() => setFilterOpen((current) => !current)}><BoardToolbarIcon type="filter" /></button>
+          {isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['my_roles', 'По моим ролям'], ['due', 'С дедлайном'], ['overdue', 'Просроченные'], ['unread', 'Непрочитанное и голосования']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}{boardLabels.length > 0 && <><p className="filter-popover-section">Метки</p><div className="label-filter-options">{boardLabels.map((label) => <button key={label.id} type="button" className={labelFilterIds.includes(label.id) ? 'active' : ''} onClick={() => setLabelFilterIds((current) => current.includes(label.id) ? current.filter((id) => id !== label.id) : [...current, label.id])}><LabelChip label={label} />{labelFilterIds.includes(label.id) && <b>✓</b>}</button>)}</div>{labelFilterIds.length > 0 && <button type="button" className="text-action label-filter-reset" onClick={() => setLabelFilterIds([])}>Сбросить метки</button>}</>}<p className="filter-popover-section">Порядок в колонках</p>{([['manual', 'Как на доске'], ['priority', 'Сначала важные'], ['activity', 'Недавно обновлённые']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => setCardSort(mode)}>{label}{cardSort === mode && <b>✓</b>}</button>)}</div>}
           </div>
           {renderBoardLabelsControl()}
           {renderMilestonesControl()}
