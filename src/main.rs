@@ -568,6 +568,14 @@ struct UpdateCardRequest {
     title: Option<String>,
     description: Option<String>,
     priority: Option<i16>,
+    #[serde(default)]
+    start_at: Option<Option<String>>,
+}
+
+#[derive(Deserialize)]
+struct CreateCardRelationRequest {
+    target_card_id: Uuid,
+    relation_type: String,
 }
 
 #[derive(Deserialize)]
@@ -826,6 +834,27 @@ struct CardResponse {
     list_id: Uuid,
     title: String,
     description: String,
+    start_at: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct CardRelationResponse {
+    id: Uuid,
+    relation_type: String,
+    direction: String,
+    other_card_id: Uuid,
+    other_card_title: String,
+    other_card_list_id: Uuid,
+    other_card_completed_at: Option<String>,
+    created_at: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct CardDescriptionVersionResponse {
+    id: Uuid,
+    description: String,
+    author_name: String,
+    created_at: String,
 }
 
 #[derive(Serialize, FromRow)]
@@ -907,6 +936,7 @@ struct BoardCardRow {
     last_activity_at: Option<String>,
     is_public: bool,
     background_image_url: Option<String>,
+    start_at: Option<String>,
     due_at: Option<String>,
     cover_attachment_id: Option<Uuid>,
     cover_url: Option<String>,
@@ -998,6 +1028,7 @@ struct BoardCard {
     last_activity_at: Option<String>,
     is_public: bool,
     background_image_url: Option<String>,
+    start_at: Option<String>,
     due_at: Option<String>,
     cover_attachment_id: Option<Uuid>,
     cover_url: Option<String>,
@@ -1343,6 +1374,10 @@ async fn main() {
         .route("/v1/cards/{card_id}/background", put(update_card_background))
         .route("/v1/cards/{card_id}/background/file", get(download_card_background).post(upload_card_background))
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
+        .route("/v1/cards/{card_id}/relations", get(list_card_relations).post(create_card_relation))
+        .route("/v1/cards/{card_id}/relations/{relation_id}", axum::routing::delete(delete_card_relation))
+        .route("/v1/cards/{card_id}/description-versions", get(list_card_description_versions))
+        .route("/v1/cards/{card_id}/description-versions/{version_id}/restore", post(restore_card_description_version))
         .route("/v1/cards/{card_id}/public-visibility", patch(update_card_public_visibility))
         .route("/v1/cards/{card_id}/details", get(get_card_detail))
         .route("/v1/cards/{card_id}/watch", put(watch_card).delete(unwatch_card))
@@ -2565,7 +2600,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.start_at::text AS start_at, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -2619,6 +2654,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         last_activity_at: card.last_activity_at,
         is_public: card.is_public,
         background_image_url: card.background_image_url,
+        start_at: card.start_at,
         due_at: card.due_at,
         cover_attachment_id: card.cover_attachment_id,
         cover_url: card.cover_url,
@@ -4147,7 +4183,7 @@ async fn get_comment_thread(State(state): State<AppState>, current: Viewer, Path
 async fn create_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Json(request): Json<CreateDiscordCardRequest>) -> ApiResult<CardResponse> {
     let pool = database(&state)?;
     let source_id = valid_text(&request.source_id, "source_id", 128)?.to_owned();
-    if let Some(card) = sqlx::query_as::<_, CardResponse>("SELECT id, list_id, title, description FROM cards WHERE discord_integration_id = $1 AND discord_source_id = $2")
+    if let Some(card) = sqlx::query_as::<_, CardResponse>("SELECT id, list_id, title, description, start_at::text AS start_at FROM cards WHERE discord_integration_id = $1 AND discord_source_id = $2")
         .bind(integration.id).bind(&source_id).fetch_optional(pool).await.map_err(ApiError::internal)? {
         return Ok(Json(card));
     }
@@ -4157,13 +4193,13 @@ async fn create_discord_card(State(state): State<AppState>, integration: Discord
     let target_list_id = request.list_id.or(integration.default_list_id)
         .ok_or_else(|| ApiError::bad_request("list_id is required because this token has no default list."))?;
     let card = sqlx::query_as::<_, CardResponse>(
-        "INSERT INTO cards (id, board_id, list_id, title, description, position, created_by, discord_integration_id, discord_source_id) SELECT $1, l.board_id, l.id, $2, $3, COALESCE((SELECT MAX(position) FROM cards WHERE list_id = l.id), 0) + 1000, NULL, $4, $5 FROM lists l INNER JOIN boards b ON b.id = l.board_id WHERE l.id = $6 AND l.board_id = $7 AND b.archived_at IS NULL RETURNING id, list_id, title, description",
+        "INSERT INTO cards (id, board_id, list_id, title, description, position, created_by, discord_integration_id, discord_source_id) SELECT $1, l.board_id, l.id, $2, $3, COALESCE((SELECT MAX(position) FROM cards WHERE list_id = l.id), 0) + 1000, NULL, $4, $5 FROM lists l INNER JOIN boards b ON b.id = l.board_id WHERE l.id = $6 AND l.board_id = $7 AND b.archived_at IS NULL RETURNING id, list_id, title, description, start_at::text AS start_at",
     )
     .bind(Uuid::new_v4()).bind(title).bind(description).bind(integration.id).bind(&source_id).bind(target_list_id).bind(integration.board_id)
     .fetch_optional(pool).await.map_err(ApiError::internal)?;
     let card = match card {
         Some(card) => card,
-        None => sqlx::query_as::<_, CardResponse>("SELECT id, list_id, title, description FROM cards WHERE discord_integration_id = $1 AND discord_source_id = $2")
+        None => sqlx::query_as::<_, CardResponse>("SELECT id, list_id, title, description, start_at::text AS start_at FROM cards WHERE discord_integration_id = $1 AND discord_source_id = $2")
             .bind(integration.id).bind(&source_id).fetch_optional(pool).await.map_err(ApiError::internal)?
             .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "discord_target_not_found", "Discord target list is no longer available.".to_owned()))?,
     };
@@ -4380,6 +4416,7 @@ async fn set_discord_card_completion(State(state): State<AppState>, integration:
     let pool = database(&state)?;
     let current = load_discord_card_status(pool, integration, card_id).await?;
     if current.is_completed == request.is_completed { return Ok(Json(current)); }
+    if request.is_completed { ensure_card_has_no_active_blockers(pool, card_id).await?; }
     let card = sqlx::query_as::<_, DiscordCardStatusResponse>("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = $2 AND board_id = $3 AND archived_at IS NULL RETURNING id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at")
         .bind(request.is_completed).bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
@@ -4406,7 +4443,7 @@ async fn move_discord_card(State(state): State<AppState>, integration: DiscordIn
     let pool = database(&state)?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
     let card = sqlx::query_as::<_, CardResponse>(
-        "WITH source AS (SELECT id, board_id FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL FOR UPDATE), target AS (SELECT id, board_id FROM lists WHERE id = $3 FOR UPDATE), anchor AS (SELECT c.position FROM cards c, target, source WHERE c.id = $4 AND c.list_id = target.id AND c.id <> source.id FOR UPDATE), previous AS (SELECT c.position FROM cards c, target, source WHERE c.list_id = target.id AND c.id <> source.id AND c.position < (SELECT position FROM anchor) ORDER BY c.position DESC LIMIT 1) UPDATE cards c SET list_id = target.id, position = CASE WHEN $4 IS NULL THEN (SELECT COALESCE(MAX(position), 0) + 1000 FROM cards WHERE list_id = target.id AND id <> c.id) WHEN (SELECT position FROM previous) IS NULL THEN (SELECT position - 1000 FROM anchor) ELSE ((SELECT position FROM previous) + (SELECT position FROM anchor)) / 2 END, updated_at = now() FROM source, target WHERE c.id = source.id AND source.board_id = target.board_id AND ($4 IS NULL OR EXISTS (SELECT 1 FROM anchor)) RETURNING c.id, c.list_id, c.title, c.description",
+        "WITH source AS (SELECT id, board_id FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL FOR UPDATE), target AS (SELECT id, board_id FROM lists WHERE id = $3 FOR UPDATE), anchor AS (SELECT c.position FROM cards c, target, source WHERE c.id = $4 AND c.list_id = target.id AND c.id <> source.id FOR UPDATE), previous AS (SELECT c.position FROM cards c, target, source WHERE c.list_id = target.id AND c.id <> source.id AND c.position < (SELECT position FROM anchor) ORDER BY c.position DESC LIMIT 1) UPDATE cards c SET list_id = target.id, position = CASE WHEN $4 IS NULL THEN (SELECT COALESCE(MAX(position), 0) + 1000 FROM cards WHERE list_id = target.id AND id <> c.id) WHEN (SELECT position FROM previous) IS NULL THEN (SELECT position - 1000 FROM anchor) ELSE ((SELECT position FROM previous) + (SELECT position FROM anchor)) / 2 END, updated_at = now() FROM source, target WHERE c.id = source.id AND source.board_id = target.board_id AND ($4 IS NULL OR EXISTS (SELECT 1 FROM anchor)) RETURNING c.id, c.list_id, c.title, c.description, c.start_at::text AS start_at",
     )
     .bind(card_id)
     .bind(integration.board_id)
@@ -4769,7 +4806,7 @@ async fn create_card(State(state): State<AppState>, current: CurrentUser, Path(l
     let description = request.description.trim();
     if description.chars().count() > 20_000 { return Err(ApiError::bad_request("description must not exceed 20000 characters.")); }
     let card = sqlx::query_as::<_, CardResponse>(
-        "INSERT INTO cards (id, board_id, list_id, title, description, position, created_by) SELECT $1, l.board_id, l.id, $2, $3, COALESCE((SELECT MAX(position) FROM cards WHERE list_id = l.id), 0) + 1000, $4 FROM lists l INNER JOIN boards b ON b.id = l.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE l.id = $5 AND m.user_id = $4 RETURNING id, list_id, title, description",
+        "INSERT INTO cards (id, board_id, list_id, title, description, position, created_by) SELECT $1, l.board_id, l.id, $2, $3, COALESCE((SELECT MAX(position) FROM cards WHERE list_id = l.id), 0) + 1000, $4 FROM lists l INNER JOIN boards b ON b.id = l.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE l.id = $5 AND m.user_id = $4 RETURNING id, list_id, title, description, start_at::text AS start_at",
     )
     .bind(Uuid::new_v4()).bind(title).bind(description).bind(actor_id).bind(list_id)
     .fetch_optional(database(&state)?)
@@ -4799,7 +4836,12 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
         Some(_) => return Err(ApiError::bad_request("priority must be between 0 and 5.")),
         None => None,
     };
-    if title.is_none() && description.is_none() && priority.is_none() { return Err(ApiError::bad_request("At least one editable field is required.")); }
+    let start_at = match request.start_at {
+        Some(Some(value)) => Some(Some(valid_due_at(&value)?)),
+        Some(None) => Some(None),
+        None => None,
+    };
+    if title.is_none() && description.is_none() && priority.is_none() && start_at.is_none() { return Err(ApiError::bad_request("At least one editable field is required.")); }
     let text_change_detail = match (title.is_some(), description.is_some()) {
         (true, true) => "Название и описание карточки",
         (true, false) => "Название карточки",
@@ -4808,12 +4850,18 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
     };
     let description_changed = description.is_some();
     let priority_detail = priority.map(|value| if value == 0 { "Приоритет снят".to_owned() } else { format!("Приоритет: {value}/5") });
+    if let Some(description) = description.as_deref() {
+        sqlx::query("INSERT INTO card_description_versions (id, card_id, description, created_by) SELECT $1, c.id, c.description, $3 FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $3 WHERE c.id = $2 AND c.archived_at IS NULL AND b.archived_at IS NULL AND c.description IS DISTINCT FROM $4 AND flowboard_has_permission(b.workspace_id, $3, 'edit_cards'::workspace_permission) AND (bm.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $3 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3 AND wm.role IN ('owner', 'full_access')))")
+            .bind(Uuid::new_v4()).bind(card_id).bind(actor_id).bind(description).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    }
     let card = sqlx::query_as::<_, CardResponse>(
-        "UPDATE cards c SET title = COALESCE($1, c.title), description = COALESCE($2, c.description), priority = COALESCE($3, c.priority), updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $4 AND c.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $5 RETURNING c.id, c.list_id, c.title, c.description",
+        "UPDATE cards c SET title = COALESCE($1, c.title), description = COALESCE($2, c.description), priority = COALESCE($3, c.priority), start_at = CASE WHEN $4 THEN $5 ELSE c.start_at END, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $6 AND c.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $7 RETURNING c.id, c.list_id, c.title, c.description, c.start_at::text AS start_at",
     )
     .bind(title)
     .bind(description)
     .bind(priority)
+    .bind(start_at.is_some())
+    .bind(start_at.flatten())
     .bind(card_id)
     .bind(actor_id)
     .fetch_optional(database(&state)?)
@@ -5037,9 +5085,131 @@ async fn download_discord_comment_avatar(State(state): State<AppState>, Path((to
     avatar_response(&state, user_id).await
 }
 
+fn card_relation_type_label(relation_type: &str) -> &'static str {
+    match relation_type {
+        "blocks" => "Блокирует",
+        "depends_on" => "Зависит от",
+        "duplicate" => "Дубликат",
+        "related" => "Связана с",
+        _ => "Связь",
+    }
+}
+
+async fn list_card_relations(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CardRelationResponse>> {
+    let pool = database(&state)?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    let relations = sqlx::query_as::<_, CardRelationResponse>(
+        "SELECT r.id, r.relation_type, CASE WHEN r.source_card_id = $1 THEN 'outgoing' ELSE 'incoming' END AS direction, other.id AS other_card_id, other.title AS other_card_title, other.list_id AS other_card_list_id, other.completed_at::text AS other_card_completed_at, r.created_at::text AS created_at FROM card_relations r INNER JOIN cards other ON other.id = CASE WHEN r.source_card_id = $1 THEN r.target_card_id ELSE r.source_card_id END WHERE (r.source_card_id = $1 OR r.target_card_id = $1) AND other.archived_at IS NULL ORDER BY r.created_at DESC, r.id DESC",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(relations))
+}
+
+async fn create_card_relation(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<CreateCardRelationRequest>) -> ApiResult<CardRelationResponse> {
+    if card_id == request.target_card_id { return Err(ApiError::bad_request("A card cannot be related to itself.")); }
+    if !matches!(request.relation_type.as_str(), "blocks" | "depends_on" | "duplicate" | "related") {
+        return Err(ApiError::bad_request("relation_type must be blocks, depends_on, duplicate, or related."));
+    }
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    ensure_card_access(pool, request.target_card_id, current.id).await?;
+    let relation = sqlx::query_as::<_, CardRelationResponse>(
+        "WITH inserted AS (INSERT INTO card_relations (id, source_card_id, target_card_id, relation_type, created_by) SELECT $1, source.id, target.id, $4, $5 FROM cards source INNER JOIN cards target ON target.id = $3 AND target.board_id = source.board_id WHERE source.id = $2 AND source.archived_at IS NULL AND target.archived_at IS NULL ON CONFLICT (source_card_id, target_card_id, relation_type) DO NOTHING RETURNING id, relation_type, target_card_id, created_at) SELECT inserted.id, inserted.relation_type, 'outgoing' AS direction, target.id AS other_card_id, target.title AS other_card_title, target.list_id AS other_card_list_id, target.completed_at::text AS other_card_completed_at, inserted.created_at::text AS created_at FROM inserted INNER JOIN cards target ON target.id = inserted.target_card_id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(card_id)
+    .bind(request.target_card_id)
+    .bind(&request.relation_type)
+    .bind(current.id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::CONFLICT, "relation_exists", "This card relation already exists or the cards are in different projects.".to_owned()))?;
+    let detail = format!("{}: {}", card_relation_type_label(&relation.relation_type), relation.other_card_title);
+    record_card_activity(pool, card_id, current.id, "Добавлена связь карточек", &detail).await;
+    let _ = state.events.send(());
+    Ok(Json(relation))
+}
+
+async fn delete_card_relation(State(state): State<AppState>, current: CurrentUser, Path((card_id, relation_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let removed = sqlx::query_as::<_, (String, Uuid, Uuid)>(
+        "DELETE FROM card_relations WHERE id = $1 AND (source_card_id = $2 OR target_card_id = $2) RETURNING relation_type, source_card_id, target_card_id",
+    )
+    .bind(relation_id)
+    .bind(card_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "relation_not_found", "Card relation was not found.".to_owned()))?;
+    let other_card_id = if removed.1 == card_id { removed.2 } else { removed.1 };
+    let other_title = sqlx::query_scalar::<_, String>("SELECT title FROM cards WHERE id = $1")
+        .bind(other_card_id).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or_else(|| "карточка".to_owned());
+    let detail = format!("{}: {}", card_relation_type_label(&removed.0), other_title);
+    record_card_activity(pool, card_id, current.id, "Удалена связь карточек", &detail).await;
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_card_description_versions(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CardDescriptionVersionResponse>> {
+    let pool = database(&state)?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    let versions = sqlx::query_as::<_, CardDescriptionVersionResponse>(
+        "SELECT v.id, v.description, COALESCE(u.username, 'Deleted user') AS author_name, v.created_at::text AS created_at FROM card_description_versions v LEFT JOIN users u ON u.id = v.created_by WHERE v.card_id = $1 ORDER BY v.created_at DESC, v.id DESC LIMIT 100",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(versions))
+}
+
+async fn restore_card_description_version(State(state): State<AppState>, current: CurrentUser, Path((card_id, version_id)): Path<(Uuid, Uuid)>) -> ApiResult<CardResponse> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    let version_description = sqlx::query_scalar::<_, String>("SELECT description FROM card_description_versions WHERE id = $1 AND card_id = $2")
+        .bind(version_id).bind(card_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "description_version_not_found", "Description version was not found.".to_owned()))?;
+    let current_description = sqlx::query_scalar::<_, String>("SELECT description FROM cards WHERE id = $1 AND archived_at IS NULL FOR UPDATE")
+        .bind(card_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
+    if current_description != version_description {
+        sqlx::query("INSERT INTO card_description_versions (id, card_id, description, created_by) VALUES ($1, $2, $3, $4)")
+            .bind(Uuid::new_v4()).bind(card_id).bind(current_description).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    }
+    let card = sqlx::query_as::<_, CardResponse>("UPDATE cards SET description = $1, updated_at = now() WHERE id = $2 AND archived_at IS NULL RETURNING id, list_id, title, description, start_at::text AS start_at")
+        .bind(version_description).bind(card_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
+    transaction.commit().await.map_err(ApiError::internal)?;
+    replace_card_mentions(pool, card_id, current.id, "card_description", card_id, &card.description).await?;
+    record_card_activity(pool, card_id, current.id, "Восстановлена версия описания", "").await;
+    let _ = state.events.send(());
+    Ok(Json(card))
+}
+
+async fn ensure_card_has_no_active_blockers(pool: &PgPool, card_id: Uuid) -> Result<(), ApiError> {
+    let blocker = sqlx::query_scalar::<_, String>(
+        "SELECT blocker.title FROM card_relations r INNER JOIN cards blocker ON blocker.id = r.source_card_id WHERE r.target_card_id = $1 AND r.relation_type = 'blocks' AND blocker.archived_at IS NULL AND blocker.completed_at IS NULL ORDER BY r.created_at ASC LIMIT 1",
+    )
+    .bind(card_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    if let Some(title) = blocker {
+        return Err(ApiError(StatusCode::CONFLICT, "card_blocked", format!("Cannot complete this card while blocker \"{title}\" is active.")));
+    }
+    Ok(())
+}
+
 async fn update_card_completion(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardCompletionRequest>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    if request.is_completed { ensure_card_has_no_active_blockers(pool, card_id).await?; }
     let result = sqlx::query("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = $2 AND archived_at IS NULL")
         .bind(request.is_completed).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
@@ -5238,7 +5408,7 @@ async fn archive_card(State(state): State<AppState>, current: CurrentUser, Path(
 async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<CardResponse> {
     ensure_archived_card_permission(database(&state)?, card_id, current.id, "delete_cards").await?;
     let card = sqlx::query_as::<_, CardResponse>(
-        "UPDATE cards c SET archived_at = NULL, updated_at = now() FROM boards b WHERE c.id = $1 AND c.board_id = b.id AND c.archived_at IS NOT NULL AND b.archived_at IS NULL RETURNING c.id, c.list_id, c.title, c.description",
+        "UPDATE cards c SET archived_at = NULL, updated_at = now() FROM boards b WHERE c.id = $1 AND c.board_id = b.id AND c.archived_at IS NOT NULL AND b.archived_at IS NULL RETURNING c.id, c.list_id, c.title, c.description, c.start_at::text AS start_at",
     )
     .bind(card_id)
     .fetch_optional(database(&state)?)
@@ -5269,7 +5439,7 @@ async fn move_card(State(state): State<AppState>, current: CurrentUser, Path(car
     let pool = database(&state)?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
     let card = sqlx::query_as::<_, CardResponse>(
-        "WITH source AS (SELECT c.id, c.board_id FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $1 AND c.archived_at IS NULL AND m.user_id = $4 FOR UPDATE), target AS (SELECT id, board_id FROM lists WHERE id = $2 FOR UPDATE), anchor AS (SELECT c.position FROM cards c, target, source WHERE c.id = $3 AND c.list_id = target.id AND c.id <> source.id FOR UPDATE), previous AS (SELECT c.position FROM cards c, target, source WHERE c.list_id = target.id AND c.id <> source.id AND c.position < (SELECT position FROM anchor) ORDER BY c.position DESC LIMIT 1) UPDATE cards c SET list_id = target.id, position = CASE WHEN $3 IS NULL THEN (SELECT COALESCE(MAX(position), 0) + 1000 FROM cards WHERE list_id = target.id AND id <> c.id) WHEN (SELECT position FROM previous) IS NULL THEN (SELECT position - 1000 FROM anchor) ELSE ((SELECT position FROM previous) + (SELECT position FROM anchor)) / 2 END, updated_at = now() FROM source, target WHERE c.id = source.id AND source.board_id = target.board_id AND ($3 IS NULL OR EXISTS (SELECT 1 FROM anchor)) RETURNING c.id, c.list_id, c.title, c.description",
+        "WITH source AS (SELECT c.id, c.board_id FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $1 AND c.archived_at IS NULL AND m.user_id = $4 FOR UPDATE), target AS (SELECT id, board_id FROM lists WHERE id = $2 FOR UPDATE), anchor AS (SELECT c.position FROM cards c, target, source WHERE c.id = $3 AND c.list_id = target.id AND c.id <> source.id FOR UPDATE), previous AS (SELECT c.position FROM cards c, target, source WHERE c.list_id = target.id AND c.id <> source.id AND c.position < (SELECT position FROM anchor) ORDER BY c.position DESC LIMIT 1) UPDATE cards c SET list_id = target.id, position = CASE WHEN $3 IS NULL THEN (SELECT COALESCE(MAX(position), 0) + 1000 FROM cards WHERE list_id = target.id AND id <> c.id) WHEN (SELECT position FROM previous) IS NULL THEN (SELECT position - 1000 FROM anchor) ELSE ((SELECT position FROM previous) + (SELECT position FROM anchor)) / 2 END, updated_at = now() FROM source, target WHERE c.id = source.id AND source.board_id = target.board_id AND ($3 IS NULL OR EXISTS (SELECT 1 FROM anchor)) RETURNING c.id, c.list_id, c.title, c.description, c.start_at::text AS start_at",
     )
     .bind(card_id)
     .bind(request.target_list_id)
