@@ -5,6 +5,8 @@ import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, CSSProperties, Drag
 import { createPortal } from 'react-dom';
 import './auth.css';
 import ReleaseHistoryWidget from './release-history-widget';
+import CommandPalette from './command-palette';
+import ScheduleView from './schedule-view';
 
 type EntityId = number | string;
 type Member = { id: EntityId; initials: string; color: string; name: string; avatarUrl?: string | null };
@@ -15,14 +17,14 @@ type Milestone = { id: string; name: string; description: string; color: string;
 type BoardSticker = { id: string; name: string; media_type: string; url: string };
 type DraftSticker = { id: string; name: string; body: string; emoji?: string; url?: string };
 type CommentReaction = { emoji: string; count: number; reacted: boolean };
-type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
+type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; startAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
 type Column = { id: EntityId; title: string; cards: Card[] };
 type View = 'home' | 'board';
 type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
 type BoardBackgroundPosition = 'center' | 'top' | 'bottom';
 type ApiMember = { id: string; username: string; avatar_url?: string | null };
-type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; can_admin: boolean; labels: Label[]; milestones: Milestone[]; stickers?: BoardSticker[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_media_type: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; has_unread_comments: boolean; labels: Label[]; roles?: ProfileRole[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
+type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; can_admin: boolean; labels: Label[]; milestones: Milestone[]; stickers?: BoardSticker[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; start_at: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_media_type: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; has_unread_comments: boolean; labels: Label[]; roles?: ProfileRole[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
@@ -41,7 +43,7 @@ type BoardSummary = { id: string; title: string; visibility: string };
 type FilterMode = 'all' | 'assigned' | 'my_roles' | 'due' | 'overdue';
 type CardSort = 'manual' | 'priority' | 'activity';
 type BoardViewMode = 'standard' | 'freeform';
-type BoardContentMode = 'columns' | 'members';
+type BoardContentMode = 'columns' | 'members' | 'schedule';
 type MemberDragState = { card: Card; sourceMemberId: string | null };
 type FreeformPosition = { x: number; y: number };
 type BoardLayout = { view_mode: BoardViewMode; positions: { list_id: string; x: number; y: number }[] };
@@ -1394,6 +1396,21 @@ export default function Home() {
     return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
   }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, reactionPickerCommentId, sidebarPanel, stickerPickerTarget]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]') || event.ctrlKey || event.metaKey || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === 'c' && canEditBoard && columns[0]) { event.preventDefault(); setComposerOpen(columns[0].id); }
+      else if (key === 'f') { event.preventDefault(); setFilterOpen(true); }
+      else if (event.key === ' ' && selected) { event.preventDefault(); openCard(selected); }
+      else if (key === 'e' && selected && !isPublicViewer) { event.preventDefault(); setEditingCardDescription(true); }
+      else if (event.key === 'Escape' && selected) { event.preventDefault(); setSelected(null); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [canEditBoard, columns, isPublicViewer, selected]);
+
   function updateStickerPickerPosition(target: 'comment' | 'thread') {
     const trigger = stickerComposerButtonRefs.current[target];
     if (!trigger) return;
@@ -2436,6 +2453,19 @@ export default function Home() {
       .catch(() => showToast('Не удалось сохранить дедлайн'))
       .finally(() => setSavingDueAt(false));
   }
+  function saveCalendarDueDate(cardId: EntityId, dueAt: string) {
+    const previous = columns.flatMap((column) => column.cards).find((card) => String(card.id) === String(cardId));
+    if (!previous || !canEditBoard) return;
+    const apply = (value: string | undefined) => {
+      setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => String(card.id) === String(cardId) ? { ...card, dueAt: value } : card) })));
+      setSelected((current) => current?.id === cardId ? { ...current, dueAt: value } : current);
+    };
+    apply(dueAt);
+    if (persistence !== 'connected' || typeof cardId !== 'string') { showToast('Дата перенесена'); return; }
+    void fetch(`${API_URL}/v1/cards/${cardId}/due-date`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ due_at: dueAt }) })
+      .then((response) => { if (!response.ok) throw new Error('calendar due date save failed'); showToast('Дата перенесена'); })
+      .catch(() => { apply(previous.dueAt); showToast('Не удалось перенести дату'); });
+  }
   function clearDueDate() {
     if (!selected) return;
     updateSelectedCard({ dueAt: undefined });
@@ -3358,7 +3388,7 @@ export default function Home() {
   }
 
   function applyBoard(data: ApiBoard) {
-    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, hasUnreadComments: card.has_unread_comments, backgroundImageUrl: card.background_image_url ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMediaType: card.cover_media_type ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, roles: card.roles ?? [], milestone: card.milestone ?? null, members: card.assignees.map(memberFromApi) })) })));
+    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, hasUnreadComments: card.has_unread_comments, backgroundImageUrl: card.background_image_url ?? undefined, startAt: card.start_at ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMediaType: card.cover_media_type ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, roles: card.roles ?? [], milestone: card.milestone ?? null, members: card.assignees.map(memberFromApi) })) })));
     setBoardLabels(data.labels);
     setMilestones(data.milestones ?? []);
     setBoardStickers(data.stickers ?? []);
@@ -3676,7 +3706,7 @@ export default function Home() {
         <div><button className="breadcrumbs" onClick={openHome}>{workspaceName} <span>/</span> {boardTitle}</button><div className="board-title-row">{isEditingBoardTitle ? <form className="board-title-form" onSubmit={(event) => { event.preventDefault(); saveBoardTitle(); }}><input autoFocus value={boardTitleDraft} onChange={(event) => setBoardTitleDraft(event.target.value)} maxLength={200} onKeyDown={(event) => { if (event.key === 'Escape') setEditingBoardTitle(false); }} /><button type="submit" disabled={isSavingBoardTitle}>✓</button></form> : <h1>{boardTitle}</h1>}<span className={`sync-status ${persistence}`}>{persistence === 'connected' ? 'Сохранено' : persistence === 'connecting' ? 'Подключение…' : 'Нет подключения'}</span><button className="title-edit" onClick={beginBoardRename} aria-label="Переименовать доску">✎</button></div></div>
         <div className="board-tools">
           <div className="board-members-control"><div className="avatars">{workspaceMembers.slice(0, 3).map((person) => <Avatar key={person.name} member={person} />)}{workspaceMembers.length > 3 && <button className="more-members" type="button" aria-label={`Показать всех участников: ${workspaceMembers.length}`} aria-expanded={isMembersPopoverOpen} onClick={() => setMembersPopoverOpen((current) => !current)}>+{workspaceMembers.length - 3}</button>}</div>{isMembersPopoverOpen && <div className="board-members-popover"><div className="popover-heading"><b>Участники проекта</b><span>{workspaceMembers.length}</span></div><div className="board-members-list">{workspaceMembers.map((person) => <div key={person.id}><Avatar member={person} /><span>@{person.name}</span></div>)}</div></div>}</div>
-          <div className="board-content-toggle" role="group" aria-label="Группировка задач"><button type="button" className={boardContentMode === 'columns' ? 'active' : ''} onClick={() => setBoardContentMode('columns')}>Колонки</button><button type="button" className={boardContentMode === 'members' ? 'active' : ''} onClick={() => setBoardContentMode('members')}>По людям</button></div>
+          <div className="board-content-toggle" role="group" aria-label="Представление задач"><button type="button" className={boardContentMode === 'columns' ? 'active' : ''} onClick={() => setBoardContentMode('columns')}>Колонки</button><button type="button" className={boardContentMode === 'members' ? 'active' : ''} onClick={() => setBoardContentMode('members')}>По людям</button><button type="button" className={boardContentMode === 'schedule' ? 'active' : ''} onClick={() => setBoardContentMode('schedule')}>Календарь</button></div>
           {!isPublicViewer && boardContentMode === 'columns' && <div className="board-view-toggle" role="group" aria-label="Режим расположения колонок"><button type="button" className={boardViewMode === 'standard' ? 'active' : ''} onClick={() => changeBoardViewMode('standard')}>Ряд</button><button type="button" className={boardViewMode === 'freeform' ? 'active' : ''} onClick={() => changeBoardViewMode('freeform')} title="Колонки можно свободно двигать; Shift включает привязку к сетке">Свободно</button></div>}
           <div className="filter-control">
             <button className={`board-icon-button ${filterMode !== 'all' || cardSort !== 'manual' ? 'active-filter' : ''}`} type="button" title="Фильтры и сортировка" aria-label="Фильтры и сортировка" aria-expanded={isFilterOpen} onClick={() => setFilterOpen((current) => !current)}><BoardToolbarIcon type="filter" /></button>
@@ -3703,7 +3733,8 @@ export default function Home() {
           </section>
         </div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
-      <section className={`board ${isBoardPanning ? 'board-panning' : ''} ${boardViewMode === 'freeform' ? 'board-freeform' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={(event) => { moveBoardPan(event); updateFreeformCursor(event); }} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan} onScroll={(event) => { if (boardViewMode === 'freeform') { const board = event.currentTarget; setFreeformViewport({ x: board.scrollLeft / freeformZoom, y: board.scrollTop / freeformZoom, width: board.clientWidth / freeformZoom, height: board.clientHeight / freeformZoom }); } }}>
+      {boardContentMode === 'schedule' && <div className="board-schedule"><ScheduleView cards={columns.flatMap((column) => column.cards.map((card) => ({ id: card.id, title: card.title, listTitle: column.title, startAt: card.startAt, dueAt: card.dueAt, completedAt: card.completedAt })))} onDateChange={saveCalendarDueDate} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === String(cardId)); if (card) openCard(card); }} /></div>}
+      <section className={`board ${isBoardPanning ? 'board-panning' : ''} ${boardViewMode === 'freeform' ? 'board-freeform' : ''} ${boardContentMode === 'schedule' ? 'board-schedule-hidden' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={(event) => { moveBoardPan(event); updateFreeformCursor(event); }} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan} onScroll={(event) => { if (boardViewMode === 'freeform') { const board = event.currentTarget; setFreeformViewport({ x: board.scrollLeft / freeformZoom, y: board.scrollTop / freeformZoom, width: board.clientWidth / freeformZoom, height: board.clientHeight / freeformZoom }); } }}>
         {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : boardContentMode === 'members' ? renderMemberBoard() : <div ref={freeformCanvasRef} className={boardViewMode === 'freeform' ? 'freeform-canvas' : 'board-columns'} style={boardViewMode === 'freeform' ? { width: freeformCanvasSize.width * freeformZoom, height: freeformCanvasSize.height * freeformZoom } : undefined} onContextMenu={(event) => { if (boardViewMode !== 'freeform' || isPublicViewer || (event.target instanceof Element && event.target.closest('.column, .freeform-detached-card'))) return; const point = getFreeformPoint(event.clientX, event.clientY); if (!point) return; event.preventDefault(); setFreeformContextMenu({ x: Math.min(event.clientX, window.innerWidth - 230), y: Math.min(event.clientY, window.innerHeight - 170), position: point }); }} onDragOver={(event) => { if (boardViewMode === 'freeform' && dragging && !(event.target instanceof Element && event.target.closest('.column, .freeform-detached-card'))) event.preventDefault(); }} onDrop={detachDraggedCard}>
           <div className={boardViewMode === 'freeform' ? 'freeform-scene' : undefined} style={boardViewMode === 'freeform' ? { width: freeformCanvasSize.width, height: freeformCanvasSize.height, transform: `scale(${freeformZoom})` } : { display: 'contents' }}>
           {boardViewMode === 'freeform' && <><svg className={`freeform-ink ${isFreeformDrawing || isFreeformErasing ? 'active' : ''} ${isFreeformErasing ? 'erasing' : ''}`} width={freeformCanvasSize.width} height={freeformCanvasSize.height} viewBox={`0 0 ${freeformCanvasSize.width} ${freeformCanvasSize.height}`} onPointerDown={startFreeformInk} onPointerMove={continueFreeformInk} onPointerUp={finishFreeformInk} onPointerCancel={finishFreeformInk}>{freeformDrawing.strokes.map((stroke, index) => <polyline key={stroke.id ?? index} points={stroke.points.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke={stroke.color} strokeWidth={stroke.width} strokeLinecap="round" strokeLinejoin="round" />)}</svg>{freeformLive.cursors.filter((cursor) => cursor.user_id !== account?.user.id).map((cursor) => <div className="freeform-cursor" key={cursor.user_id} style={{ left: cursor.x, top: cursor.y }}><span>⌖</span><b>@{cursor.username}</b></div>)}{freeformLive.pings.map((ping) => <span className="freeform-ping" key={ping.id} style={{ left: ping.x, top: ping.y }} title={`@${ping.username} зовёт сюда`}><i />@{ping.username}</span>)}{freeformLive.pings.map((ping) => { const dx = ping.x - freeformViewport.x; const dy = ping.y - freeformViewport.y; if (dx >= 0 && dx <= freeformViewport.width && dy >= 0 && dy <= freeformViewport.height) return null; const horizontal = Math.abs(dx - freeformViewport.width / 2) > Math.abs(dy - freeformViewport.height / 2); const arrow = horizontal ? dx < 0 ? '←' : '→' : dy < 0 ? '↑' : '↓'; return <span className="freeform-ping-direction" key={`${ping.id}-direction`} style={{ left: freeformViewport.x + Math.max(16, Math.min(Math.max(16, freeformViewport.width - 150), dx)), top: freeformViewport.y + Math.max(16, Math.min(Math.max(16, freeformViewport.height - 38), dy)) }}>{arrow} @{ping.username}</span>; })}</>}
@@ -3825,6 +3856,14 @@ export default function Home() {
     {cardDragPreview && <div ref={cardDragPreviewElementRef} className="card-drag-preview" aria-hidden="true" style={{ left: cardDragPreview.x - 28, top: cardDragPreview.y - 20, width: cardDragPreview.width, height: cardDragPreview.height } as CSSProperties}>{<CardCover card={cardDragPreview.card} />}<div className="card-main">{(cardDragPreview.card.labels.length > 0 || cardDragPreview.card.roles.length > 0) && <div className="card-top"><div className="card-labels">{cardDragPreview.card.labels.map((label) => <LabelChip label={label} key={label.id} />)}{cardDragPreview.card.roles.map((role) => <ProfileRoleChip role={role} key={role.id} compact />)}</div></div>}<div className="card-title-row"><span className={`card-complete ${cardDragPreview.card.completedAt ? 'done' : ''}`}>{cardDragPreview.card.completedAt && '✓'}</span><h3>{cardDragPreview.card.title}</h3></div>{cardDragPreview.card.dueAt && <p className="due">◷ {formatDue(cardDragPreview.card.dueAt)}</p>}</div>{cardDragPreview.card.priority ? <span className="card-priority-corner"><PrioritySignal priority={cardDragPreview.card.priority} /></span> : null}{(cardDragPreview.card.checklist || cardDragPreview.card.comments || cardDragPreview.card.attachments || cardDragPreview.card.members.length > 0) && <footer className="card-footer"><div className="card-meta">{cardDragPreview.card.checklist && <span className={isChecklistComplete(cardDragPreview.card.checklist) ? 'checklist-complete' : ''}><CardMetaIcon type="checklist" />{cardDragPreview.card.checklist}</span>}{cardDragPreview.card.comments && <span><CardMetaIcon type="comments" />{cardDragPreview.card.comments}</span>}{cardDragPreview.card.attachments && <span><CardMetaIcon type="attachments" /></span>}</div><div className="card-avatars">{<VisibleAvatars members={cardDragPreview.card.members} />}</div></footer>}</div>}
     {cardMoveMotion && <div className="card-move-ghost" aria-hidden="true" style={{ left: cardMoveMotion.from.left, top: cardMoveMotion.from.top, width: cardMoveMotion.from.width, height: cardMoveMotion.from.height, '--card-move-x': `${cardMoveMotion.to.left - cardMoveMotion.from.left}px`, '--card-move-y': `${cardMoveMotion.to.top - cardMoveMotion.from.top}px`, '--card-move-scale-x': String(cardMoveMotion.to.width / cardMoveMotion.from.width), '--card-move-scale-y': String(cardMoveMotion.to.height / cardMoveMotion.from.height) } as CSSProperties}><b>{cardMoveMotion.title}</b></div>}
     {toast && <div className="toast">✓ {toast}</div>}
+    <CommandPalette
+      showTrigger={false}
+      createCard={{ disabled: !canEditBoard || !columns[0], onSelect: () => { if (columns[0]) setComposerOpen(columns[0].id); } }}
+      goToBoard={boards.map((board) => ({ id: board.id, label: board.title, description: 'Открыть проект', keywords: ['доска', 'проект'], onSelect: () => { void selectBoard(board.id); } }))}
+      assignSelf={{ disabled: !selected || !account || !canEditBoard || isPublicViewer, onSelect: toggleOwnAssignment }}
+      notifications={{ onSelect: () => setNotificationsOpen(true) }}
+      filters={{ disabled: view !== 'board', onSelect: () => setFilterOpen(true) }}
+    />
     <ReleaseHistoryWidget />
   </main>;
 }

@@ -1,0 +1,39 @@
+.schedule-view { display: grid; gap: 12px; min-width: 0; color: var(--text); }
+.schedule-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.schedule-toolbar > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.schedule-toolbar button { min-height: 31px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--muted); font-size: 11px; font-weight: 750; }
+.schedule-toolbar button:hover, .schedule-toolbar button.active { border-color: color-mix(in srgb, var(--primary) 54%, var(--line)); background: color-mix(in srgb, var(--primary) 13%, var(--surface-raised)); color: var(--primary); }
+.schedule-toolbar h2 { min-width: 0; margin: 0 0 0 7px; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
+.schedule-mode-switch { flex: 0 0 auto; }
+.schedule-calendar { display: grid; grid-template-columns: repeat(7, minmax(108px, 1fr)); overflow: auto; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.schedule-day-name { padding: 9px 10px; border-bottom: 1px solid var(--line); color: var(--faint); font-size: 10px; letter-spacing: .04em; text-align: right; }
+.schedule-day { display: grid; grid-template-rows: auto 1fr; min-height: 112px; padding: 7px; border-right: 1px solid color-mix(in srgb, var(--line) 82%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--line) 82%, transparent); background: color-mix(in srgb, var(--surface-raised) 28%, transparent); transition: background .14s ease; }
+.schedule-day:nth-child(7n) { border-right: 0; }
+.schedule-day:hover { background: color-mix(in srgb, var(--primary) 7%, var(--surface-raised)); }
+.schedule-day > time { justify-self: end; display: grid; width: 23px; height: 23px; place-items: center; color: var(--muted); font-size: 11px; font-weight: 750; }
+.schedule-day.today > time { border-radius: 50%; background: var(--primary); color: var(--primary-ink); }
+.schedule-day.outside { opacity: .42; }
+.schedule-day > div { display: grid; align-content: start; gap: 3px; margin-top: 4px; }
+.schedule-day > div > button { display: grid; gap: 1px; min-width: 0; padding: 4px 5px; border: 0; border-left: 2px solid var(--primary); border-radius: 4px; background: color-mix(in srgb, var(--primary) 11%, transparent); color: var(--text); cursor: grab; text-align: left; }
+.schedule-day > div > button:active { cursor: grabbing; }
+.schedule-day > div > button.completed { opacity: .52; text-decoration: line-through; }
+.schedule-day > div span, .schedule-day > div small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-day > div span { font-size: 10px; font-weight: 700; }
+.schedule-day > div small { color: var(--muted); font-size: 8px; }
+.schedule-day em { padding: 2px 4px; color: var(--primary); font-size: 9px; font-style: normal; font-weight: 700; }
+.schedule-calendar.week .schedule-day { min-height: 360px; }
+.timeline-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.timeline-grid { --timeline-days: 28; min-width: calc(210px + var(--timeline-days) * 34px); }
+.timeline-days, .timeline-row { display: grid; grid-template-columns: 210px repeat(var(--timeline-days), 34px); }
+.timeline-days { position: sticky; z-index: 2; top: 0; border-bottom: 1px solid var(--line); background: var(--surface); }
+.timeline-days > span { padding: 11px; color: var(--faint); font-size: 10px; font-weight: 750; }
+.timeline-days time { display: grid; place-items: center; min-height: 42px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); color: var(--muted); font-size: 10px; }
+.timeline-days time small { color: var(--faint); font-size: 8px; }
+.timeline-days time.today { color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.timeline-row { min-height: 48px; border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent); background-image: repeating-linear-gradient(90deg, transparent 0 33px, color-mix(in srgb, var(--line) 56%, transparent) 33px 34px); background-position: 210px 0; }
+.timeline-row > button { display: grid; align-content: center; gap: 2px; min-width: 0; padding: 7px 11px; border: 0; border-right: 1px solid var(--line); background: var(--surface-raised); color: var(--text); text-align: left; }
+.timeline-row > button b, .timeline-row > button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-row > button b { font-size: 11px; }.timeline-row > button small { color: var(--muted); font-size: 9px; }
+.timeline-bar { align-self: center; height: 18px; margin: 0 2px; border-radius: 6px; background: linear-gradient(90deg, color-mix(in srgb, var(--primary) 84%, #fff), var(--primary)); box-shadow: 0 3px 8px color-mix(in srgb, var(--primary) 24%, transparent); }.timeline-bar.completed { opacity: .48; filter: grayscale(.7); }
+.schedule-empty { margin: 0; padding: 34px; color: var(--muted); font-size: 12px; text-align: center; }
+@media (max-width: 760px) { .schedule-toolbar { align-items: flex-start; flex-direction: column; }.schedule-toolbar h2 { max-width: 230px; }.schedule-calendar { grid-template-columns: repeat(7, minmax(88px, 1fr)); }.schedule-day { min-height: 94px; }.schedule-calendar.week .schedule-day { min-height: 270px; } }
