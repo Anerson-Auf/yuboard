@@ -574,6 +574,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 .reaction-picker-control, .sticker-composer-control { position: relative; display: inline-flex; }
 .reaction-picker, .sticker-picker { position: absolute; z-index: 220; right: 0; bottom: calc(100% + 7px); width: min(310px, calc(100vw - 32px)); padding: 10px; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 34px rgb(0 0 0 / 34%); background: var(--surface-raised); color: var(--text); }
+.reaction-picker { right: auto; left: 0; width: min(280px, calc(100vw - 48px)); }
 .reaction-picker > b, .sticker-picker > b { display: block; margin: 0 0 7px; font-size: 11px; }
 .reaction-picker-grid, .sticker-picker-grid { display: flex; flex-wrap: wrap; gap: 5px; }
 .reaction-picker-grid > button { display: grid; width: 30px; height: 30px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); font-size: 17px; }
@@ -588,6 +589,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .inline-sticker-composer { box-sizing: border-box; width: 100%; min-height: 70px; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; outline: 0; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }.inline-sticker-composer:empty::before { color: var(--faint); content: attr(data-placeholder); pointer-events: none; }.inline-sticker-composer:focus, .inline-sticker-composer:hover { border-color: color-mix(in srgb, var(--primary) 62%, var(--line)); background: color-mix(in srgb, var(--primary) 6%, var(--surface-raised)); }.inline-sticker-composer.uploading { cursor: wait; opacity: .7; }
 .inline-draft-sticker { display: inline-flex; width: 54px; height: 54px; align-items: center; justify-content: center; margin: 0 2px; border-radius: 7px; vertical-align: middle; font-size: 42px; line-height: 1; user-select: all; }.inline-draft-sticker img { display: block; max-width: 54px; max-height: 54px; object-fit: contain; }.inline-draft-sticker:focus { outline: 2px solid var(--primary); }
 .comment-text .inline-chat-sticker-link { display: inline-flex; margin: 0 2px; vertical-align: middle; }.comment-text .markdown-media.chat-sticker.inline-chat-sticker { display: inline-block; width: auto; max-width: 88px; max-height: 88px; margin: 0; vertical-align: middle; }.comment-text .chat-sticker-emoji.inline-chat-sticker { display: inline-block; width: auto; margin: 0 2px; vertical-align: middle; font-size: 44px; }
+.card-column-caption { margin: 12px 0 -8px 36px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
 
 /* Persistent, intentionally low-contrast version history. */
 .release-history-widget { position: fixed; z-index: 190; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); display: grid; justify-items: end; pointer-events: none; }.release-history-widget > * { pointer-events: auto; }

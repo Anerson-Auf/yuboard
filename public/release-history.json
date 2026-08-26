@@ -1,7 +1,21 @@
 {
   "version": "0.1.0",
-  "revision": "01284d5",
+  "revision": "32797d4",
   "entries": [
+    {
+      "shortHash": "32797d4",
+      "date": "2026-08-26",
+      "author": "Anerson-Auf",
+      "title": "Новая возможность: проект",
+      "summary": "Расширены возможности раздела «проект».",
+      "files": [
+        "app/globals.css",
+        "app/page.tsx",
+        "public/release-history.json"
+      ],
+      "additions": 196,
+      "deletions": 28
+    },
     {
       "shortHash": "01284d5",
       "date": "2026-08-26",
