@@ -466,6 +466,27 @@ struct CreateListRequest {
     title: String,
 }
 
+#[derive(Serialize, FromRow)]
+struct BoardAutomationResponse {
+    id: Uuid,
+    name: String,
+    list_id: Uuid,
+    list_title: String,
+    enabled: bool,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+struct CreateBoardAutomationRequest {
+    name: String,
+    list_id: Uuid,
+}
+
+#[derive(Deserialize)]
+struct UpdateBoardAutomationRequest {
+    enabled: bool,
+}
+
 #[derive(Deserialize)]
 struct MoveListRequest {
     #[serde(default)]
@@ -1380,6 +1401,8 @@ async fn main() {
         .route("/v1/boards/{board_id}/archived-cards", get(list_archived_cards))
         .route("/v1/boards/{board_id}/activity", get(list_board_activity))
         .route("/v1/boards/{board_id}/events", get(board_events))
+        .route("/v1/boards/{board_id}/automations", get(list_board_automations).post(create_board_automation))
+        .route("/v1/boards/{board_id}/automations/{automation_id}", patch(update_board_automation).delete(delete_board_automation))
         .route("/v1/boards/{board_id}/labels", post(create_label))
         .route("/v1/boards/{board_id}/milestones", post(create_milestone))
         .route("/v1/labels/{label_id}", patch(update_label).delete(delete_label))
@@ -3416,6 +3439,52 @@ async fn export_board(State(state): State<AppState>, current: CurrentUser, Path(
     let checklists = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id', cl.id::text, 'name', cl.title, 'idCard', cl.card_id::text, 'pos', cl.position, 'checkItems', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', ci.id::text, 'name', ci.title, 'pos', ci.position, 'state', CASE WHEN ci.is_completed THEN 'complete' ELSE 'incomplete' END) ORDER BY ci.position) FROM checklist_items ci WHERE ci.checklist_id = cl.id), '[]'::jsonb)) ORDER BY cl.position), '[]'::jsonb) FROM checklists cl INNER JOIN cards c ON c.id = cl.card_id WHERE c.board_id = $1").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     let actions = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT COALESCE(jsonb_agg(payload ORDER BY created_at DESC), '[]'::jsonb) FROM (SELECT a.created_at, jsonb_build_object('id', a.id::text, 'type', a.action, 'date', a.created_at, 'data', jsonb_build_object('text', a.detail, 'card', jsonb_build_object('id', a.card_id::text)), 'memberCreator', CASE WHEN u.id IS NULL THEN NULL ELSE jsonb_build_object('id', u.id::text, 'username', u.username) END) AS payload FROM card_activity a INNER JOIN cards c ON c.id = a.card_id LEFT JOIN users u ON u.id = a.actor_id WHERE c.board_id = $1 AND a.action <> 'Добавлен комментарий' UNION ALL SELECT cm.created_at, jsonb_build_object('id', cm.id::text, 'type', 'commentCard', 'date', cm.created_at, 'data', jsonb_build_object('text', cm.body, 'card', jsonb_build_object('id', cm.card_id::text)), 'memberCreator', CASE WHEN u.id IS NULL THEN NULL ELSE jsonb_build_object('id', u.id::text, 'username', u.username) END) AS payload FROM comments cm INNER JOIN cards c ON c.id = cm.card_id LEFT JOIN users u ON u.id = cm.author_id WHERE c.board_id = $1) exported_actions").bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?.0;
     Ok(Json(json!({ "format": "flowboard-trello-compatible/v1", "name": board.title, "prefs": { "backgroundImage": board.background_image_url }, "lists": lists, "cards": cards, "labels": labels, "checklists": checklists, "actions": actions, "members": [] })))
+}
+
+async fn list_board_automations(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<BoardAutomationResponse>> {
+    ensure_board_full_access(database(&state)?, board_id, current.id).await?;
+    let automations = sqlx::query_as::<_, BoardAutomationResponse>(
+        "SELECT a.id, a.name, (a.condition->>'list_id')::uuid AS list_id, l.title AS list_title, a.enabled, a.created_at::text AS created_at FROM board_automations a INNER JOIN lists l ON l.id = (a.condition->>'list_id')::uuid WHERE a.board_id = $1 ORDER BY a.created_at DESC",
+    ).bind(board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
+    Ok(Json(automations))
+}
+
+async fn create_board_automation(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateBoardAutomationRequest>) -> ApiResult<BoardAutomationResponse> {
+    ensure_board_full_access(database(&state)?, board_id, current.id).await?;
+    let name = valid_text(&request.name, "name", 120)?;
+    let automation = sqlx::query_as::<_, BoardAutomationResponse>(
+        "INSERT INTO board_automations (id, board_id, name, trigger_type, condition, action_type, action, created_by) SELECT $1, $2, $3, 'card_moved', jsonb_build_object('list_id', $4::text), 'complete_card', '{}'::jsonb, $5 WHERE EXISTS(SELECT 1 FROM lists WHERE id = $4 AND board_id = $2) RETURNING id, name, (condition->>'list_id')::uuid AS list_id, (SELECT title FROM lists WHERE id = (condition->>'list_id')::uuid) AS list_title, enabled, created_at::text AS created_at",
+    ).bind(Uuid::new_v4()).bind(board_id).bind(name).bind(request.list_id).bind(current.id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("The selected column is not part of this project."))?;
+    let _ = state.events.send(());
+    Ok(Json(automation))
+}
+
+async fn update_board_automation(State(state): State<AppState>, current: CurrentUser, Path((board_id, automation_id)): Path<(Uuid, Uuid)>, Json(request): Json<UpdateBoardAutomationRequest>) -> ApiResult<BoardAutomationResponse> {
+    ensure_board_full_access(database(&state)?, board_id, current.id).await?;
+    let automation = sqlx::query_as::<_, BoardAutomationResponse>(
+        "UPDATE board_automations a SET enabled = $1, updated_at = now() WHERE a.id = $2 AND a.board_id = $3 RETURNING a.id, a.name, (a.condition->>'list_id')::uuid AS list_id, (SELECT title FROM lists WHERE id = (a.condition->>'list_id')::uuid) AS list_title, a.enabled, a.created_at::text AS created_at",
+    ).bind(request.enabled).bind(automation_id).bind(board_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "automation_not_found", "Automation was not found.".to_owned()))?;
+    let _ = state.events.send(());
+    Ok(Json(automation))
+}
+
+async fn delete_board_automation(State(state): State<AppState>, current: CurrentUser, Path((board_id, automation_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
+    ensure_board_full_access(database(&state)?, board_id, current.id).await?;
+    let deleted = sqlx::query("DELETE FROM board_automations WHERE id = $1 AND board_id = $2").bind(automation_id).bind(board_id).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    if deleted.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "automation_not_found", "Automation was not found.".to_owned())); }
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn run_card_move_automations(pool: &PgPool, board_id: Uuid, card_id: Uuid, target_list_id: Uuid, actor_id: Uuid) {
+    let names = match sqlx::query_scalar::<_, String>("SELECT name FROM board_automations WHERE board_id = $1 AND trigger_type = 'card_moved' AND action_type = 'complete_card' AND enabled AND condition->>'list_id' = $2::text")
+        .bind(board_id).bind(target_list_id).fetch_all(pool).await { Ok(names) => names, Err(error) => { tracing::error!(?error, "automation lookup failed"); return; } };
+    if names.is_empty() || ensure_card_has_no_active_blockers(pool, card_id).await.is_err() { return; }
+    let updated = match sqlx::query("UPDATE cards SET completed_at = now(), updated_at = now() WHERE id = $1 AND archived_at IS NULL AND completed_at IS NULL")
+        .bind(card_id).execute(pool).await { Ok(updated) => updated.rows_affected() > 0, Err(error) => { tracing::error!(?error, "automation completion failed"); false } };
+    if updated { record_card_activity(pool, card_id, actor_id, "Автоматизация завершила задачу", &names.join(", ")).await; }
 }
 
 async fn create_list(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<CreateListRequest>) -> ApiResult<ListResponse> {
@@ -5495,6 +5564,9 @@ async fn move_card(State(state): State<AppState>, current: CurrentUser, Path(car
     ensure_card_permission(database(&state)?, card_id, current.id, "edit_cards").await?;
     let actor_id = current.id;
     let pool = database(&state)?;
+    let target_board_id = sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM lists WHERE id = $1")
+        .bind(request.target_list_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "list_not_found", "Target column was not found.".to_owned()))?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
     let card = sqlx::query_as::<_, CardResponse>(
         "WITH source AS (SELECT c.id, c.board_id FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $1 AND c.archived_at IS NULL AND m.user_id = $4 FOR UPDATE), target AS (SELECT id, board_id FROM lists WHERE id = $2 FOR UPDATE), anchor AS (SELECT c.position FROM cards c, target, source WHERE c.id = $3 AND c.list_id = target.id AND c.id <> source.id FOR UPDATE), previous AS (SELECT c.position FROM cards c, target, source WHERE c.list_id = target.id AND c.id <> source.id AND c.position < (SELECT position FROM anchor) ORDER BY c.position DESC LIMIT 1) UPDATE cards c SET list_id = target.id, position = CASE WHEN $3 IS NULL THEN (SELECT COALESCE(MAX(position), 0) + 1000 FROM cards WHERE list_id = target.id AND id <> c.id) WHEN (SELECT position FROM previous) IS NULL THEN (SELECT position - 1000 FROM anchor) ELSE ((SELECT position FROM previous) + (SELECT position FROM anchor)) / 2 END, updated_at = now() FROM source, target WHERE c.id = source.id AND source.board_id = target.board_id AND ($3 IS NULL OR EXISTS (SELECT 1 FROM anchor)) RETURNING c.id, c.list_id, c.title, c.description, c.start_at::text AS start_at",
@@ -5511,6 +5583,7 @@ async fn move_card(State(state): State<AppState>, current: CurrentUser, Path(car
         .bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     transaction.commit().await.map_err(ApiError::internal)?;
     record_card_activity(pool, card.id, actor_id, "Перемещена задача", "Изменена колонка или порядок").await;
+    run_card_move_automations(pool, target_board_id, card.id, request.target_list_id, actor_id).await;
     let _ = state.events.send(());
     Ok(Json(card))
 }
