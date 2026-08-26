@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom';
 import './auth.css';
 import BoardPresence from './board-presence';
 import CardCollaborationPanel from './card-collaboration-panel';
+import InboxOverlay from './inbox-overlay';
 import ReleaseHistoryWidget from './release-history-widget';
 import CommandPalette from './command-palette';
 import ScheduleView from './schedule-view';
@@ -880,6 +881,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<AuthSession[]>([]);
   const [notifications, setNotifications] = useState<CardNotification[]>([]);
   const [isNotificationsOpen, setNotificationsOpen] = useState(false);
+  const [isInboxOpen, setInboxOpen] = useState(false);
   const [isNotificationsLoading, setNotificationsLoading] = useState(false);
   const [pendingNotificationCardId, setPendingNotificationCardId] = useState<string | null>(null);
   const [availableAccounts, setAvailableAccounts] = useState<ApiMember[]>([]);
@@ -3688,6 +3690,7 @@ export default function Home() {
         {account && view === 'board' && <BoardPresence boardId={boardId} currentUserId={account.user.id} activeCardId={selected && typeof selected.id === 'string' ? selected.id : null} editingDescription={isEditingCardDescription} />}
         {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
         {account && <ThemePicker className="top-theme-picker" />}
+        {account && <button className="top-utility-button" type="button" onClick={() => { setNotificationsOpen(false); setInboxOpen(true); }} aria-label="Открыть входящие">▤ <span>Входящие</span></button>}
         {account && <button className="top-utility-button" type="button" onClick={openSessions} aria-label="Открыть сессии">◷ <span>Сессии</span></button>}
         {account?.user.is_system_owner && <button className="top-utility-button" type="button" onClick={openAdmin} aria-label="Открыть администрирование">⚙ <span>Админ</span></button>}
         {!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
@@ -3855,6 +3858,7 @@ export default function Home() {
         </form>}
       </section>
     </div>}
+    {isInboxOpen && <InboxOverlay items={notifications} onClose={() => setInboxOpen(false)} onOpen={(notification) => { setInboxOpen(false); openNotification(notification); }} onMarkAllRead={markAllNotificationsRead} />}
     <input ref={boardStickerFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardSticker} style={{ display: 'none' }} />
     {imagePreview && <div className="image-preview-backdrop" role="presentation" onMouseDown={() => setImagePreview(null)}><figure className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Просмотр ${imagePreview.name}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" onClick={() => setImagePreview(null)} aria-label="Закрыть просмотр">×</button><img src={imagePreview.url} alt={imagePreview.name} /><figcaption>{imagePreview.name}</figcaption></figure></div>}
     {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button>{!isPublicViewer && <><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button></>}</div>}
