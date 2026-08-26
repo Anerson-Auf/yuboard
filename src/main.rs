@@ -903,6 +903,49 @@ struct CardDescriptionVersionResponse {
     created_at: String,
 }
 
+#[derive(Serialize)]
+struct CardPollOptionResponse {
+    id: Uuid,
+    title: String,
+    votes: i64,
+    voted: bool,
+}
+
+#[derive(Serialize)]
+struct CardPollResponse {
+    id: Uuid,
+    question: String,
+    created_by: String,
+    created_at: String,
+    options: Vec<CardPollOptionResponse>,
+}
+
+#[derive(FromRow)]
+struct CardPollRow {
+    id: Uuid,
+    question: String,
+    created_by: String,
+    created_at: String,
+}
+
+#[derive(FromRow)]
+struct CardPollOptionRow {
+    poll_id: Uuid,
+    id: Uuid,
+    title: String,
+    votes: i64,
+    voted: bool,
+}
+
+#[derive(Deserialize)]
+struct CreateCardPollRequest {
+    question: String,
+    options: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct VoteCardPollRequest { option_id: Uuid }
+
 #[derive(Serialize, FromRow)]
 struct DiscordCardListResponse {
     id: Uuid,
@@ -1427,7 +1470,9 @@ async fn main() {
         .route("/v1/cards/{card_id}/relations/{relation_id}", axum::routing::delete(delete_card_relation))
         .route("/v1/cards/{card_id}/description-versions", get(list_card_description_versions))
         .route("/v1/cards/{card_id}/description-versions/{version_id}/restore", post(restore_card_description_version))
+        .route("/v1/cards/{card_id}/polls", get(list_card_polls).post(create_card_poll))
         .route("/v1/cards/{card_id}/public-visibility", patch(update_card_public_visibility))
+        .route("/v1/polls/{poll_id}/vote", post(vote_card_poll))
         .route("/v1/cards/{card_id}/details", get(get_card_detail))
         .route("/v1/cards/{card_id}/watch", put(watch_card).delete(unwatch_card))
         .route("/v1/cards/{card_id}/mentions/read", post(mark_card_mentions_read))
@@ -5317,6 +5362,58 @@ async fn restore_card_description_version(State(state): State<AppState>, current
     record_card_activity(pool, card_id, current.id, "Восстановлена версия описания", "").await;
     let _ = state.events.send(());
     Ok(Json(card))
+}
+
+async fn load_card_polls(pool: &PgPool, card_id: Uuid, viewer_id: Uuid) -> Result<Vec<CardPollResponse>, ApiError> {
+    let polls = sqlx::query_as::<_, CardPollRow>("SELECT p.id, p.question, COALESCE(u.username, 'Deleted user') AS created_by, p.created_at::text AS created_at FROM card_polls p LEFT JOIN users u ON u.id = p.created_by WHERE p.card_id = $1 ORDER BY p.created_at DESC")
+        .bind(card_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    if polls.is_empty() { return Ok(Vec::new()); }
+    let poll_ids = polls.iter().map(|poll| poll.id).collect::<Vec<_>>();
+    let options = sqlx::query_as::<_, CardPollOptionRow>("SELECT o.poll_id, o.id, o.title, COUNT(v.user_id) AS votes, COALESCE(BOOL_OR(v.user_id = $2), false) AS voted FROM card_poll_options o LEFT JOIN card_poll_votes v ON v.option_id = o.id WHERE o.poll_id = ANY($1) GROUP BY o.poll_id, o.id, o.title, o.position ORDER BY o.poll_id, o.position")
+        .bind(&poll_ids).bind(viewer_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    let mut options_by_poll = HashMap::<Uuid, Vec<CardPollOptionResponse>>::new();
+    for option in options { options_by_poll.entry(option.poll_id).or_default().push(CardPollOptionResponse { id: option.id, title: option.title, votes: option.votes, voted: option.voted }); }
+    Ok(polls.into_iter().map(|poll| CardPollResponse { id: poll.id, question: poll.question, created_by: poll.created_by, created_at: poll.created_at, options: options_by_poll.remove(&poll.id).unwrap_or_default() }).collect())
+}
+
+async fn list_card_polls(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CardPollResponse>> {
+    let pool = database(&state)?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    Ok(Json(load_card_polls(pool, card_id, current.id).await?))
+}
+
+async fn create_card_poll(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<CreateCardPollRequest>) -> ApiResult<CardPollResponse> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let question = valid_text(&request.question, "question", 300)?;
+    let mut options = Vec::new();
+    let mut option_keys = HashSet::new();
+    for option in request.options { let option = option.trim(); if !option.is_empty() { let option = valid_text(option, "option", 120)?.to_owned(); if option_keys.insert(option.to_lowercase()) { options.push(option); } } }
+    if !(2..=12).contains(&options.len()) { return Err(ApiError::bad_request("A poll needs from 2 to 12 distinct options.")); }
+    let poll_id = Uuid::new_v4();
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    sqlx::query("INSERT INTO card_polls (id, card_id, question, created_by) VALUES ($1, $2, $3, $4)").bind(poll_id).bind(card_id).bind(question).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    for (position, title) in options.iter().enumerate() { sqlx::query("INSERT INTO card_poll_options (id, poll_id, title, position) VALUES ($1, $2, $3, $4)").bind(Uuid::new_v4()).bind(poll_id).bind(title).bind(position as i32).execute(&mut *transaction).await.map_err(ApiError::internal)?; }
+    transaction.commit().await.map_err(ApiError::internal)?;
+    record_card_activity(pool, card_id, current.id, "Создано голосование", "").await;
+    let poll = load_card_polls(pool, card_id, current.id).await?.into_iter().find(|poll| poll.id == poll_id).ok_or_else(|| ApiError::internal(sqlx::Error::RowNotFound))?;
+    let _ = state.events.send(());
+    Ok(Json(poll))
+}
+
+async fn vote_card_poll(State(state): State<AppState>, current: CurrentUser, Path(poll_id): Path<Uuid>, Json(request): Json<VoteCardPollRequest>) -> ApiResult<CardPollResponse> {
+    let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT p.card_id FROM card_polls p INNER JOIN card_poll_options o ON o.poll_id = p.id WHERE p.id = $1 AND o.id = $2")
+        .bind(poll_id).bind(request.option_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("Poll option was not found."))?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    sqlx::query("DELETE FROM card_poll_votes WHERE poll_id = $1 AND user_id = $2").bind(poll_id).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    sqlx::query("INSERT INTO card_poll_votes (poll_id, option_id, user_id) VALUES ($1, $2, $3)").bind(poll_id).bind(request.option_id).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    transaction.commit().await.map_err(ApiError::internal)?;
+    let poll = load_card_polls(pool, card_id, current.id).await?.into_iter().find(|poll| poll.id == poll_id).ok_or_else(|| ApiError::internal(sqlx::Error::RowNotFound))?;
+    let _ = state.events.send(());
+    Ok(Json(poll))
 }
 
 async fn ensure_card_has_no_active_blockers(pool: &PgPool, card_id: Uuid) -> Result<(), ApiError> {
