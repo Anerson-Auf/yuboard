@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import './card-schedule-fields.css';
 
 function dateValue(value?: string) {
@@ -18,11 +19,16 @@ function jsonHeaders() {
   return token ? { 'Content-Type': 'application/json', 'x-flowboard-csrf': decodeURIComponent(token) } : { 'Content-Type': 'application/json' };
 }
 
-export default function CardScheduleFields({ cardId, startAt, dueAt, canEdit, onChange }: { cardId: string; startAt?: string; dueAt?: string; canEdit: boolean; onChange: (patch: { startAt?: string; dueAt?: string }) => void }) {
+export default function CardScheduleFields({ cardId, startAt, dueAt, canEdit, onChange, inDeadline = false }: { cardId: string; startAt?: string; dueAt?: string; canEdit: boolean; onChange: (patch: { startAt?: string; dueAt?: string }) => void; inDeadline?: boolean }) {
   const [start, setStart] = useState(dateValue(startAt));
   const [due, setDue] = useState(dateValue(dueAt));
   const [saving, setSaving] = useState(false);
+  const [portalTarget, setPortalTarget] = useState<Element | null>(null);
   useEffect(() => { setStart(dateValue(startAt)); setDue(dateValue(dueAt)); }, [cardId, dueAt, startAt]);
+  useEffect(() => {
+    if (!inDeadline) { setPortalTarget(null); return; }
+    setPortalTarget(document.querySelector('.date-panel'));
+  }, [inDeadline]);
   const update = (field: 'start' | 'due', value: string) => {
     if (!canEdit || saving) return;
     const nextStart = field === 'start' ? value : start;
@@ -34,5 +40,6 @@ export default function CardScheduleFields({ cardId, startAt, dueAt, canEdit, on
       : fetch(`/v1/cards/${cardId}/due-date`, value ? { method: 'PATCH', headers: jsonHeaders(), body: JSON.stringify({ due_at: timestampForDate(value, '18') }) } : { method: 'DELETE', headers: jsonHeaders() });
     void request.then((response) => { if (!response.ok) throw new Error('date save failed'); if (field === 'start') { setStart(value); onChange({ startAt: value ? timestampForDate(value, '09') : undefined }); } else { setDue(value); onChange({ dueAt: value ? timestampForDate(value, '18') : undefined }); } }).catch(() => { setStart(dateValue(startAt)); setDue(dateValue(dueAt)); }).finally(() => setSaving(false));
   };
-  return <section className="card-schedule-fields" aria-label="Даты задачи"><span>Период</span><label>Начало<input type="date" value={start} disabled={!canEdit || saving} max={due || undefined} onChange={(event) => update('start', event.target.value)} /></label><label>Завершение<input type="date" value={due} disabled={!canEdit || saving} min={start || undefined} onChange={(event) => update('due', event.target.value)} /></label>{start && due && <small>{start === due ? 'Задача на один день' : `${start} — ${due}`}</small>}</section>;
+  const fields = <section className="card-schedule-fields in-deadline" aria-label="Период задачи"><span>Период</span><label>Начало<input type="date" value={start} disabled={!canEdit || saving} max={due || undefined} onChange={(event) => update('start', event.target.value)} /></label><label>Завершение<input type="date" value={due} disabled={!canEdit || saving} min={start || undefined} onChange={(event) => update('due', event.target.value)} /></label>{start && due && <small>{start === due ? 'Задача на один день' : `${start} — ${due}`}</small>}</section>;
+  return inDeadline && portalTarget ? createPortal(fields, portalTarget) : null;
 }
