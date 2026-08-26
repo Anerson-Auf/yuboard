@@ -141,7 +141,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
    a personal canvas whose coordinates are persisted per user and board. */
 .board { display: block; overflow: auto; }
 .board-columns { display: flex; align-items: flex-start; gap: 16px; min-width: max-content; min-height: calc(100vh - 170px); }
-.board.board-freeform { height: calc(100vh - 178px); min-height: 540px; overflow: auto; cursor: grab; overscroll-behavior: none; }
+.board.board-freeform { height: calc(100vh - 178px); min-height: 540px; overflow: auto; cursor: grab; overscroll-behavior: none; touch-action: none; }
 .freeform-canvas { position: relative; min-width: 980px; min-height: calc(100vh - 190px); }
 .freeform-scene { position: relative; transform-origin: 0 0; }
 .board-freeform .column { position: absolute; z-index: 2; margin: 0; touch-action: none; }
