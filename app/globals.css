@@ -574,7 +574,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 .reaction-picker-control, .sticker-composer-control { position: relative; display: inline-flex; }
 .reaction-picker, .sticker-picker { position: absolute; z-index: 220; right: 0; bottom: calc(100% + 7px); width: min(310px, calc(100vw - 32px)); padding: 10px; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 34px rgb(0 0 0 / 34%); background: var(--surface-raised); color: var(--text); }
-.reaction-picker { right: auto; left: 0; width: min(280px, calc(100vw - 48px)); }
+.reaction-picker { position: fixed; right: auto; bottom: auto; left: auto; width: min(280px, calc(100vw - 48px)); overflow-y: auto; overscroll-behavior: contain; }
 .reaction-picker > b, .sticker-picker > b { display: block; margin: 0 0 7px; font-size: 11px; }
 .reaction-picker-grid, .sticker-picker-grid { display: flex; flex-wrap: wrap; gap: 5px; }
 .reaction-picker-grid > button { display: grid; width: 30px; height: 30px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); font-size: 17px; }
