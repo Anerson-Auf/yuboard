@@ -363,7 +363,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .board-background-upload { display: flex; justify-content: flex-end; margin: -4px 34px 8px; }
 .board-background-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .public-board-notice { margin: 0 34px 12px; color: #cecfd2; font-size: 12px; font-weight: 700; }
-.public-viewer .share-button, .public-viewer .board-menu-control, .public-viewer .board-tools > .secondary-button, .public-viewer .board-team-button, .public-viewer .board-archive-button, .public-viewer .title-edit, .public-viewer .column-actions, .public-viewer .add-task, .public-viewer .add-column, .public-viewer .card-complete { display: none; }
+.public-viewer .share-button, .public-viewer .board-menu-control, .public-viewer .board-tools > .secondary-button, .public-viewer .board-team-button, .public-viewer .title-edit, .public-viewer .column-actions, .public-viewer .add-task, .public-viewer .add-column, .public-viewer .card-complete { display: none; }
 .public-viewer .task-card { cursor: pointer; }
 .public-viewer .task-modal .quick-action, .public-viewer .task-modal .member-plus, .public-viewer .task-modal .label-plus, .public-viewer .task-modal .text-action, .public-viewer .task-modal .archive-button, .public-viewer .task-modal .comment-composer, .public-viewer .task-modal .attachment-remove, .public-viewer .task-modal .upload-button, .public-viewer .task-modal .card-priority-editor { display: none; }
 .public-viewer .task-modal .card-title-input, .public-viewer .task-modal .card-description-input { pointer-events: none; }

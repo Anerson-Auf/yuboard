@@ -687,7 +687,16 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
       const composer = composerRef.current;
       const current = composer ? composerText(composer) : value;
       const caret = composer ? composerSelectionOffset(composer) : current.length;
-      updateValue(`${current.slice(0, caret)}${sticker.body}${current.slice(caret)}`, caret + sticker.body.length);
+      const next = `${current.slice(0, caret)}${sticker.body}${current.slice(caret)}`;
+      const nextCaret = caret + sticker.body.length;
+      updateValue(next, nextCaret);
+      // Sticker tokens need an immediate DOM projection; the parent draft is
+      // deliberately delayed to keep a large board smooth while typing.
+      if (composer) {
+        renderComposerText(composer, next);
+        placeComposerCaret(composer, nextCaret);
+        pendingCaret.current = null;
+      }
       window.requestAnimationFrame(() => composerRef.current?.focus());
     },
     getValue() { return composerRef.current ? composerText(composerRef.current) : localValueRef.current; },
