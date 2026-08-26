@@ -2,7 +2,7 @@
    instance is retained only for a gradual component migration. */
 .task-content > .card-review-panel:not(.compact) { display: none !important; }
 
-.card-priority-review-row { position: relative; z-index: 28; }
+.card-priority-review-row { position: relative; }
 .card-priority-review-row:has(.review-compact-popover) { z-index: 90; }
-.card-review-panel.compact { isolation: isolate; z-index: 2; }
+.card-review-panel.compact { isolation: isolate; }
 .review-compact-popover { z-index: 1200; }
