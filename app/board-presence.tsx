@@ -10,10 +10,10 @@ function csrfHeaders() {
   return token ? { 'Content-Type': 'application/json', 'x-flowboard-csrf': decodeURIComponent(token) } : { 'Content-Type': 'application/json' };
 }
 
-export function useBoardPresence({ boardId, currentUserId, activeCardId, editingDescription }: { boardId?: string | null; currentUserId?: string; activeCardId?: string | null; editingDescription: boolean }) {
+export function useBoardPresence({ boardId, currentUserId, activeCardId, editingDescription, isBoardOpen }: { boardId?: string | null; currentUserId?: string; activeCardId?: string | null; editingDescription: boolean; isBoardOpen: boolean }) {
   const [people, setPeople] = useState<Presence[]>([]);
   useEffect(() => {
-    if (!boardId || !currentUserId) { setPeople([]); return; }
+    if (!boardId || !currentUserId || !isBoardOpen) { setPeople([]); return; }
     let active = true;
     const refresh = () => {
       void fetch(`/v1/boards/${boardId}/presence`, { method: 'PUT', headers: csrfHeaders(), body: JSON.stringify({ card_id: activeCardId ?? null, editing_description: editingDescription }) })
@@ -21,9 +21,18 @@ export function useBoardPresence({ boardId, currentUserId, activeCardId, editing
         .then((next) => { if (active) setPeople(next); });
     };
     refresh();
-    const timer = window.setInterval(refresh, 12_000);
+    const timer = window.setInterval(refresh, 6_000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [activeCardId, boardId, currentUserId, editingDescription]);
+  }, [activeCardId, boardId, currentUserId, editingDescription, isBoardOpen]);
+
+  useEffect(() => {
+    if (!boardId || !currentUserId || !isBoardOpen) return;
+    const leave = () => {
+      void fetch(`/v1/boards/${boardId}/presence`, { method: 'DELETE', headers: csrfHeaders(), keepalive: true });
+    };
+    window.addEventListener('pagehide', leave);
+    return () => { window.removeEventListener('pagehide', leave); leave(); };
+  }, [boardId, currentUserId, isBoardOpen]);
   return people;
 }
 

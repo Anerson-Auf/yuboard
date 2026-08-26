@@ -1442,7 +1442,7 @@ async fn main() {
         .route("/v1/boards/{board_id}/freeform/cards/{card_id}", put(update_board_freeform_card_position).delete(clear_board_freeform_card_position))
         .route("/v1/boards/{board_id}/freeform/live", get(get_freeform_live).post(update_freeform_live))
         .route("/v1/boards/{board_id}/freeform/live/ws", get(freeform_live_websocket))
-        .route("/v1/boards/{board_id}/presence", get(get_board_presence).put(update_board_presence))
+        .route("/v1/boards/{board_id}/presence", get(get_board_presence).put(update_board_presence).delete(leave_board_presence))
         .route("/v1/boards/{board_id}/freeform/drawing", get(get_board_freeform_drawing).put(replace_board_freeform_drawing))
         .route("/v1/boards/{board_id}/background", put(update_board_background))
         .route("/v1/boards/{board_id}/background/file", get(download_board_background).post(upload_board_background))
@@ -2941,7 +2941,7 @@ async fn board_presence_snapshot(state: &AppState, board_id: Uuid) -> ApiResult<
         let now = Instant::now();
         let mut boards = state.board_presence.lock().await;
         let board = boards.entry(board_id).or_default();
-        board.retain(|_, presence| now.duration_since(presence.last_seen) <= Duration::from_secs(35));
+        board.retain(|_, presence| now.duration_since(presence.last_seen) <= Duration::from_secs(18));
         board.iter().map(|(user_id, presence)| (*user_id, presence.clone())).collect::<Vec<_>>()
     };
     if active.is_empty() { return Ok(Json(Vec::new())); }
@@ -2966,6 +2966,16 @@ async fn update_board_presence(State(state): State<AppState>, current: CurrentUs
     }
     state.board_presence.lock().await.entry(board_id).or_default().insert(current.id, BoardPresence { card_id: request.card_id, editing_description: request.editing_description, last_seen: Instant::now() });
     board_presence_snapshot(&state, board_id).await
+}
+
+async fn leave_board_presence(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    let mut boards = state.board_presence.lock().await;
+    if let Some(board) = boards.get_mut(&board_id) {
+        board.remove(&current.id);
+        if board.is_empty() { boards.remove(&board_id); }
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn record_freeform_live_update(state: &AppState, board_id: Uuid, current: CurrentUser, x: i32, y: i32, ping: bool) -> Result<FreeformLiveEvent, ApiError> {

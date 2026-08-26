@@ -1035,7 +1035,7 @@ export default function Home() {
   const unreadNotificationCount = notifications.filter((notification) => !notification.is_read).length;
   const dueDays = useMemo(() => calendarDays(dueCursor), [dueCursor]);
   const currentMember = account ? memberFromApi({ id: account.user.id, username: account.user.username, avatar_url: account.user.avatar_url }) : { id: '', initials: '—', color: 'violet', name: 'Пользователь' };
-  const boardPresence = useBoardPresence({ boardId, currentUserId: account?.user.id, activeCardId: selected && typeof selected.id === 'string' ? selected.id : null, editingDescription: isEditingCardDescription });
+  const boardPresence = useBoardPresence({ boardId, currentUserId: account?.user.id, activeCardId: selected && typeof selected.id === 'string' ? selected.id : null, editingDescription: isEditingCardDescription, isBoardOpen: view === 'board' });
   const boardBackgroundStyle = view === 'board' && boardBackgroundUrl ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${assetUrl(boardBackgroundUrl)}")`, backgroundSize: boardBackgroundFit === 'fill' ? '100% 100%' : boardBackgroundFit, backgroundPosition: boardBackgroundPosition === 'top' ? 'center top' : boardBackgroundPosition === 'bottom' ? 'center bottom' : 'center', backgroundRepeat: 'no-repeat' } : undefined;
 
   const visibleColumns = useMemo(() => columns.map((column) => {
