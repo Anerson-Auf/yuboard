@@ -1703,7 +1703,7 @@ export default function Home() {
   }
   function renderChecklists() {
     return <section className="checklists checklist-panel">
-      <div className="section-heading"><h3>Чек-листы</h3><span>{checklists.length || '—'}</span>{checklists.some((checklist) => checklist.items.some((item) => item.is_completed)) && <button className="text-action checklist-completed-toggle" type="button" onClick={() => setHideCompletedChecklistItems((current) => !current)}>{hideCompletedChecklistItems ? 'Показать отмеченные пункты' : 'Скрыть отмеченные пункты'}</button>}</div>
+      <div className="section-heading"><div className="checklist-heading-title"><h3>Чек-листы</h3><span>{checklists.length || '—'}</span></div>{checklists.some((checklist) => checklist.items.some((item) => item.is_completed)) && <button className="text-action checklist-completed-toggle" type="button" onClick={() => setHideCompletedChecklistItems((current) => !current)}>{hideCompletedChecklistItems ? 'Показать отмеченные пункты' : 'Скрыть отмеченные пункты'}</button>}</div>
       {isDetailsLoading ? <p className="detail-loading">Загружаем чек-листы…</p> : <>
         {checklists.map((checklist) => {
           const completed = checklist.items.filter((item) => item.is_completed).length;
