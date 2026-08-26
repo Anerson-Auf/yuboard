@@ -1,38 +1,84 @@
 'use client';
 
-import { ChangeEvent, CSSProperties, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import './parking-shelf.css';
 
 export type ParkingMember = { id: string; name: string; initials: string; color: string; avatarUrl?: string | null };
 export type ParkingLabel = { id: string; name: string; color: string; icon_shape?: string; icon_color?: string };
 export type ParkingRole = { id: string; name: string; color: string; icon_shape?: string; icon_color?: string };
-type ParkingChecklistItem = { id: string; title: string; done: boolean };
-type ParkingChecklist = { id: string; title: string; items: ParkingChecklistItem[] };
-type ParkingAttachment = { id: string; name: string; type: string; url: string };
-type ParkingComment = { id: string; body: string; createdAt: string };
-export type ParkingCard = { id: string; title: string; description: string; priority: number; createdAt: string; completedAt?: string | null; startAt?: string; dueAt?: string; labels?: ParkingLabel[]; roles?: ParkingRole[]; members?: ParkingMember[]; checklists?: ParkingChecklist[]; attachments?: ParkingAttachment[]; comments?: ParkingComment[]; coverAttachmentId?: string | null };
-type ColumnChoice = { id: string; title: string };
+export type ParkingAttachment = { id: string; name: string; type: string; url: string; size?: number };
+export type ParkingChecklistItem = { id: string; title: string; done: boolean; description?: string; attachments?: ParkingAttachment[] };
+export type ParkingChecklist = { id: string; title: string; items: ParkingChecklistItem[] };
+export type ParkingComment = { id: string; body: string; authorName?: string; createdAt: string };
 
-const id = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-const localDate = (value?: string) => value ? value.slice(0, 16) : '';
-function normalise(card: ParkingCard): ParkingCard { return { ...card, labels: card.labels ?? [], roles: card.roles ?? [], members: card.members ?? [], checklists: card.checklists ?? [], attachments: card.attachments ?? [], comments: card.comments ?? [], completedAt: card.completedAt ?? null, coverAttachmentId: card.coverAttachmentId ?? null }; }
-function avatar(member: ParkingMember) { return member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : <span style={{ background: member.color }}>{member.initials || member.name.slice(0, 2).toUpperCase()}</span>; }
-function chip(item: ParkingLabel | ParkingRole) { return <span className="parking-chip" style={{ '--parking-chip': item.color } as CSSProperties}><i style={{ background: item.icon_color || item.color }} />{item.name}</span>; }
+/**
+ * Local representation deliberately mirrors the data used by a board card.
+ * It lives in the browser only, but is rendered by the same card UI in page.tsx.
+ */
+export type ParkingCard = {
+  id: string;
+  title: string;
+  description: string;
+  priority: number;
+  createdAt: string;
+  completedAt?: string | null;
+  startAt?: string;
+  dueAt?: string;
+  labels?: ParkingLabel[];
+  roles?: ParkingRole[];
+  members?: ParkingMember[];
+  checklists?: ParkingChecklist[];
+  attachments?: ParkingAttachment[];
+  comments?: ParkingComment[];
+  coverAttachmentId?: string;
+  coverMode?: 'full' | 'top';
+  backgroundImageUrl?: string;
+};
 
-export default function ParkingShelf({ storageKey, columns, cards, onChange, onMoveToBoard, onParkServerCard, draggedServerCard, labels, roles, members }: { storageKey: string; columns: ColumnChoice[]; cards: ParkingCard[]; onChange: (cards: ParkingCard[]) => void; onMoveToBoard: (card: ParkingCard, listId: string) => Promise<boolean>; onParkServerCard: () => void; draggedServerCard: boolean; labels: ParkingLabel[]; roles: ParkingRole[]; members: ParkingMember[] }) {
-  const [draftTitle, setDraftTitle] = useState(''); const [editingId, setEditingId] = useState<string | null>(null); const [targetListId, setTargetListId] = useState(''); const [movingId, setMovingId] = useState<string | null>(null); const [commentDraft, setCommentDraft] = useState(''); const [checklistDraft, setChecklistDraft] = useState(''); const [itemDrafts, setItemDrafts] = useState<Record<string, string>>({}); const dragPoint = useRef({ x: 0, y: 0 }); const inputRef = useRef<HTMLInputElement>(null);
-  const normalCards = useMemo(() => cards.map(normalise), [cards]); const editing = normalCards.find((card) => card.id === editingId) ?? null;
-  useEffect(() => { if (!targetListId && columns[0]) setTargetListId(columns[0].id); }, [columns, targetListId]);
-  useEffect(() => { window.localStorage.setItem(storageKey, JSON.stringify(normalCards)); }, [normalCards, storageKey]);
-  function update(idValue: string, patch: Partial<ParkingCard>) { onChange(normalCards.map((card) => card.id === idValue ? normalise({ ...card, ...patch }) : card)); }
-  function addLocalCard(event: FormEvent) { event.preventDefault(); const title = draftTitle.trim(); if (!title) return; onChange([...normalCards, normalise({ id: id('parking'), title, description: '', priority: 0, createdAt: new Date().toISOString() })]); setDraftTitle(''); }
-  async function promote(card: ParkingCard, listId = targetListId) { if (!listId || movingId) return; setMovingId(card.id); try { if (await onMoveToBoard(card, listId)) { onChange(normalCards.filter((item) => item.id !== card.id)); setEditingId(null); } } finally { setMovingId(null); } }
-  function startLocalDrag(event: DragEvent<HTMLElement>, card: ParkingCard) { event.dataTransfer.setData('application/x-flowboard-parking-card', card.id); event.dataTransfer.effectAllowed = 'move'; }
-  function trackLocalDrag(event: DragEvent<HTMLElement>) { if (event.clientX > 0 && event.clientY > 0) dragPoint.current = { x: event.clientX, y: event.clientY }; }
-  function finishLocalDrag(card: ParkingCard) { const listId = document.elementFromPoint(dragPoint.current.x, dragPoint.current.y)?.closest<HTMLElement>('[data-list-id]')?.dataset.listId; if (listId) void promote(card, listId); }
-  function toggleArray<T extends { id: string }>(card: ParkingCard, key: 'labels' | 'roles' | 'members', item: T) { const current = card[key] as T[]; update(card.id, { [key]: current.some((value) => value.id === item.id) ? current.filter((value) => value.id !== item.id) : [...current, item] } as Partial<ParkingCard>); }
-  function addChecklist() { if (!editing || !checklistDraft.trim()) return; update(editing.id, { checklists: [...editing.checklists!, { id: id('checklist'), title: checklistDraft.trim(), items: [] }] }); setChecklistDraft(''); }
-  function addChecklistItem(checklistId: string) { if (!editing) return; const title = itemDrafts[checklistId]?.trim(); if (!title) return; update(editing.id, { checklists: editing.checklists!.map((list) => list.id === checklistId ? { ...list, items: [...list.items, { id: id('item'), title, done: false }] } : list) }); setItemDrafts((current) => ({ ...current, [checklistId]: '' })); }
-  function onFiles(event: ChangeEvent<HTMLInputElement>) { const files = [...(event.target.files ?? [])]; event.target.value = ''; if (!editing || !files.length) return; Promise.all(files.map((file) => new Promise<ParkingAttachment>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve({ id: id('file'), name: file.name, type: file.type || 'application/octet-stream', url: String(reader.result) }); reader.onerror = reject; reader.readAsDataURL(file); }))).then((attachments) => update(editing.id, { attachments: [...editing.attachments!, ...attachments] })).catch(() => undefined); }
-  return <><section className={`column parking-column ${draggedServerCard ? 'drag-target' : ''}`} data-parking-drop aria-label="Локальная парковка" onDragOver={(event) => { if (draggedServerCard) event.preventDefault(); }} onDrop={(event) => { if (!draggedServerCard) return; event.preventDefault(); onParkServerCard(); }}><div className="column-head"><span className="column-drag-icon" aria-hidden="true">▱</span><div><h2>Парковка</h2><span>{normalCards.length}</span></div><small>локально</small></div><div className="card-list">{normalCards.map((card) => { const done = card.checklists!.reduce((total, list) => total + list.items.length, 0), checked = card.checklists!.reduce((total, list) => total + list.items.filter((item) => item.done).length, 0); const cover = card.attachments!.find((file) => file.id === card.coverAttachmentId); return <article key={card.id} className={`task-card parking-task-card ${card.completedAt ? 'completed' : ''}`} draggable onDragStart={(event) => startLocalDrag(event, card)} onDrag={trackLocalDrag} onDragEnd={() => finishLocalDrag(card)} onClick={() => setEditingId(card.id)}>{cover && /^(image|video)\//.test(cover.type) && (cover.type.startsWith('video/') ? <video className="parking-cover" src={cover.url} muted /> : <img className="parking-cover" src={cover.url} alt="" />)}<div className="card-main"><div className="card-top">{card.labels!.length > 0 && <div className="card-labels">{card.labels!.slice(0, 3).map((value) => chip(value))}</div>}</div><div className="card-title-row"><span className={`card-complete ${card.completedAt ? 'done' : ''}`}>{card.completedAt && '✓'}</span><h3>{card.title}</h3></div>{card.description && <p className="parking-card-description">{card.description}</p>}</div>{card.priority ? <span className="card-priority-corner">{'▮'.repeat(card.priority)}</span> : null}<footer className="card-footer"><div className="card-meta">{done > 0 && <span className={done === checked ? 'checklist-complete' : ''}>☑ {checked}/{done}</span>}{card.comments!.length > 0 && <span>▱ {card.comments!.length}</span>}{card.attachments!.length > 0 && <span>☰</span>}</div><div className="card-avatars">{card.members!.slice(0, 3).map((member) => <span className="avatar" key={member.id}>{avatar(member)}</span>)}{card.members!.length > 3 && <span className="avatar-more">+{card.members!.length - 3}</span>}</div></footer></article>; })}</div><form className="parking-add" onSubmit={addLocalCard}><input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} maxLength={200} placeholder="Добавить локальную задачу" /><button type="submit">＋</button></form></section>{editing && <div className="modal-backdrop parking-modal-backdrop" onMouseDown={() => setEditingId(null)}><section className="task-modal parking-task-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setEditingId(null)}>×</button><div className="parking-modal-layout"><main className="parking-modal-main"><p className="eyebrow">ЛОКАЛЬНАЯ КАРТОЧКА · НЕ СИНХРОНИЗИРУЕТСЯ</p><div className="parking-title-row"><button type="button" className={`card-complete ${editing.completedAt ? 'done' : ''}`} onClick={() => update(editing.id, { completedAt: editing.completedAt ? null : new Date().toISOString() })}>{editing.completedAt && '✓'}</button><input className="card-title-input" value={editing.title} onChange={(event) => update(editing.id, { title: event.target.value.slice(0, 200) })} /></div><section className="parking-section"><h3>Описание</h3><textarea className="card-description-input parking-description-input" value={editing.description} onChange={(event) => update(editing.id, { description: event.target.value.slice(0, 10_000) })} placeholder="Добавьте описание" /></section><section className="parking-section"><div className="section-heading"><h3>Чек-листы</h3></div>{editing.checklists!.map((list) => <div className="parking-checklist" key={list.id}><header><b>{list.title}</b><button type="button" onClick={() => update(editing.id, { checklists: editing.checklists!.filter((item) => item.id !== list.id) })}>×</button></header>{list.items.map((item) => <label key={item.id}><input type="checkbox" checked={item.done} onChange={() => update(editing.id, { checklists: editing.checklists!.map((current) => current.id === list.id ? { ...current, items: current.items.map((entry) => entry.id === item.id ? { ...entry, done: !entry.done } : entry) } : current) })} /><span>{item.title}</span><button type="button" onClick={() => update(editing.id, { checklists: editing.checklists!.map((current) => current.id === list.id ? { ...current, items: current.items.filter((entry) => entry.id !== item.id) } : current) })}>×</button></label>)}<form onSubmit={(event) => { event.preventDefault(); addChecklistItem(list.id); }}><input value={itemDrafts[list.id] ?? ''} onChange={(event) => setItemDrafts((current) => ({ ...current, [list.id]: event.target.value }))} placeholder="Добавить пункт" /><button>＋</button></form></div>)}<form className="parking-new-checklist" onSubmit={(event) => { event.preventDefault(); addChecklist(); }}><input value={checklistDraft} onChange={(event) => setChecklistDraft(event.target.value)} placeholder="Название нового чек-листа" /><button>＋ Чек-лист</button></form></section><section className="parking-section"><div className="section-heading"><h3>Вложения</h3><button type="button" onClick={() => inputRef.current?.click()}>＋ Добавить файл</button></div><div className="parking-attachments">{editing.attachments!.map((file) => <figure key={file.id}>{file.type.startsWith('image/') ? <img src={file.url} alt={file.name} /> : file.type.startsWith('video/') ? <video src={file.url} controls /> : <a href={file.url} download={file.name}>{file.name}</a>}<figcaption><span>{file.name}</span>{/^(image|video)\//.test(file.type) && <button type="button" onClick={() => update(editing.id, { coverAttachmentId: editing.coverAttachmentId === file.id ? null : file.id })}>{editing.coverAttachmentId === file.id ? 'Снять фон' : 'Сделать фоном'}</button>}<button type="button" onClick={() => update(editing.id, { attachments: editing.attachments!.filter((item) => item.id !== file.id), coverAttachmentId: editing.coverAttachmentId === file.id ? null : editing.coverAttachmentId })}>×</button></figcaption></figure>)}</div><input ref={inputRef} type="file" multiple className="attachment-upload-input" onChange={onFiles} /></section></main><aside className="parking-modal-side"><section><h3>Приоритет</h3><div className="parking-priority-bars">{[1, 2, 3, 4, 5].map((value) => <button key={value} type="button" className={editing.priority >= value ? 'active' : ''} onClick={() => update(editing.id, { priority: editing.priority === value ? 0 : value })}>▮</button>)}</div></section><section><h3>Период</h3><label>Начало<input type="datetime-local" value={localDate(editing.startAt)} onChange={(event) => update(editing.id, { startAt: event.target.value ? new Date(event.target.value).toISOString() : '' })} /></label><label>Дедлайн<input type="datetime-local" value={localDate(editing.dueAt)} onChange={(event) => update(editing.id, { dueAt: event.target.value ? new Date(event.target.value).toISOString() : '' })} /></label></section><section><h3>Исполнители</h3><div className="parking-option-grid">{members.map((member) => <button key={member.id} type="button" className={editing.members!.some((value) => value.id === member.id) ? 'selected' : ''} onClick={() => toggleArray(editing, 'members', member)}>{avatar(member)}<span>{member.name}</span></button>)}</div></section><section><h3>Метки</h3><div className="parking-option-grid chips">{labels.map((label) => <button key={label.id} type="button" className={editing.labels!.some((value) => value.id === label.id) ? 'selected' : ''} onClick={() => toggleArray(editing, 'labels', label)}>{chip(label)}</button>)}</div></section><section><h3>Роли</h3><div className="parking-option-grid chips">{roles.map((role) => <button key={role.id} type="button" className={editing.roles!.some((value) => value.id === role.id) ? 'selected' : ''} onClick={() => toggleArray(editing, 'roles', role)}>{chip(role)}</button>)}</div></section><section className="parking-comments"><h3>Обсуждение</h3>{editing.comments!.map((comment) => <article key={comment.id}><p>{comment.body}</p><small>{new Date(comment.createdAt).toLocaleString('ru-RU')}</small><button type="button" onClick={() => update(editing.id, { comments: editing.comments!.filter((item) => item.id !== comment.id) })}>×</button></article>)}<form onSubmit={(event) => { event.preventDefault(); const body = commentDraft.trim(); if (!body) return; update(editing.id, { comments: [...editing.comments!, { id: id('comment'), body, createdAt: new Date().toISOString() }] }); setCommentDraft(''); }}><textarea value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Написать комментарий" /><button>Отправить</button></form></section><footer className="parking-modal-actions"><select value={targetListId} onChange={(event) => setTargetListId(event.target.value)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select><button type="button" className="create-button" onClick={() => void promote(editing)} disabled={!targetListId || movingId === editing.id}>{movingId === editing.id ? 'Переносим…' : 'Перенести на доску'}</button><button type="button" className="archive-button" onClick={() => { onChange(normalCards.filter((card) => card.id !== editing.id)); setEditingId(null); }}>Удалить локально</button></footer></aside></div></section></div>}</>;
+type Props = {
+  storageKey: string;
+  cards: ParkingCard[];
+  onChange: (cards: ParkingCard[]) => void;
+  onOpenCard: (card: ParkingCard) => void;
+  onCreateCard: (title: string) => void;
+  renderCard: (card: ParkingCard) => ReactNode;
+  onParkServerCard: () => void;
+  draggedServerCard: boolean;
+};
+
+export default function ParkingShelf({ storageKey, cards, onChange, onOpenCard, onCreateCard, renderCard, onParkServerCard, draggedServerCard }: Props) {
+  const [isComposerOpen, setComposerOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKey, JSON.stringify(cards));
+  }, [cards, storageKey]);
+
+  function createCard(event: FormEvent) {
+    event.preventDefault();
+    const title = draft.trim();
+    if (!title) return;
+    onCreateCard(title);
+    setDraft('');
+    setComposerOpen(false);
+  }
+
+  return <section
+    className="column parking-column"
+    aria-label="Локальная парковка"
+    onDragOver={(event) => { if (draggedServerCard) event.preventDefault(); }}
+    onDrop={(event) => { if (!draggedServerCard) return; event.preventDefault(); onParkServerCard(); }}
+  >
+    <div className="column-header">
+      <h2><span className="drag-handle" aria-hidden="true">⁝</span> Парковка <small>локально</small></h2>
+      <span className="column-count">{cards.length}</span>
+    </div>
+    <div className="card-list parking-card-list">
+      {cards.map((card) => <div key={card.id} onClick={() => onOpenCard(card)}>{renderCard(card)}</div>)}
+    </div>
+    {isComposerOpen ? <form className="composer" onSubmit={createCard}>
+      <textarea autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Название задачи" />
+      <div><button className="add-card" type="submit">Добавить</button><button className="cancel" type="button" onClick={() => { setComposerOpen(false); setDraft(''); }}>Отмена</button></div>
+    </form> : <button className="add-task" type="button" onClick={() => setComposerOpen(true)}>＋ Добавить задачу</button>}
+  </section>;
 }

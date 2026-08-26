@@ -117,7 +117,7 @@ const DEFAULT_STICKERS = [
 
 function assetUrl(url: string | null | undefined) {
   if (!url) return '';
-  return /^https?:\/\//i.test(url) ? url : `${API_URL}${url}`;
+  return /^(?:https?:|data:|blob:)/i.test(url) ? url : `${API_URL}${url}`;
 }
 
 function CardCover({ card }: { card: Pick<Card, 'coverUrl' | 'coverMediaType' | 'coverMode' | 'hasUnvotedPolls'> }) {
@@ -1013,6 +1013,8 @@ export default function Home() {
   const [focusRelatedCardIds, setFocusRelatedCardIds] = useState<string[]>([]);
   const [parkingCards, setParkingCards] = useState<ParkingCard[]>([]);
   const [parkingStorageKey, setParkingStorageKey] = useState<string | null>(null);
+  const [selectedParkingCardId, setSelectedParkingCardId] = useState<string | null>(null);
+  const [parkingRestoreListId, setParkingRestoreListId] = useState('');
   const [isBulkMode, setBulkMode] = useState(false);
   const [bulkCardIds, setBulkCardIds] = useState<string[]>([]);
   const [bulkTargetListId, setBulkTargetListId] = useState('');
@@ -1055,6 +1057,7 @@ export default function Home() {
   const bulkPointerSelectRef = useRef(false);
   const pointerCardDropRef = useRef<{ listId: EntityId; beforeCardId?: EntityId } | null>(null);
   const pointerParkingDropRef = useRef(false);
+  const parkingDragPointRef = useRef({ x: 0, y: 0 });
   const cardDragPreviewElementRef = useRef<HTMLDivElement | null>(null);
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
@@ -1069,6 +1072,8 @@ export default function Home() {
   const diagramStartRef = useRef<DiagramPoint | null>(null);
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
   const selectedCardId = selected?.id;
+  const selectedParkingCard = selectedParkingCardId ? parkingCards.find((card) => card.id === selectedParkingCardId) ?? null : null;
+  const isSelectedParkingCard = Boolean(selectedParkingCard && selected && String(selected.id) === selectedParkingCard.id);
   const isPublicViewer = authState === 'public' || !canEditBoard;
   const currentTeamPreset = account ? teamMembers.find((member) => member.id === account.user.id)?.preset : undefined;
   const canManageFullAccess = Boolean(account?.user.is_system_owner || currentTeamPreset === 'owner');
@@ -1080,6 +1085,62 @@ export default function Home() {
   const boardPresence = useBoardPresence({ boardId, currentUserId: account?.user.id, activeCardId: selected && typeof selected.id === 'string' ? selected.id : null, editingDescription: isEditingCardDescription, isBoardOpen: view === 'board' });
   const usesDefaultBoardBackground = view === 'board' && (!boardBackgroundUrl || boardBackgroundFailed);
   const boardBackgroundStyle = view === 'board' && boardBackgroundUrl && !boardBackgroundFailed ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${assetUrl(boardBackgroundUrl)}")`, backgroundSize: boardBackgroundFit === 'fill' ? '100% 100%' : boardBackgroundFit, backgroundPosition: boardBackgroundPosition === 'top' ? 'center top' : boardBackgroundPosition === 'bottom' ? 'center bottom' : 'center', backgroundRepeat: 'no-repeat' } : undefined;
+
+  function parkingCardToCard(card: ParkingCard): Card {
+    const attachments = card.attachments ?? [];
+    const cover = attachments.find((attachment) => attachment.id === card.coverAttachmentId);
+    const items = (card.checklists ?? []).flatMap((checklist) => checklist.items);
+    return {
+      id: card.id,
+      title: card.title,
+      description: card.description,
+      priority: card.priority || undefined,
+      startAt: card.startAt,
+      dueAt: card.dueAt,
+      completedAt: card.completedAt ?? undefined,
+      coverAttachmentId: card.coverAttachmentId,
+      coverUrl: cover?.url,
+      coverMediaType: cover?.type,
+      coverMode: card.coverMode ?? 'full',
+      backgroundImageUrl: card.backgroundImageUrl,
+      labels: (card.labels ?? []) as Label[],
+      roles: (card.roles ?? []) as ProfileRole[],
+      members: (card.members ?? []).map((member) => ({ ...member })),
+      checklist: items.length ? `${items.filter((item) => item.done).length}/${items.length}` : undefined,
+      comments: card.comments?.length || undefined,
+      attachments: attachments.length || undefined,
+    };
+  }
+
+  function parkingChecklistsToChecklists(card: ParkingCard): Checklist[] {
+    return (card.checklists ?? []).map((checklist) => ({
+      id: checklist.id,
+      title: checklist.title,
+      items: checklist.items.map((item) => ({
+        id: item.id,
+        title: item.title,
+        is_completed: item.done,
+        description: item.description ?? '',
+        attachments: (item.attachments ?? []).map((attachment) => ({ id: attachment.id, original_name: attachment.name, media_type: attachment.type, byte_size: attachment.size ?? 0, url: attachment.url })),
+      })),
+    }));
+  }
+
+  function parkingAttachmentsToAttachments(card: ParkingCard): Attachment[] {
+    return (card.attachments ?? []).map((attachment) => ({ id: attachment.id, original_name: attachment.name, media_type: attachment.type, byte_size: attachment.size ?? 0, url: attachment.url }));
+  }
+
+  function parkingCommentsToComments(card: ParkingCard): Comment[] {
+    return (card.comments ?? []).map((comment) => ({ id: comment.id, body: comment.body, author_name: comment.authorName ?? 'Вы', created_at: comment.createdAt }));
+  }
+
+  function updateParkingCard(cardId: string, updater: (card: ParkingCard) => ParkingCard) {
+    setParkingCards((current) => current.map((card) => card.id === cardId ? updater(card) : card));
+  }
+
+  function isParkingCardId(cardId: EntityId | undefined) {
+    return typeof cardId === 'string' && cardId.startsWith('parking-');
+  }
 
   const visibleColumns = useMemo(() => columns.map((column) => {
     const cards = column.cards.filter((card) => {
@@ -1296,7 +1357,7 @@ export default function Home() {
   }, [columns, pendingNotificationCardId]);
 
   useEffect(() => {
-    if (persistence !== 'connected' || typeof selectedCardId !== 'string' || uploadingAttachmentCardIdRef.current === selectedCardId) return;
+    if (persistence !== 'connected' || typeof selectedCardId !== 'string' || isParkingCardId(selectedCardId) || uploadingAttachmentCardIdRef.current === selectedCardId) return;
     let cancelled = false;
     const coverRevisionAtRequest = cardCoverRevisionRef.current[selectedCardId] ?? 0;
     const attachmentRevisionAtRequest = cardAttachmentRevisionRef.current[selectedCardId] ?? 0;
@@ -1736,7 +1797,7 @@ export default function Home() {
     </section>;
   }
   function renderExistingCardRelationsAndPolls() {
-    if (!selected || typeof selected.id !== 'string') return null;
+    if (!selected || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return null;
     const candidates = columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title })));
     const restoreDescription = (description: string) => {
       setCardDescriptionDraft(description);
@@ -1749,6 +1810,11 @@ export default function Home() {
   function persistCardDraft(card: Card, updated: { title: string; description: string }) {
     setCardSaveStatus('saving');
     setSelected((current) => current?.id === card.id ? { ...current, ...updated } : current);
+    if (isParkingCardId(card.id)) {
+      updateParkingCard(String(card.id), (current) => ({ ...current, ...updated }));
+      setCardSaveStatus('saved');
+      return;
+    }
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((item) => item.id === card.id ? { ...item, ...updated } : item) })));
     if (persistence !== 'connected' || typeof card.id !== 'string') { setCardSaveStatus('saved'); return; }
     void fetch(`${API_URL}/v1/cards/${card.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updated) })
@@ -1762,6 +1828,7 @@ export default function Home() {
       persistCardDraft(card, { title, description: cardDescriptionDraft });
     }
     setSelected(null);
+    setSelectedParkingCardId(null);
   }
   function applyChecklists(nextChecklists: Checklist[]) {
     setChecklists(nextChecklists);
@@ -1769,6 +1836,10 @@ export default function Home() {
     const items = nextChecklists.flatMap((checklist) => checklist.items);
     const checklist = items.length ? `${items.filter((item) => item.is_completed).length}/${items.length}` : undefined;
     setSelected((current) => current ? { ...current, checklist } : current);
+    if (isParkingCardId(selectedCardId)) {
+      updateParkingCard(selectedCardId, (card) => ({ ...card, checklists: nextChecklists.map((current) => ({ id: current.id, title: current.title, items: current.items.map((item) => ({ id: String(item.id), title: item.title, done: item.is_completed, description: item.description, attachments: item.attachments.map((attachment) => ({ id: attachment.id, name: attachment.original_name, type: attachment.media_type, size: attachment.byte_size, url: attachment.url })) })) })) }));
+      return;
+    }
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, checklist } : card) })));
   }
   function updateBoardRoute(nextBoardId: string | null, replace = false) {
@@ -2391,7 +2462,29 @@ export default function Home() {
     setSidebarPanel(null);
     setCommentDraft('');
   }
+  function openParkingCard(card: ParkingCard) {
+    setSelectedParkingCardId(card.id);
+    setParkingRestoreListId(String(columns[0]?.id ?? ''));
+    openCard(parkingCardToCard(card));
+    setChecklists(parkingChecklistsToChecklists(card));
+    setAttachments(parkingAttachmentsToAttachments(card));
+    setComments(parkingCommentsToComments(card));
+    setActivity([]);
+    setDetailsLoading(false);
+  }
+  function createParkingCard(title: string) {
+    const card: ParkingCard = { id: `parking-${crypto.randomUUID()}`, title, description: '', priority: 0, createdAt: new Date().toISOString(), labels: [], roles: [], members: [], checklists: [], attachments: [], comments: [] };
+    setParkingCards((current) => [...current, card]);
+    openParkingCard(card);
+  }
   function archiveCard(card: Card) {
+    if (isParkingCardId(card.id)) {
+      setParkingCards((current) => current.filter((item) => item.id !== card.id));
+      setSelected(null);
+      setSelectedParkingCardId(null);
+      showToast('Локальная карточка удалена');
+      return;
+    }
     if (persistence === 'connected' && typeof card.id === 'string') {
       void fetch(`${API_URL}/v1/cards/${card.id}`, { method: 'DELETE' })
         .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось архивировать задачу'); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); showToast('Задача перемещена в архив'); })
@@ -2399,11 +2492,23 @@ export default function Home() {
     } else { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); showToast('Задача удалена'); }
   }
   function parkServerCard(card: Card) {
-    const snapshot: ParkingCard = { id: `parking-${crypto.randomUUID()}`, title: card.title, description: card.description ?? '', priority: card.priority ?? 0, createdAt: new Date().toISOString(), completedAt: card.completedAt ?? null, startAt: card.startAt, dueAt: card.dueAt, labels: card.labels.map((label) => ({ ...label })), roles: card.roles.map((role) => ({ ...role })), members: card.members.map((member) => ({ id: String(member.id), name: member.name, initials: member.initials, color: member.color, avatarUrl: member.avatarUrl })) };
-    const moveToParking = () => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); setParkingCards((current) => [snapshot, ...current]); showToast('Карточка перемещена в локальную парковку'); };
-    if (persistence !== 'connected' || typeof card.id !== 'string') { moveToParking(); return; }
-    void fetch(`${API_URL}/v1/cards/${card.id}`, { method: 'DELETE' })
-      .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось убрать задачу с сервера'); moveToParking(); })
+    const base: ParkingCard = { id: `parking-${crypto.randomUUID()}`, title: card.title, description: card.description ?? '', priority: card.priority ?? 0, createdAt: new Date().toISOString(), completedAt: card.completedAt ?? null, startAt: card.startAt, dueAt: card.dueAt, coverAttachmentId: card.coverAttachmentId, coverMode: card.coverMode, backgroundImageUrl: card.backgroundImageUrl, labels: card.labels.map((label) => ({ ...label })), roles: card.roles.map((role) => ({ ...role })), members: card.members.map((member) => ({ id: String(member.id), name: member.name, initials: member.initials, color: member.color, avatarUrl: member.avatarUrl })), checklists: [], attachments: [], comments: [] };
+    const moveToParking = (snapshot: ParkingCard) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); setParkingCards((current) => [snapshot, ...current]); showToast('Карточка перемещена в локальную парковку'); };
+    if (persistence !== 'connected' || typeof card.id !== 'string') { moveToParking(base); return; }
+    void fetch(`${API_URL}/v1/cards/${card.id}/details`)
+      .then(async (response) => { if (!response.ok) throw new Error('detail load failed'); return response.json() as Promise<CardDetail>; })
+      .then((detail) => {
+        const snapshot: ParkingCard = {
+          ...base,
+          coverAttachmentId: detail.cover_attachment_id ?? undefined,
+          coverMode: detail.cover_mode,
+          backgroundImageUrl: detail.background_image_url ?? undefined,
+          checklists: detail.checklists.map((checklist) => ({ id: checklist.id, title: checklist.title, items: checklist.items.map((item) => ({ id: String(item.id), title: item.title, done: item.is_completed, description: item.description, attachments: item.attachments.map((attachment) => ({ id: attachment.id, name: attachment.original_name, type: attachment.media_type, size: attachment.byte_size, url: attachment.url })) })) })),
+          attachments: detail.attachments.map((attachment) => ({ id: attachment.id, name: attachment.original_name, type: attachment.media_type, size: attachment.byte_size, url: attachment.url })),
+          comments: detail.comments.filter((comment) => !comment.parent_comment_id).map((comment) => ({ id: String(comment.id), body: comment.body, authorName: comment.author_name, createdAt: comment.created_at ?? new Date().toISOString() })),
+        };
+        return fetch(`${API_URL}/v1/cards/${card.id}`, { method: 'DELETE' }).then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось убрать задачу с сервера'); moveToParking(snapshot); });
+      })
       .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось переместить карточку в парковку'));
   }
   function toggleBulkCard(cardId: EntityId) {
@@ -2439,8 +2544,42 @@ export default function Home() {
       const response = await fetch(`${API_URL}/v1/lists/${listId}/cards`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: card.title, description: card.description }) });
       if (!response.ok) throw new Error('create failed');
       const saved = await response.json() as { id: string };
-      if (card.priority) await fetch(`${API_URL}/v1/cards/${saved.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priority: card.priority }) });
-      setColumns((current) => current.map((column) => column.id === listId ? { ...column, cards: [...column.cards, { id: saved.id, title: card.title, description: card.description, priority: card.priority || undefined, labels: [], roles: [], members: [] }] } : column));
+      const headers = { 'Content-Type': 'application/json' };
+      await Promise.all([
+        fetch(`${API_URL}/v1/cards/${saved.id}`, { method: 'PATCH', headers, body: JSON.stringify({ priority: card.priority, start_at: card.startAt ?? null, due_at: card.dueAt ?? null }) }),
+        fetch(`${API_URL}/v1/cards/${saved.id}/labels`, { method: 'PUT', headers, body: JSON.stringify({ label_ids: (card.labels ?? []).map((label) => label.id) }) }),
+        fetch(`${API_URL}/v1/cards/${saved.id}/profile-roles`, { method: 'PUT', headers, body: JSON.stringify({ role_ids: (card.roles ?? []).map((role) => role.id) }) }),
+        fetch(`${API_URL}/v1/cards/${saved.id}/assignees`, { method: 'PUT', headers, body: JSON.stringify({ user_ids: (card.members ?? []).map((member) => member.id) }) }),
+      ]);
+      const restoredAttachmentIds = new Map<string, Attachment>();
+      for (const attachment of card.attachments ?? []) {
+        if (!attachment.url.startsWith('data:')) continue;
+        const blob = await fetch(attachment.url).then((response) => response.blob());
+        const form = new FormData();
+        form.append('file', new File([blob], attachment.name, { type: attachment.type }));
+        const uploaded = await fetch(`${API_URL}/v1/cards/${saved.id}/attachments`, { method: 'POST', body: form });
+        if (uploaded.ok) restoredAttachmentIds.set(attachment.id, await uploaded.json() as Attachment);
+      }
+      const restoredCover = card.coverAttachmentId ? restoredAttachmentIds.get(card.coverAttachmentId) : undefined;
+      if (restoredCover) await fetch(`${API_URL}/v1/cards/${saved.id}/cover`, { method: 'PUT', headers, body: JSON.stringify({ attachment_id: restoredCover.id, mode: card.coverMode ?? 'full' }) });
+      for (const checklist of card.checklists ?? []) {
+        const checklistResponse = await fetch(`${API_URL}/v1/cards/${saved.id}/checklists`, { method: 'POST', headers, body: JSON.stringify({ title: checklist.title }) });
+        if (!checklistResponse.ok) continue;
+        const savedChecklist = await checklistResponse.json() as { id: string };
+        for (const item of checklist.items) {
+          const itemResponse = await fetch(`${API_URL}/v1/checklists/${savedChecklist.id}/items`, { method: 'POST', headers, body: JSON.stringify({ title: item.title }) });
+          if (!itemResponse.ok) continue;
+          const savedItem = await itemResponse.json() as { id: string };
+          await fetch(`${API_URL}/v1/checklist-items/${savedItem.id}`, { method: 'PATCH', headers, body: JSON.stringify({ is_completed: item.done, description: item.description ?? '' }) });
+        }
+      }
+      const restored = parkingCardToCard(card);
+      restored.id = saved.id;
+      restored.attachments = restoredAttachmentIds.size || undefined;
+      if (restoredCover) { restored.coverAttachmentId = restoredCover.id; restored.coverUrl = restoredCover.url; restored.coverMediaType = restoredCover.media_type; }
+      setColumns((current) => current.map((column) => column.id === listId ? { ...column, cards: [...column.cards, restored] } : column));
+      setParkingCards((current) => current.filter((item) => item.id !== card.id));
+      if (selectedParkingCardId === card.id) { setSelected(null); setSelectedParkingCardId(null); }
       showToast('Карточка возвращена из парковки'); return true;
     } catch { showToast('Не удалось вернуть карточку на доску'); return false; }
   }
@@ -2571,7 +2710,7 @@ export default function Home() {
     void fetch(`${API_URL}/v1/notifications/read`, { method: 'POST' }).catch(() => { void loadNotifications(); });
   }
   function toggleCardWatch() {
-    if (!selected || authState !== 'signed-in' || typeof selected.id !== 'string') return;
+    if (!selected || authState !== 'signed-in' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     const watching = !isWatchingCard;
     setWatchingCard(watching);
     void fetch(`${API_URL}/v1/cards/${selected.id}/watch`, { method: watching ? 'PUT' : 'DELETE' })
@@ -2642,6 +2781,24 @@ export default function Home() {
     if (!selected) return;
     const updated = { ...selected, ...patch };
     setSelected(updated);
+    if (isParkingCardId(updated.id)) {
+      updateParkingCard(String(updated.id), (card) => ({
+        ...card,
+        title: updated.title,
+        description: updated.description ?? '',
+        priority: updated.priority ?? 0,
+        startAt: updated.startAt,
+        dueAt: updated.dueAt,
+        completedAt: updated.completedAt ?? null,
+        coverAttachmentId: updated.coverAttachmentId,
+        coverMode: updated.coverMode,
+        backgroundImageUrl: updated.backgroundImageUrl,
+        labels: updated.labels as ParkingCard['labels'],
+        roles: updated.roles as ParkingCard['roles'],
+        members: updated.members.map((member) => ({ id: String(member.id), name: member.name, initials: member.initials, color: member.color, avatarUrl: member.avatarUrl })),
+      }));
+      return;
+    }
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === updated.id ? { ...card, ...patch } : card) })));
   }
   function transferCardAssignee(card: Card, sourceMemberId: string | null, targetMember: Member | null) {
@@ -2673,7 +2830,7 @@ export default function Home() {
     setDueTime(time);
     setSidebarPanel(null);
     updateSelectedCard({ dueAt });
-    if (persistence !== 'connected' || typeof selected.id !== 'string') { showToast('Дедлайн сохранён'); return; }
+    if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) { showToast('Дедлайн сохранён'); return; }
     setSavingDueAt(true);
     void fetch(`${API_URL}/v1/cards/${selected.id}/due-date`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ due_at: dueAt }) })
       .then((response) => { if (!response.ok) throw new Error('due date save failed'); showToast('Дедлайн сохранён'); })
@@ -2697,7 +2854,7 @@ export default function Home() {
     if (!selected) return;
     updateSelectedCard({ dueAt: undefined });
     setSidebarPanel(null);
-    if (persistence === 'connected' && typeof selected.id === 'string') {
+    if (persistence === 'connected' && typeof selected.id === 'string' && !isParkingCardId(selected.id)) {
       void fetch(`${API_URL}/v1/cards/${selected.id}/due-date`, { method: 'DELETE' })
         .then((response) => { if (!response.ok) throw new Error('due date clear failed'); showToast('Дедлайн снят'); })
         .catch(() => showToast('Не удалось снять дедлайн'));
@@ -2706,7 +2863,7 @@ export default function Home() {
   function replaceSelectedLabels(labels: Label[]) {
     if (!selected) return;
     updateSelectedCard({ labels });
-    if (persistence === 'connected' && typeof selected.id === 'string') {
+    if (persistence === 'connected' && typeof selected.id === 'string' && !isParkingCardId(selected.id)) {
       void fetch(`${API_URL}/v1/cards/${selected.id}/labels`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label_ids: labels.map((label) => label.id) }) })
         .then(async (response) => { if (!response.ok) throw new Error('labels save failed'); return response.json() as Promise<Label[]>; })
         .then((saved) => updateSelectedCard({ labels: saved }))
@@ -2780,7 +2937,7 @@ export default function Home() {
   function replaceSelectedMembers(members: Member[]) {
     if (!selected) return;
     updateSelectedCard({ members });
-    if (persistence === 'connected' && typeof selected.id === 'string') {
+    if (persistence === 'connected' && typeof selected.id === 'string' && !isParkingCardId(selected.id)) {
       void fetch(`${API_URL}/v1/cards/${selected.id}/assignees`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_ids: members.filter((member) => typeof member.id === 'string').map((member) => member.id) }) })
         .then(async (response) => { if (!response.ok) throw new Error('assignees save failed'); return response.json() as Promise<ApiMember[]>; })
         .then((saved) => updateSelectedCard({ members: saved.map(memberFromApi) }))
@@ -2799,7 +2956,7 @@ export default function Home() {
     const me = workspaceMembers.find((member) => String(member.id) === account.user.id) ?? currentMember;
     const members = isAssigned ? previousMembers.filter((member) => String(member.id) !== account.user.id) : [...previousMembers, me];
     updateSelectedCard({ members });
-    if (persistence !== 'connected' || typeof selected.id !== 'string') return;
+    if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     setUpdatingOwnAssignment(true);
     void fetch(`${API_URL}/v1/cards/${selected.id}/assignees`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_ids: members.filter((member) => typeof member.id === 'string').map((member) => member.id) }) })
       .then(async (response) => { if (!response.ok) throw new Error('assignees save failed'); return response.json() as Promise<ApiMember[]>; })
@@ -2987,7 +3144,7 @@ export default function Home() {
     event.preventDefault();
     const title = checklistNameDraft.trim();
     if (!selected || !title || isSavingChecklist) return;
-    if (persistence !== 'connected' || typeof selected.id !== 'string') {
+    if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) {
       applyChecklists([...checklists, { id: `local-checklist-${Date.now()}`, title, items: [] }]);
       setChecklistNameDraft('');
       return;
@@ -3003,7 +3160,7 @@ export default function Home() {
     event.preventDefault();
     const title = (checklistItemDrafts[checklistId] ?? '').trim();
     if (!title || isSavingChecklist) return;
-    if (persistence !== 'connected' || checklistId.startsWith('local-')) {
+    if (persistence !== 'connected' || isParkingCardId(selected?.id) || checklistId.startsWith('local-')) {
       applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: [...checklist.items, { id: `local-check-${Date.now()}`, title, is_completed: false, description: '', attachments: [] }] } : checklist));
       setChecklistItemDrafts((current) => ({ ...current, [checklistId]: '' }));
       return;
@@ -3017,7 +3174,7 @@ export default function Home() {
   }
   function deleteChecklist(checklist: Checklist) {
     applyChecklists(checklists.filter((item) => item.id !== checklist.id));
-    if (persistence === 'connected' && !checklist.id.startsWith('local-')) {
+    if (persistence === 'connected' && !isParkingCardId(selected?.id) && !checklist.id.startsWith('local-')) {
       void fetch(`${API_URL}/v1/checklists/${checklist.id}`, { method: 'DELETE' })
         .then((response) => { if (!response.ok) throw new Error('checklist delete failed'); })
         .catch(() => showToast('Удаление чек-листа не сохранено'));
@@ -3026,7 +3183,7 @@ export default function Home() {
   function toggleChecklistItem(checklistId: string, item: ChecklistItem) {
     const next = !item.is_completed;
     applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: checklist.items.map((value) => value.id === item.id ? { ...value, is_completed: next } : value) } : checklist));
-    if (persistence === 'connected' && typeof item.id === 'string') {
+    if (persistence === 'connected' && !isParkingCardId(selected?.id) && typeof item.id === 'string') {
       void fetch(`${API_URL}/v1/checklist-items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_completed: next }) })
         .then((response) => { if (!response.ok) throw new Error('toggle failed'); })
         .catch(() => showToast('Статус пункта не сохранён'));
@@ -3034,7 +3191,7 @@ export default function Home() {
   }
   function removeChecklistItem(checklistId: string, item: ChecklistItem) {
     applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: checklist.items.filter((value) => value.id !== item.id) } : checklist));
-    if (persistence === 'connected' && typeof item.id === 'string') {
+    if (persistence === 'connected' && !isParkingCardId(selected?.id) && typeof item.id === 'string') {
       void fetch(`${API_URL}/v1/checklist-items/${item.id}`, { method: 'DELETE' })
         .then((response) => { if (!response.ok) throw new Error('delete failed'); })
         .catch(() => showToast('Удаление пункта не сохранено'));
@@ -3044,8 +3201,10 @@ export default function Home() {
     event?.preventDefault();
     const body = commentDraft.trim();
     if (!selected || !body || isSendingComment) return;
-    if (persistence !== 'connected' || typeof selected.id !== 'string') {
-      setComments((current) => [{ id: `local-comment-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: null, created_at: new Date().toISOString(), reactions: [] }, ...current]);
+    if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) {
+      const comment: Comment = { id: `local-comment-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: null, created_at: new Date().toISOString(), reactions: [] };
+      setComments((current) => [comment, ...current]);
+      if (isParkingCardId(selected.id)) updateParkingCard(selected.id, (card) => ({ ...card, comments: [{ id: String(comment.id), body, authorName: 'Вы', createdAt: comment.created_at ?? new Date().toISOString() }, ...(card.comments ?? [])] }));
       setCommentDraft('');
       return;
     }
@@ -3180,6 +3339,10 @@ export default function Home() {
     setThreadComments((current) => current.map((item) => item.id === comment.id ? { ...item, body } : item));
     setThreadRoot((current) => current?.id === comment.id ? { ...current, body } : current);
     setEditingCommentId(null);
+    if (isParkingCardId(selected?.id)) {
+      updateParkingCard(String(selected?.id), (card) => ({ ...card, comments: (card.comments ?? []).map((item) => item.id === String(comment.id) ? { ...item, body } : item) }));
+      return;
+    }
     if (persistence !== 'connected' || typeof comment.id !== 'string') return;
     void fetch(`${API_URL}/v1/comments/${comment.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
       .then((response) => { if (!response.ok) throw new Error('comment edit failed'); })
@@ -3189,6 +3352,10 @@ export default function Home() {
     setComments((current) => current.filter((item) => item.id !== comment.id));
     setThreadComments((current) => current.filter((item) => item.id !== comment.id));
     setThreadRoot((current) => current?.id === comment.id ? null : current);
+    if (isParkingCardId(selected?.id)) {
+      updateParkingCard(String(selected?.id), (card) => ({ ...card, comments: (card.comments ?? []).filter((item) => item.id !== String(comment.id)) }));
+      return;
+    }
     if (persistence !== 'connected' || typeof comment.id !== 'string') return;
     void fetch(`${API_URL}/v1/comments/${comment.id}`, { method: 'DELETE' })
       .then((response) => { if (!response.ok) throw new Error('comment delete failed'); })
@@ -3355,6 +3522,19 @@ export default function Home() {
   }
   async function uploadMediaFiles(files: File[], target?: 'description' | 'comment' | 'thread'): Promise<Attachment[]> {
     if (!selected || !files.length || isUploadingAttachment) return [];
+    if (isParkingCardId(selected.id)) {
+      const accepted = files.filter((file) => isSupportedMedia(file) && file.size <= 4 * 1024 * 1024);
+      if (accepted.length !== files.length) showToast('В локальной парковке можно хранить медиа до 4 МиБ на файл');
+      const uploaded = await Promise.all(accepted.map(async (file) => {
+        const url = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); });
+        return { id: `parking-attachment-${crypto.randomUUID()}`, original_name: file.name, media_type: file.type, byte_size: file.size, url } as Attachment;
+      }));
+      setAttachments((current) => [...uploaded, ...current]);
+      updateParkingCard(String(selected.id), (card) => ({ ...card, attachments: [...uploaded.map((attachment) => ({ id: attachment.id, name: attachment.original_name, type: attachment.media_type, size: attachment.byte_size, url: attachment.url })), ...(card.attachments ?? [])] }));
+      updateSelectedCard({ attachments: attachments.length + uploaded.length });
+      if (target) appendEmbeddedMedia(target, uploaded);
+      return uploaded;
+    }
     if (persistence !== 'connected' || typeof selected.id !== 'string') { showToast('Для вложений нужно подключение к серверу'); return []; }
     const cardId = selected.id;
     const unsupported = files.filter((file) => !isSupportedMedia(file));
@@ -3410,6 +3590,11 @@ export default function Home() {
     const wasCover = selected?.coverAttachmentId === attachment.id;
     setAttachments((current) => current.filter((item) => item.id !== attachment.id));
     if (wasCover) updateSelectedCard({ coverAttachmentId: undefined, coverUrl: undefined, coverMediaType: undefined });
+    if (selected && isParkingCardId(selected.id)) {
+      updateParkingCard(selected.id, (card) => ({ ...card, attachments: (card.attachments ?? []).filter((item) => item.id !== attachment.id), coverAttachmentId: wasCover ? undefined : card.coverAttachmentId }));
+      updateSelectedCard({ attachments: Math.max(0, (selected.attachments ?? 1) - 1) });
+      return;
+    }
     void fetch(`${API_URL}/v1/attachments/${attachment.id}`, { method: 'DELETE' })
       .then((response) => { if (!response.ok) throw new Error('delete failed'); })
       .catch(() => showToast('Не удалось удалить вложение'));
@@ -3421,7 +3606,7 @@ export default function Home() {
     const patch = attachment ? { coverAttachmentId: attachment.id, coverUrl: attachment.url, coverMediaType: attachment.media_type, coverMode: mode } : { coverAttachmentId: undefined, coverUrl: undefined, coverMediaType: undefined, coverMode: 'full' as const };
     updateSelectedCard(patch);
     setCoverModeDraft(mode);
-    if (persistence !== 'connected' || typeof selected.id !== 'string') return;
+    if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     void fetch(`${API_URL}/v1/cards/${selected.id}/cover`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attachment_id: attachment?.id ?? null, mode }) })
       .then((response) => { if (!response.ok) throw new Error('cover save failed'); setCardDetailRevision((current) => current + 1); showToast(attachment ? 'Обложка установлена' : 'Обложка снята'); })
       .catch(() => { setCardDetailRevision((current) => current + 1); showToast('Не удалось сохранить обложку'); });
@@ -3430,7 +3615,7 @@ export default function Home() {
     if (!selected) return;
     updateSelectedCard({ backgroundImageUrl: undefined });
     setSidebarPanel(null);
-    if (persistence !== 'connected' || typeof selected.id !== 'string') return;
+    if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     void fetch(`${API_URL}/v1/cards/${selected.id}/background`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ background_image_url: null }) })
       .then((response) => { if (!response.ok) throw new Error('background clear failed'); showToast('Фон карточки снят'); })
       .catch(() => showToast('Не удалось снять фон карточки'));
@@ -3477,6 +3662,14 @@ export default function Home() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file || !selected || isUploadingCardBackground) return;
+    if (isParkingCardId(selected.id)) {
+      if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 4 * 1024 * 1024) { showToast('В локальной парковке фон — JPEG, PNG, GIF или WebP до 4 МиБ'); return; }
+      const reader = new FileReader();
+      reader.onload = () => { updateSelectedCard({ backgroundImageUrl: String(reader.result) }); showToast('Фон карточки сохранён локально'); };
+      reader.onerror = () => showToast('Не удалось прочитать файл фона');
+      reader.readAsDataURL(file);
+      return;
+    }
     if (persistence !== 'connected' || typeof selected.id !== 'string') { showToast('Для загрузки фона нужно подключение к серверу'); return; }
     if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 50 * 1024 * 1024) {
       showToast('Выберите JPEG, PNG, GIF или WebP до 50 МиБ'); return;
@@ -3531,7 +3724,7 @@ export default function Home() {
   function replaceSelectedProfileRoles(roles: ProfileRole[]) {
     if (!selected) return;
     updateSelectedCard({ roles });
-    if (persistence !== 'connected' || typeof selected.id !== 'string') return;
+    if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     void fetch(`${API_URL}/v1/cards/${selected.id}/profile-roles`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role_ids: roles.map((role) => role.id) }) })
       .then(async (response) => { if (!response.ok) throw new Error('card profile roles failed'); return response.json() as Promise<ProfileRole[]>; })
       .then((saved) => updateSelectedCard({ roles: saved }))
@@ -3544,6 +3737,11 @@ export default function Home() {
   function toggleCardCompletion(card: Card, event?: ReactMouseEvent<HTMLButtonElement>) {
     event?.stopPropagation();
     const completedAt = card.completedAt ? undefined : new Date().toISOString();
+    if (isParkingCardId(card.id)) {
+      updateParkingCard(String(card.id), (current) => ({ ...current, completedAt: completedAt ?? null }));
+      setSelected((current) => current?.id === card.id ? { ...current, completedAt } : current);
+      return;
+    }
     const shouldReorder = cardSort === 'manual';
     const sourceList = columns.find((column) => column.cards.some((item) => item.id === card.id));
     const sourceElement = typeof document === 'undefined' ? null : Array.from(document.querySelectorAll<HTMLElement>('[data-card-id]')).find((element) => element.dataset.cardId === String(card.id));
@@ -3588,7 +3786,7 @@ export default function Home() {
     if (!selected || !canManageBoardAdministration) return;
     const previous = selected.isPublic ?? true;
     updateSelectedCard({ isPublic });
-    if (persistence !== 'connected' || typeof selected.id !== 'string') return;
+    if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     void fetch(`${API_URL}/v1/cards/${selected.id}/public-visibility`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_public: isPublic }) })
       .then((response) => { if (!response.ok) throw new Error('visibility update failed'); showToast(isPublic ? 'Карточка видна гостям' : 'Карточка скрыта от гостей'); })
       .catch(() => { updateSelectedCard({ isPublic: previous }); showToast('Не удалось изменить видимость карточки'); });
@@ -3603,6 +3801,20 @@ export default function Home() {
     void fetch(`${API_URL}/v1/cards/${selected.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priority }) })
       .then((response) => { if (!response.ok) throw new Error('priority update failed'); showToast(priority ? `Приоритет: ${priority}/5` : 'Приоритет снят'); })
       .catch(() => { updateSelectedCard({ priority: previous }); showToast('Не удалось сохранить приоритет'); });
+  }
+  function renderParkingCard(parkingCard: ParkingCard) {
+    const card = parkingCardToCard(parkingCard);
+    return <article data-card-id={String(card.id)} draggable={!isPublicViewer} className={`task-card parking-task-card ${card.completedAt ? 'completed' : ''} ${labelsCollapsed ? 'labels-collapsed' : ''}`} onDragStart={(event) => { event.dataTransfer.setData('application/x-flowboard-parking-card', parkingCard.id); event.dataTransfer.effectAllowed = 'move'; parkingDragPointRef.current = { x: event.clientX, y: event.clientY }; }} onDrag={(event) => { if (event.clientX || event.clientY) parkingDragPointRef.current = { x: event.clientX, y: event.clientY }; }} onDragEnd={() => { const target = document.elementFromPoint(parkingDragPointRef.current.x, parkingDragPointRef.current.y)?.closest<HTMLElement>('[data-list-id]'); const listId = target?.dataset.listId; if (listId) void restoreParkingCard(parkingCard, listId); }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setCardContextMenu({ card, x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 170) }); }}>
+      <span className="parking-local-badge" title="Хранится только в этом браузере">локальная</span>
+      <CardCover card={card} />
+      <div className="card-main">
+        {(card.labels.length > 0 || card.roles.length > 0) && <div className="card-top"><div className="card-labels">{card.labels.map((label) => <LabelChip label={label} key={label.id} asButton onClick={(event) => { event.stopPropagation(); setLabelsCollapsed((current) => !current); }} />)}{card.roles.map((role) => <ProfileRoleChip role={role} key={role.id} compact />)}</div></div>}
+        <div className="card-title-row"><button className="card-complete" aria-label={card.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(card.completedAt)} onClick={(event) => toggleCardCompletion(card, event)}>{card.completedAt && '✓'}</button><h3>{card.title}</h3></div>
+        {card.dueAt && <p className={`due ${new Date(card.dueAt).getTime() < Date.now() ? 'today' : ''}`}>◷ {formatDue(card.dueAt)}</p>}
+      </div>
+      {card.priority ? <span className="card-priority-corner"><PrioritySignal priority={card.priority} /></span> : null}
+      {(card.checklist || card.comments || card.attachments || card.members.length > 0) && <footer className="card-footer"><div className="card-meta">{card.checklist && <span className={isChecklistComplete(card.checklist) ? 'checklist-complete' : ''}><CardMetaIcon type="checklist" />{card.checklist}</span>}{card.comments && <span><CardMetaIcon type="comments" />{card.comments}</span>}{card.attachments && <span title="Есть вложения"><CardMetaIcon type="attachments" /></span>}</div><div className="card-avatars"><VisibleAvatars members={card.members} /></div></footer>}
+    </article>;
   }
   function beginColumnRename(column: Column) { setColumnMenuId(null); setEditingColumnId(column.id); setColumnTitleDraft(column.title); }
   function openColumnMenu(column: Column) { setColumnLimitDraft(String(column.cardLimit)); setColumnMenuId((current) => current === column.id ? null : column.id); }
@@ -4021,7 +4233,7 @@ export default function Home() {
           </article>)}</div>
           {isComposerOpen === column.id ? <form className="composer" onSubmit={(event) => addCard(event, column.id)}><textarea autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Название задачи" /><div><button className="add-card" type="submit">Добавить</button><button className="cancel" type="button" onClick={() => { setComposerOpen(null); setDraft(''); }}>Отмена</button></div></form> : <button className="add-task" onClick={() => setComposerOpen(column.id)}>＋ Добавить задачу</button>}
         </section>)}
-        {boardViewMode === 'standard' && parkingStorageKey && <ParkingShelf storageKey={parkingStorageKey} columns={columns.map((column) => ({ id: String(column.id), title: column.title }))} cards={parkingCards} onChange={setParkingCards} onMoveToBoard={restoreParkingCard} onParkServerCard={() => { const card = dragging ? columns.find((column) => column.id === dragging.sourceListId)?.cards.find((item) => item.id === dragging.cardId) : null; if (card) parkServerCard(card); clearDragState(); }} draggedServerCard={Boolean(dragging)} labels={boardLabels} roles={profileRoles} members={workspaceMembers.map((member) => ({ id: String(member.id), name: member.name, initials: member.initials, color: member.color, avatarUrl: member.avatarUrl }))} />}
+        {boardViewMode === 'standard' && parkingStorageKey && <ParkingShelf storageKey={parkingStorageKey} cards={parkingCards} onChange={setParkingCards} onOpenCard={openParkingCard} onCreateCard={createParkingCard} renderCard={renderParkingCard} onParkServerCard={() => { const card = dragging ? columns.find((column) => column.id === dragging.sourceListId)?.cards.find((item) => item.id === dragging.cardId) : null; if (card) parkServerCard(card); clearDragState(); }} draggedServerCard={Boolean(dragging)} />}
         {boardViewMode !== 'freeform' && <button className="add-column" onClick={() => addColumn()}>＋ Добавить колонку</button>}</div></div>}
       </section>
       {freeformContextMenu && !isPublicViewer && <div className="freeform-context-menu" style={{ left: freeformContextMenu.x, top: freeformContextMenu.y }} role="menu"><b>Свободная доска</b><button type="button" onClick={() => { addColumn(freeformContextMenu.position); setFreeformContextMenu(null); }}>＋ Создать колонку здесь</button><button type="button" onClick={() => { publishFreeformCursor(freeformContextMenu.position, true); setFreeformContextMenu(null); showToast('Метка показана участникам на 5 секунд'); }}>⌁ Дать метку · 5 сек</button><button type="button" onClick={() => { setFreeformErasing(false); setFreeformDrawingMode(true); setFreeformContextMenu(null); showToast('Рисование включено'); }}>✎ Рисовать</button></div>}
@@ -4082,17 +4294,17 @@ export default function Home() {
                 {sidebarPanel === 'public-visibility' && canManageBoardAdministration && <div className="card-public-visibility"><div className="popover-heading"><b>Видимость карточки</b><button type="button" onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><label><input type="checkbox" checked={selected.isPublic ?? true} onChange={(event) => setSelectedCardPublicVisibility(event.target.checked)} /> Видна гостям</label><p>Снимите галочку, чтобы карточка и её вложения были доступны только после входа в аккаунт.</p></div>}
                 {sidebarPanel === 'roles' && <><div className="popover-heading"><b>Роли карточки</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="label-options">{profileRoles.map((role) => <button key={role.id} className={`label-option ${selected.roles.some((current) => current.id === role.id) ? 'selected' : ''}`} style={{ borderColor: role.color, backgroundColor: `${role.color}22` }} onClick={() => toggleSelectedProfileRole(role)}><ShapeIcon shape={role.icon_shape} color={role.icon_color ?? role.color} /><span>{role.name}</span>{selected.roles.some((current) => current.id === role.id) && <b>✓</b>}</button>)}</div>{!profileRoles.length && <p className="empty-comments">System owner ещё не создал роли.</p>}</>}
               </div>}
-              {selectedColumnTitle && <p className="card-column-caption">В колонке · {selectedColumnTitle}</p>}<div className="detail-title-row"><button className={`detail-card-complete ${selected.completedAt ? 'done' : ''}`} aria-label={selected.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(selected.completedAt)} onClick={(event) => toggleCardCompletion(selected, event)}>{selected.completedAt && '✓'}</button><input className="card-title-input" value={cardTitleDraft} onChange={(event) => setCardTitleDraft(event.target.value)} aria-label="Название задачи" /></div>
+              {isSelectedParkingCard ? <p className="card-column-caption parking-card-caption">Локальная карточка · хранится только в этом браузере</p> : selectedColumnTitle && <p className="card-column-caption">В колонке · {selectedColumnTitle}</p>}<div className="detail-title-row"><button className={`detail-card-complete ${selected.completedAt ? 'done' : ''}`} aria-label={selected.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(selected.completedAt)} onClick={(event) => toggleCardCompletion(selected, event)}>{selected.completedAt && '✓'}</button><input className="card-title-input" value={cardTitleDraft} onChange={(event) => setCardTitleDraft(event.target.value)} aria-label="Название задачи" /></div>
               <section className="card-priority-editor" aria-label="Приоритет задачи"><span>Приоритет</span><div><button type="button" className={(selected.priority ?? 0) === 0 ? 'selected' : ''} onClick={() => setSelectedCardPriority(0)}>Нет</button>{[1, 2, 3, 4, 5].map((level) => <button type="button" className={(selected.priority ?? 0) === level ? 'selected' : ''} onClick={() => setSelectedCardPriority(level)} key={level}><PrioritySignal key={`${priorityMotionKey}-${level}`} priority={level} wave={priorityMotionKey > 0 && (selected.priority ?? 0) === level} /></button>)}</div></section>
               <div className="card-members-labels-row"><div className="card-members-row"><span>Исполнители</span>{account && canEditBoard && <button type="button" className={`card-join-button ${selected.members.some((member) => String(member.id) === account.user.id) ? 'joined' : ''}`} onClick={toggleOwnAssignment} disabled={isUpdatingOwnAssignment}>{isUpdatingOwnAssignment ? 'Сохраняем…' : selected.members.some((member) => String(member.id) === account.user.id) ? 'Отказаться' : 'Присоединиться'}</button>}<div className="card-member-control">{<VisibleAvatars members={selected.members} />}<button className={`member-plus ${sidebarPanel === 'assignees' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'assignees' ? null : 'assignees')} aria-label="Назначить исполнителя">＋</button>{sidebarPanel === 'assignees' && <div className="property-popover assignees-popover" role="dialog" aria-label="Выбор исполнителей"><div className="popover-heading"><b>Исполнители</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="member-options">{workspaceMembers.map((member) => <button key={member.id} className={`member-option ${selected.members.some((current) => current.id === member.id) ? 'selected' : ''}`} onClick={() => toggleSelectedMember(member)}><Avatar member={member} /><span>{member.name}</span>{selected.members.some((current) => current.id === member.id) && <b>✓</b>}</button>)}</div><p className="empty-comments">Состав пространства меняется в разделе «Команда».</p></div>}</div></div><div className="detail-card-labels"><span>Метки</span><div className="card-labels">{selected.labels.map((label) => isPublicViewer ? <LabelChip label={label} key={label.id} /> : <LabelChip label={label} key={label.id} asButton onClick={() => toggleSelectedLabel(label)} />)}<button className={`label-plus ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(true); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }} aria-label="Добавить существующую метку">＋</button></div></div><div className="detail-card-labels"><span>Роли</span><div className="card-labels">{selected.roles.map((role) => isPublicViewer ? <ProfileRoleChip role={role} key={role.id} /> : <ProfileRoleChip role={role} key={role.id} asButton onClick={() => toggleSelectedProfileRole(role)} />)}{!isPublicViewer && <button className={`label-plus ${sidebarPanel === 'roles' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'roles' ? null : 'roles')} aria-label="Добавить роль карточке">＋</button>}</div></div></div>
             </div>
-            <section className="description-section"><div className="section-heading"><h3>Описание</h3></div>{account && typeof selected.id === 'string' && <CardEditingPresence people={boardPresence} currentUserId={account.user.id} cardId={selected.id} />}{isEditingCardDescription ? <MentionTextarea autoFocus className={`card-description-input media-drop-target ${isUploadingAttachment ? 'uploading' : ''} ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} value={cardDescriptionDraft} onValueChange={setCardDescriptionDraft} onBlur={() => setEditingCardDescription(false)} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'description')} onPaste={(event) => handleMediaPaste(event, 'description')} placeholder="Добавьте описание или перетащите изображение/видео…" ariaLabel="Описание задачи" /> : <div className={`markdown-editable-description ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} role={isPublicViewer ? undefined : 'button'} tabIndex={isPublicViewer ? undefined : 0} onClick={() => { if (!isPublicViewer) setEditingCardDescription(true); }} onKeyDown={(event) => { if (!isPublicViewer && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setEditingCardDescription(true); } }}><MarkdownDescription value={cardDescriptionDraft} highlightMentions={unreadMentionSourceIds.includes(String(selected.id))} /></div>}</section>
-            {typeof selected.id === 'string' && <><CardReviewPanel cardId={selected.id} canEdit={!isPublicViewer && canEditBoard} members={workspaceMembers.map((member) => ({ id: String(member.id), username: member.name, avatar_url: member.avatarUrl }))} /><section className="card-additional-options"><button type="button" className={isCardAdditionalOptionsOpen ? 'open' : ''} onClick={() => setCardAdditionalOptionsOpen((current) => !current)} aria-expanded={isCardAdditionalOptionsOpen}>Дополнительные опции <span>⌄</span></button>{isCardAdditionalOptionsOpen && <div><CardScheduleFields cardId={selected.id} startAt={selected.startAt} dueAt={selected.dueAt} canEdit={!isPublicViewer} onChange={(patch) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, ...patch } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, ...patch } : current); }} /><CardCollaborationPanel cardId={selected.id} canEdit={!isPublicViewer} candidates={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title })))} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onDescriptionRestore={(description) => { setCardDescriptionDraft(description); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, description } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, description } : current); showToast('Версия описания восстановлена'); }} showExisting={false} /><CardPollsPanel cardId={selected.id} canEdit={!isPublicViewer} showPolls={false} /></div>}</section><CardCollaborationPanel cardId={selected.id} canEdit={!isPublicViewer} candidates={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title })))} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onDescriptionRestore={(description) => { setCardDescriptionDraft(description); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, description } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, description } : current); showToast('Версия описания восстановлена'); }} showRelationCreator={false} /><CardPollsPanel cardId={selected.id} canEdit={!isPublicViewer} showCreate={false} /></>}
+              <section className="description-section"><div className="section-heading"><h3>Описание</h3></div>{account && typeof selected.id === 'string' && !isSelectedParkingCard && <CardEditingPresence people={boardPresence} currentUserId={account.user.id} cardId={selected.id} />}{isEditingCardDescription ? <MentionTextarea autoFocus className={`card-description-input media-drop-target ${isUploadingAttachment ? 'uploading' : ''} ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} value={cardDescriptionDraft} onValueChange={setCardDescriptionDraft} onBlur={() => setEditingCardDescription(false)} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'description')} onPaste={(event) => handleMediaPaste(event, 'description')} placeholder="Добавьте описание или перетащите изображение/видео…" ariaLabel="Описание задачи" /> : <div className={`markdown-editable-description ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} role={isPublicViewer ? undefined : 'button'} tabIndex={isPublicViewer ? undefined : 0} onClick={() => { if (!isPublicViewer) setEditingCardDescription(true); }} onKeyDown={(event) => { if (!isPublicViewer && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setEditingCardDescription(true); } }}><MarkdownDescription value={cardDescriptionDraft} highlightMentions={unreadMentionSourceIds.includes(String(selected.id))} /></div>}</section>
+            {typeof selected.id === 'string' && !isSelectedParkingCard && <><CardReviewPanel cardId={selected.id} canEdit={!isPublicViewer && canEditBoard} members={workspaceMembers.map((member) => ({ id: String(member.id), username: member.name, avatar_url: member.avatarUrl }))} /><section className="card-additional-options"><button type="button" className={isCardAdditionalOptionsOpen ? 'open' : ''} onClick={() => setCardAdditionalOptionsOpen((current) => !current)} aria-expanded={isCardAdditionalOptionsOpen}>Дополнительные опции <span>⌄</span></button>{isCardAdditionalOptionsOpen && <div><CardScheduleFields cardId={selected.id} startAt={selected.startAt} dueAt={selected.dueAt} canEdit={!isPublicViewer} onChange={(patch) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, ...patch } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, ...patch } : current); }} /><CardCollaborationPanel cardId={selected.id} canEdit={!isPublicViewer} candidates={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title })))} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onDescriptionRestore={(description) => { setCardDescriptionDraft(description); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, description } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, description } : current); showToast('Версия описания восстановлена'); }} showExisting={false} /><CardPollsPanel cardId={selected.id} canEdit={!isPublicViewer} showPolls={false} /></div>}</section><CardCollaborationPanel cardId={selected.id} canEdit={!isPublicViewer} candidates={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title })))} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onDescriptionRestore={(description) => { setCardDescriptionDraft(description); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, description } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, description } : current); showToast('Версия описания восстановлена'); }} showRelationCreator={false} /><CardPollsPanel cardId={selected.id} canEdit={!isPublicViewer} showCreate={false} /></>}
             </div>
             {renderExistingCardRelationsAndPolls()}
             {renderChecklists()}
             <div className="attachments"><div className="section-heading"><h3>Вложения</h3><span>{attachments.length}</span></div>{attachments.length ? <div className="attachment-grid">{attachments.map((attachment) => /^(image|video)\//.test(attachment.media_type) ? <figure className="attachment-preview" key={attachment.id}>{attachment.media_type.startsWith('video/') ? <video controls={selected.coverAttachmentId !== attachment.id} preload="metadata" src={assetUrl(attachment.url)} /> : <img src={assetUrl(attachment.url)} alt={attachment.original_name} />}<figcaption><span>{attachment.original_name}</span><div className="cover-controls"><select value={selected.coverAttachmentId === attachment.id ? selected.coverMode ?? 'full' : coverModeDraft} onChange={(event) => { const mode = event.target.value as 'full' | 'top'; setCoverModeDraft(mode); if (selected.coverAttachmentId === attachment.id) updateCardCover(attachment, mode); }} aria-label="Тип обложки"><option value="full">Фон</option><option value="top">Сверху</option></select><button className="cover-button" onClick={() => updateCardCover(selected.coverAttachmentId === attachment.id ? null : attachment)}>{selected.coverAttachmentId === attachment.id ? 'Снять' : 'Установить'}</button></div><button className="attachment-remove" onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure> : attachment.media_type.startsWith('video/') ? <figure className="attachment-preview" key={attachment.id}><video controls preload="metadata" src={assetUrl(attachment.url)} /><figcaption>{attachment.original_name}<button onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure> : <div className="attachment-file" key={attachment.id}><span>▶</span><a href={assetUrl(attachment.url)} target="_blank" rel="noreferrer">{attachment.original_name}</a><button onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></div>)}</div> : <p className="empty-attachments">Прикрепите изображение или видео до 50 МиБ.</p>}<button type="button" className="upload-button" disabled={isUploadingAttachment} onClick={() => attachmentUploadInputRef.current?.click()}>{isUploadingAttachment ? 'Загружаем…' : '＋ Добавить файл'}</button><input ref={attachmentUploadInputRef} className="attachment-upload-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple tabIndex={-1} aria-hidden="true" disabled={isUploadingAttachment} onChange={uploadAttachments} /></div>
-            <footer className="modal-actions"><button className="archive-button" onClick={archiveSelectedCard}>Архивировать</button><span className={`autosave-status ${cardSaveStatus}`}>{cardSaveStatus === 'saving' ? 'Изменения сохраняются' : cardSaveStatus === 'error' ? 'Не удалось сохранить' : 'Все изменения сохранены'}</span></footer>
+            <footer className="modal-actions">{isSelectedParkingCard && selectedParkingCard ? <><select value={parkingRestoreListId} onChange={(event) => setParkingRestoreListId(event.target.value)} aria-label="Колонка для возврата">{columns.map((column) => <option key={column.id} value={String(column.id)}>{column.title}</option>)}</select><button className="create-button" disabled={!parkingRestoreListId} onClick={() => void restoreParkingCard(selectedParkingCard, parkingRestoreListId)}>Перенести на доску</button><button className="archive-button" onClick={archiveSelectedCard}>Удалить локально</button></> : <button className="archive-button" onClick={archiveSelectedCard}>Архивировать</button>}<span className={`autosave-status ${cardSaveStatus}`}>{isSelectedParkingCard ? 'Сохранено локально' : cardSaveStatus === 'saving' ? 'Изменения сохраняются' : cardSaveStatus === 'error' ? 'Не удалось сохранить' : 'Все изменения сохранены'}</span></footer>
           </div>
           <aside className="task-sidebar" aria-label="Комментарии и активность">
             <section className="conversation-panel" aria-label="Комментарии и активность">
