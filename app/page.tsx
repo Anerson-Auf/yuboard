@@ -1012,6 +1012,7 @@ export default function Home() {
   // Detail requests are asynchronous. Keep their older payload from
   // overwriting an optimistic cover update made in the open card.
   const cardCoverRevisionRef = useRef<Record<string, number>>({});
+  const cardAttachmentRevisionRef = useRef<Record<string, number>>({});
   const boardBackgroundDisplayRef = useRef<{ fit: BoardBackgroundFit; position: BoardBackgroundPosition }>({ fit: 'cover', position: 'center' });
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1; speed: number } | null>(null);
   const boardRef = useRef<HTMLElement | null>(null);
@@ -1253,6 +1254,7 @@ export default function Home() {
     if (persistence !== 'connected' || typeof selectedCardId !== 'string') return;
     let cancelled = false;
     const coverRevisionAtRequest = cardCoverRevisionRef.current[selectedCardId] ?? 0;
+    const attachmentRevisionAtRequest = cardAttachmentRevisionRef.current[selectedCardId] ?? 0;
     void fetch(`${API_URL}/v1/cards/${selectedCardId}/details`)
       .then(async (response) => {
         if (!response.ok) throw new Error('details failed');
@@ -1262,13 +1264,14 @@ export default function Home() {
         if (cancelled) return;
         setChecklists(detail.checklists);
         setComments(detail.comments);
-        setAttachments(detail.attachments);
+        const hasNewerAttachmentChange = (cardAttachmentRevisionRef.current[selectedCardId] ?? 0) !== attachmentRevisionAtRequest;
+        if (!hasNewerAttachmentChange) setAttachments(detail.attachments);
         setActivity(detail.activity);
         setWatchingCard(detail.watching);
         setUnreadMentionSourceIds((current) => [...new Set([...current, ...detail.unread_mention_source_ids])]);
         const checklistItems = detail.checklists.flatMap((checklist) => checklist.items);
         const cover = detail.attachments.find((attachment) => attachment.id === detail.cover_attachment_id);
-        const cardMeta = { checklist: checklistItems.length ? `${checklistItems.filter((item) => item.is_completed).length}/${checklistItems.length}` : undefined, comments: detail.comments.length || undefined, attachments: detail.attachments.length || undefined, hasUnreadComments: detail.comments.some((comment) => Boolean(comment.parent_comment_id) && comment.is_unread) };
+        const cardMeta = { checklist: checklistItems.length ? `${checklistItems.filter((item) => item.is_completed).length}/${checklistItems.length}` : undefined, comments: detail.comments.length || undefined, ...(hasNewerAttachmentChange ? {} : { attachments: detail.attachments.length || undefined }), hasUnreadComments: detail.comments.some((comment) => Boolean(comment.parent_comment_id) && comment.is_unread) };
         const coverMeta = { coverAttachmentId: detail.cover_attachment_id ?? undefined, coverMode: detail.cover_mode, coverUrl: cover?.url, coverMediaType: cover?.media_type, backgroundImageUrl: detail.background_image_url ?? undefined };
         const hasNewerCoverChange = (cardCoverRevisionRef.current[selectedCardId] ?? 0) !== coverRevisionAtRequest;
         const mergedCardMeta = hasNewerCoverChange ? cardMeta : { ...cardMeta, ...coverMeta };
@@ -3166,10 +3169,12 @@ export default function Home() {
   async function uploadMediaFiles(files: File[], target?: 'description' | 'comment' | 'thread'): Promise<Attachment[]> {
     if (!selected || !files.length || isUploadingAttachment) return [];
     if (persistence !== 'connected' || typeof selected.id !== 'string') { showToast('Для вложений нужно подключение к серверу'); return []; }
+    const cardId = selected.id;
     const unsupported = files.filter((file) => !isSupportedMedia(file));
     if (unsupported.length) showToast('Можно добавить изображения, видео или аудио до 50 МиБ');
     const accepted = files.filter(isSupportedMedia);
     if (!accepted.length) return [];
+    cardAttachmentRevisionRef.current[cardId] = (cardAttachmentRevisionRef.current[cardId] ?? 0) + 1;
     setUploadingAttachment(true);
     try {
       const uploaded: Attachment[] = [];
@@ -3178,7 +3183,7 @@ export default function Home() {
         const form = new FormData();
         form.append('file', file);
         try {
-          const response = await fetch(`${API_URL}/v1/cards/${selected.id}/attachments`, { method: 'POST', body: form });
+          const response = await fetch(`${API_URL}/v1/cards/${cardId}/attachments`, { method: 'POST', body: form });
           if (!response.ok) throw new Error('upload failed');
           const attachment = await response.json() as Attachment;
           uploaded.push(attachment);
@@ -3189,8 +3194,10 @@ export default function Home() {
       if (target) appendEmbeddedMedia(target, uploaded);
       return uploaded;
     } finally {
-      // A rejected parse or a state update must never leave the card in its loading appearance.
       setUploadingAttachment(false);
+      // Fetch one current snapshot after the batch; any earlier realtime
+      // response is ignored by the revision guard above.
+      setCardDetailRevision((current) => current + 1);
     }
   }
   async function uploadAttachments(event: ChangeEvent<HTMLInputElement>) {
