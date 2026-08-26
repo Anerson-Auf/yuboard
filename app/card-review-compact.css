@@ -1,0 +1,8 @@
+/* Must be loaded after card-review-panel.css: the historical full-width
+   instance is retained only for a gradual component migration. */
+.task-content > .card-review-panel:not(.compact) { display: none !important; }
+
+.card-priority-review-row { position: relative; z-index: 28; }
+.card-priority-review-row:has(.review-compact-popover) { z-index: 90; }
+.card-review-panel.compact { isolation: isolate; z-index: 2; }
+.review-compact-popover { z-index: 1200; }

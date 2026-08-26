@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import './card-review-panel.css';
+import './card-review-compact.css';
 
 type Member = { id: string; username: string; avatar_url?: string | null };
 type ReviewStatus = 'none' | 'requested' | 'approved' | 'changes_requested';
