@@ -799,7 +799,6 @@ export default function Home() {
   const [commentDraft, setCommentDraft] = useState('');
   const [boardStickers, setBoardStickers] = useState<BoardSticker[]>([]);
   const [reactionPickerCommentId, setReactionPickerCommentId] = useState<EntityId | null>(null);
-  const [reactionPickerPosition, setReactionPickerPosition] = useState<CSSProperties | null>(null);
   const [stickerPickerTarget, setStickerPickerTarget] = useState<'comment' | 'thread' | null>(null);
   const [stickerPickerPosition, setStickerPickerPosition] = useState<CSSProperties | null>(null);
   const [threadRoot, setThreadRoot] = useState<Comment | null>(null);
@@ -1008,7 +1007,6 @@ export default function Home() {
   const workspaceBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const cardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const boardStickerFileRef = useRef<HTMLInputElement | null>(null);
-  const reactionPickerButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const stickerComposerButtonRefs = useRef<{ comment: HTMLButtonElement | null; thread: HTMLButtonElement | null }>({ comment: null, thread: null });
   const commentComposerRef = useRef<InlineStickerComposerHandle | null>(null);
   const threadComposerRef = useRef<InlineStickerComposerHandle | null>(null);
@@ -1384,7 +1382,7 @@ export default function Home() {
       if (isNotificationsOpen && !event.target.closest('.notifications-control')) setNotificationsOpen(false);
       if (columnMenuId && !event.target.closest('.column-actions')) setColumnMenuId(null);
       if (sidebarPanel && !event.target.closest('.property-popover, .quick-action, .member-plus, .label-plus')) setSidebarPanel(null);
-      if (reactionPickerCommentId && !event.target.closest('.reaction-picker-control, .reaction-picker')) { setReactionPickerCommentId(null); setReactionPickerPosition(null); }
+      if (reactionPickerCommentId && !event.target.closest('.reaction-picker-control, .reaction-picker')) setReactionPickerCommentId(null);
       if (stickerPickerTarget && !event.target.closest('.sticker-composer-control, .sticker-picker')) { setStickerPickerTarget(null); setStickerPickerPosition(null); }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -1416,26 +1414,6 @@ export default function Home() {
     });
   }
 
-  function updateReactionPickerPosition(commentId: EntityId) {
-    const trigger = reactionPickerButtonRefs.current.get(String(commentId));
-    if (!trigger) return;
-    const padding = 12;
-    const gap = 8;
-    const pickerWidth = Math.min(280, window.innerWidth - padding * 2);
-    const rect = trigger.getBoundingClientRect();
-    const roomAbove = rect.top - padding - gap;
-    const roomBelow = window.innerHeight - rect.bottom - padding - gap;
-    const opensAbove = roomAbove >= roomBelow;
-    const availableHeight = Math.max(96, Math.min(320, opensAbove ? roomAbove : roomBelow));
-    const left = Math.max(padding, Math.min(rect.left, window.innerWidth - pickerWidth - padding));
-    setReactionPickerPosition({
-      left,
-      width: pickerWidth,
-      maxHeight: availableHeight,
-      ...(opensAbove ? { bottom: window.innerHeight - rect.top + gap } : { top: rect.bottom + gap }),
-    });
-  }
-
   useEffect(() => {
     if (!stickerPickerTarget) return;
     const update = () => updateStickerPickerPosition(stickerPickerTarget);
@@ -1444,15 +1422,6 @@ export default function Home() {
     window.addEventListener('scroll', update, true);
     return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); };
   }, [stickerPickerTarget]);
-
-  useEffect(() => {
-    if (reactionPickerCommentId === null) return;
-    const update = () => updateReactionPickerPosition(reactionPickerCommentId);
-    update();
-    window.addEventListener('resize', update);
-    window.addEventListener('scroll', update, true);
-    return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); };
-  }, [reactionPickerCommentId]);
 
   useEffect(() => {
     if (!cardContextMenu && !columnContextMenu && !freeformContextMenu) return;
@@ -3044,15 +3013,14 @@ export default function Home() {
   function renderReactionPicker(comment: Comment) {
     const open = String(reactionPickerCommentId) === String(comment.id);
     const toggle = () => {
-      if (open) { setReactionPickerCommentId(null); setReactionPickerPosition(null); return; }
-      setReactionPickerPosition(null);
+      if (open) { setReactionPickerCommentId(null); return; }
       setReactionPickerCommentId(comment.id);
     };
-    const picker = open && reactionPickerPosition && <div className="reaction-picker" role="dialog" aria-label="Выберите реакцию" style={reactionPickerPosition}>
+    const picker = open && <div className="reaction-picker" role="dialog" aria-label="Выберите реакцию">
       <div className="reaction-picker-grid">{DEFAULT_REACTION_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => toggleCommentReaction(comment, emoji)} title={emoji}>{emoji}</button>)}</div>
       {boardStickers.length > 0 && <><b>Стикеры доски</b><div className="reaction-picker-grid sticker-reaction-grid">{boardStickers.map((sticker) => <button type="button" key={sticker.id} onClick={() => toggleCommentReaction(comment, `sticker:${sticker.id}`)} title={sticker.name}><img src={assetUrl(sticker.url)} alt={sticker.name} /></button>)}</div></>}
     </div>;
-    return <><span className="reaction-picker-control"><button ref={(element) => { const key = String(comment.id); if (element) reactionPickerButtonRefs.current.set(key, element); else reactionPickerButtonRefs.current.delete(key); }} type="button" className="reaction-add" onClick={toggle} aria-label="Добавить реакцию" title="Добавить реакцию"><ReactionIcon /></button></span>{picker && createPortal(picker, document.body)}</>;
+    return <><span className="reaction-picker-control"><button type="button" className="reaction-add" onClick={toggle} aria-label="Добавить реакцию" title="Добавить реакцию"><ReactionIcon /></button></span>{picker && createPortal(picker, document.body)}</>;
   }
   function renderStickerComposerButton(target: 'comment' | 'thread') {
     if (isPublicViewer || !canEditBoard) return null;
