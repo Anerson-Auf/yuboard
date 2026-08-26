@@ -727,7 +727,14 @@ struct CreateChecklistRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateChecklistRequest {
+    title: String,
+}
+
+#[derive(Deserialize)]
 struct UpdateChecklistItemRequest {
+    #[serde(default)]
+    title: Option<String>,
     #[serde(default)]
     is_completed: Option<bool>,
     #[serde(default)]
@@ -1355,7 +1362,7 @@ struct ChecklistResponse {
     items: Vec<ChecklistItemResponse>,
 }
 
-#[derive(FromRow)]
+#[derive(Serialize, FromRow)]
 struct ChecklistRow {
     id: Uuid,
     title: String,
@@ -1694,7 +1701,7 @@ async fn main() {
         .route("/v1/notifications/{notification_id}/read", post(mark_notification_read))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
-        .route("/v1/checklists/{checklist_id}", axum::routing::delete(delete_checklist))
+        .route("/v1/checklists/{checklist_id}", patch(update_checklist).delete(delete_checklist))
         .route("/v1/checklists/{checklist_id}/items", post(create_checklist_item))
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
         .route("/v1/checklist-items/{item_id}/attachments", post(upload_checklist_item_attachment))
@@ -4646,6 +4653,25 @@ async fn create_checklist(State(state): State<AppState>, current: CurrentUser, P
     Ok(Json(ChecklistResponse { id: checklist.id, title: checklist.title, items: vec![] }))
 }
 
+async fn update_checklist(State(state): State<AppState>, current: CurrentUser, Path(checklist_id): Path<Uuid>, Json(request): Json<UpdateChecklistRequest>) -> ApiResult<ChecklistRow> {
+    let title = valid_text(&request.title, "title", 200)?;
+    let pool = database(&state)?;
+    let (card_id, previous_title) = sqlx::query_as::<_, (Uuid, String)>("SELECT card_id, title FROM checklists WHERE id = $1")
+        .bind(checklist_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_not_found", "Checklist was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let checklist = sqlx::query_as::<_, ChecklistRow>(
+        "UPDATE checklists cl SET title = $1 FROM cards c WHERE cl.id = $2 AND cl.card_id = c.id AND c.archived_at IS NULL RETURNING cl.id, cl.title",
+    )
+    .bind(&title).bind(checklist_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_not_found", "Checklist was not found.".to_owned()))?;
+    if previous_title != title {
+        record_card_activity(pool, card_id, current.id, "Переименован чек-лист", &format!("{previous_title} → {title}")).await;
+        let _ = state.events.send(());
+    }
+    Ok(Json(checklist))
+}
+
 async fn delete_checklist(State(state): State<AppState>, current: CurrentUser, Path(checklist_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM checklists WHERE id = $1")
@@ -4685,18 +4711,20 @@ async fn create_checklist_item(State(state): State<AppState>, current: CurrentUs
 async fn update_checklist_item(State(state): State<AppState>, current: CurrentUser, Path(item_id): Path<Uuid>, Json(request): Json<UpdateChecklistItemRequest>) -> ApiResult<ChecklistItemResponse> {
     let actor_id = current.id;
     let pool = database(&state)?;
-    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM checklist_items WHERE id = $1")
+    let (card_id, previous_title) = sqlx::query_as::<_, (Uuid, String)>("SELECT card_id, title FROM checklist_items WHERE id = $1")
         .bind(item_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
     ensure_card_permission(pool, card_id, actor_id, "edit_cards").await?;
+    let title = request.title.as_deref().map(|value| valid_text(value, "title", 500).map(ToOwned::to_owned)).transpose()?;
     let description = request.description.as_deref().map(|value| {
         if value.chars().count() > 4_000 { Err(ApiError::bad_request("Checklist item description must be at most 4000 characters.")) }
         else { Ok(value.to_owned()) }
     }).transpose()?;
-    if request.is_completed.is_none() && description.is_none() { return Err(ApiError::bad_request("Provide a checklist item change.")); }
+    if title.is_none() && request.is_completed.is_none() && description.is_none() { return Err(ApiError::bad_request("Provide a checklist item change.")); }
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
-        "UPDATE checklist_items i SET is_completed = COALESCE($1, i.is_completed), completed_at = CASE WHEN COALESCE($1, i.is_completed) THEN COALESCE(i.completed_at, now()) ELSE NULL END, completed_by = CASE WHEN COALESCE($1, i.is_completed) THEN COALESCE(i.completed_by, $2) ELSE NULL END, description = COALESCE($3, i.description) FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE i.id = $4 AND i.card_id = c.id AND c.archived_at IS NULL AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING i.id, i.card_id, i.title, i.is_completed, i.description, (SELECT title FROM checklists WHERE id = i.checklist_id) AS checklist_title",
+        "UPDATE checklist_items i SET title = COALESCE($1, i.title), is_completed = COALESCE($2, i.is_completed), completed_at = CASE WHEN COALESCE($2, i.is_completed) THEN COALESCE(i.completed_at, now()) ELSE NULL END, completed_by = CASE WHEN COALESCE($2, i.is_completed) THEN COALESCE(i.completed_by, $3) ELSE NULL END, description = COALESCE($4, i.description) FROM cards c INNER JOIN boards b ON b.id = c.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE i.id = $5 AND i.card_id = c.id AND c.archived_at IS NULL AND m.user_id = $3 AND flowboard_has_permission(b.workspace_id, $3, 'edit_cards'::workspace_permission) RETURNING i.id, i.card_id, i.title, i.is_completed, i.description, (SELECT title FROM checklists WHERE id = i.checklist_id) AS checklist_title",
     )
+    .bind(title.as_deref())
     .bind(request.is_completed)
     .bind(actor_id)
     .bind(description)
@@ -4705,9 +4733,10 @@ async fn update_checklist_item(State(state): State<AppState>, current: CurrentUs
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
-    let action = if request.description.is_some() { "Изменено описание пункта чек-листа" } else if item.is_completed { "Отмечен пункт чек-листа" } else { "Снята отметка с пункта" };
+    let action = if title.is_some() { "Переименован пункт чек-листа" } else if request.description.is_some() { "Изменено описание пункта чек-листа" } else if item.is_completed { "Отмечен пункт чек-листа" } else { "Снята отметка с пункта" };
     if request.description.is_some() { replace_card_mentions(pool, item.card_id, actor_id, "checklist_item_description", item.id, &item.description).await?; }
-    record_card_activity(pool, item.card_id, actor_id, action, &format!("{}: {}", item.checklist_title, item.title)).await;
+    let detail = if title.is_some() { format!("{}: {} → {}", item.checklist_title, previous_title, item.title) } else { format!("{}: {}", item.checklist_title, item.title) };
+    record_card_activity(pool, item.card_id, actor_id, action, &detail).await;
     let _ = state.events.send(());
     let attachments = sqlx::query_as::<_, AttachmentResponse>("SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE checklist_item_id = $1 ORDER BY created_at DESC")
         .bind(item.id).fetch_all(pool).await.map_err(ApiError::internal)?;

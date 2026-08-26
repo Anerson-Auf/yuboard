@@ -391,6 +391,20 @@ function Avatar({ member }: { member: Member }) {
   return <span className={`avatar ${member.color}`} title={member.name}>{member.initials}</span>;
 }
 
+function InlineTitleEditor({ value, className, ariaLabel, maxLength, onSave, onCancel }: { value: string; className: string; ariaLabel: string; maxLength: number; onSave: (value: string) => void; onCancel: () => void }) {
+  const [draft, setDraft] = useState(value);
+  const cancelled = useRef(false);
+  return <input autoFocus className={className} value={draft} maxLength={maxLength} aria-label={ariaLabel} onChange={(event) => setDraft(event.target.value)} onBlur={() => {
+    if (cancelled.current) { onCancel(); return; }
+    const next = draft.trim();
+    if (next && next !== value) onSave(next);
+    else onCancel();
+  }} onKeyDown={(event) => {
+    if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
+    if (event.key === 'Escape') { event.preventDefault(); cancelled.current = true; event.currentTarget.blur(); }
+  }} />;
+}
+
 function VisibleAvatars({ members, limit = 3 }: { members: Member[]; limit?: number }) {
   const visible = members.slice(0, limit);
   const hidden = members.slice(limit);
@@ -865,6 +879,8 @@ export default function Home() {
   const [collapsedChecklistIds, setCollapsedChecklistIds] = useState<string[]>([]);
   const [checklistNameDraft, setChecklistNameDraft] = useState('');
   const [checklistItemDrafts, setChecklistItemDrafts] = useState<Record<string, string>>({});
+  const [editingChecklistTitleId, setEditingChecklistTitleId] = useState<string | null>(null);
+  const [editingChecklistItemTitleId, setEditingChecklistItemTitleId] = useState<string | null>(null);
   const [expandedChecklistItemIds, setExpandedChecklistItemIds] = useState<string[]>([]);
   const [hideCompletedChecklistItems, setHideCompletedChecklistItems] = useState(false);
   const [checklistItemDescriptionDrafts, setChecklistItemDescriptionDrafts] = useState<Record<string, string>>({});
@@ -1906,10 +1922,10 @@ export default function Home() {
           const isCollapsed = collapsedChecklistIds.includes(checklist.id);
           return <section className={`checklist ${isCollapsed ? 'collapsed' : ''}`} key={checklist.id}>
             <div className="section-heading">
-              <h4>{checklist.title}</h4><span>{completed}/{checklist.items.length}</span>
+              {editingChecklistTitleId === checklist.id ? <InlineTitleEditor value={checklist.title} className="checklist-title-editor" ariaLabel="Название чек-листа" maxLength={200} onSave={(title) => renameChecklist(checklist, title)} onCancel={() => setEditingChecklistTitleId(null)} /> : isSelectedReadOnly ? <h4>{checklist.title}</h4> : <button className="checklist-title-edit" type="button" title="Изменить название чек-листа" onClick={() => setEditingChecklistTitleId(checklist.id)}>{checklist.title}</button>}<span>{completed}/{checklist.items.length}</span>
               <button className={`text-action checklist-collapse-toggle ${isCollapsed ? 'collapsed' : ''}`} type="button" title={isCollapsed ? 'Развернуть чек-лист' : 'Свернуть чек-лист'} aria-expanded={!isCollapsed} onClick={() => setCollapsedChecklistIds((current) => current.includes(checklist.id) ? current.filter((id) => id !== checklist.id) : [...current, checklist.id])}>{isCollapsed ? '⌄' : '⌃'}</button>
               <button className="text-action checklist-all-toggle" type="button" title={allExpanded ? 'Свернуть все детали' : 'Раскрыть все детали'} onClick={() => setExpandedChecklistItemIds((current) => allExpanded ? current.filter((id) => !itemIds.includes(id)) : [...new Set([...current, ...itemIds])])}>{allExpanded ? '⌃ Все' : '⌄ Все'}</button>
-              <button className="text-action danger-text" onClick={() => deleteChecklist(checklist)}>Удалить</button>
+              {!isSelectedReadOnly && <button className="text-action danger-text" onClick={() => deleteChecklist(checklist)}>Удалить</button>}
             </div>
             {!isCollapsed && <>
               <div className="progress"><i style={{ width: `${checklist.items.length ? completed / checklist.items.length * 100 : 0}%` }} /></div>
@@ -1917,7 +1933,7 @@ export default function Home() {
                 const itemId = String(item.id);
                 const isExpanded = expandedChecklistItemIds.includes(itemId);
                 return <div className="checklist-item" key={item.id}>
-                  <div className="check-row"><button className={`check-item ${item.is_completed ? 'done' : ''}`} onClick={() => toggleChecklistItem(checklist.id, item)} aria-pressed={item.is_completed}><span className="check-control">{item.is_completed && '✓'}</span>{item.title}</button><button className={`check-item-toggle ${isExpanded ? 'open' : ''}`} type="button" title={isExpanded ? 'Скрыть детали пункта' : 'Раскрыть детали пункта'} aria-expanded={isExpanded} onClick={() => setExpandedChecklistItemIds((current) => current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId])}>⌄</button><button className="remove-check" onClick={() => removeChecklistItem(checklist.id, item)} aria-label={`Удалить пункт ${item.title}`}>×</button></div>
+                  <div className="check-row">{isSelectedReadOnly ? <span className={`check-item check-item-completion ${item.is_completed ? 'done' : ''}`}><span className="check-control">{item.is_completed && '✓'}</span></span> : <button className={`check-item check-item-completion ${item.is_completed ? 'done' : ''}`} onClick={() => toggleChecklistItem(checklist.id, item)} aria-label={item.is_completed ? 'Снять отметку' : 'Отметить выполненным'} aria-pressed={item.is_completed}><span className="check-control">{item.is_completed && '✓'}</span></button>}{editingChecklistItemTitleId === itemId ? <InlineTitleEditor value={item.title} className={`check-item-title-editor ${item.is_completed ? 'done' : ''}`} ariaLabel="Название пункта чек-листа" maxLength={500} onSave={(title) => renameChecklistItem(checklist, item, title)} onCancel={() => setEditingChecklistItemTitleId(null)} /> : isSelectedReadOnly ? <span className={`check-item-title ${item.is_completed ? 'done' : ''}`}>{item.title}</span> : <button type="button" className={`check-item-title ${item.is_completed ? 'done' : ''}`} title="Изменить название пункта" onClick={() => setEditingChecklistItemTitleId(itemId)}>{item.title}</button>}<button className={`check-item-toggle ${isExpanded ? 'open' : ''}`} type="button" title={isExpanded ? 'Скрыть детали пункта' : 'Раскрыть детали пункта'} aria-expanded={isExpanded} onClick={() => setExpandedChecklistItemIds((current) => current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId])}>⌄</button>{!isSelectedReadOnly && <button className="remove-check" onClick={() => removeChecklistItem(checklist.id, item)} aria-label={`Удалить пункт ${item.title}`}>×</button>}</div>
                   {isExpanded && <div className="check-item-detail"><MentionTextarea className={unreadMentionSourceIds.includes(itemId) ? 'mention-highlight' : undefined} value={checklistItemDescriptionDrafts[itemId] ?? item.description} onValueChange={(value) => setChecklistItemDescriptionDrafts((current) => ({ ...current, [itemId]: value }))} onBlur={() => saveChecklistItemDescription(checklist.id, item)} members={account ? workspaceMembers : []} maxLength={4000} placeholder="Описание пункта…" ariaLabel={`Описание пункта ${item.title}`} /><label className="check-item-upload">{isUploadingChecklistItemAttachment ? 'Загружаем…' : '＋ Картинка или видео'}<input type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple disabled={isUploadingChecklistItemAttachment} onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ''; void uploadChecklistItemAttachments(checklist.id, item, files); }} /></label>{item.attachments.length > 0 && <div className="check-item-attachments">{item.attachments.map((attachment) => <figure key={attachment.id}>{attachment.media_type.startsWith('image/') ? <button className="check-item-image" type="button" onClick={() => setImagePreview({ url: assetUrl(attachment.url), name: attachment.original_name })}><img src={assetUrl(attachment.url)} alt={attachment.original_name} /></button> : attachment.media_type.startsWith('video/') ? <video controls preload="metadata" src={assetUrl(attachment.url)} /> : <a href={assetUrl(attachment.url)} target="_blank" rel="noreferrer">{attachment.original_name}</a>}<figcaption><span>{attachment.original_name}</span><button type="button" onClick={() => deleteChecklistItemAttachment(checklist.id, item, attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure>)}</div>}</div>}
                 </div>;
               })}
@@ -3387,6 +3403,30 @@ export default function Home() {
       .then((item) => { applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: [...checklist.items, item] } : checklist)); setChecklistItemDrafts((current) => ({ ...current, [checklistId]: '' })); })
       .catch(() => showToast('Не удалось добавить пункт чек-листа'))
       .finally(() => setSavingChecklist(false));
+  }
+  function renameChecklist(checklist: Checklist, title: string) {
+    setEditingChecklistTitleId(null);
+    if (title === checklist.title || selected?.archived || isSelectedReadOnly) return;
+    const previous = checklist.title;
+    applyChecklists(checklists.map((item) => item.id === checklist.id ? { ...item, title } : item));
+    if (persistence === 'connected' && !isParkingCardId(selected?.id) && !checklist.id.startsWith('local-')) {
+      void fetch(`${API_URL}/v1/checklists/${checklist.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })
+        .then(async (response) => { if (!response.ok) throw new Error('checklist rename failed'); return response.json() as Promise<{ id: string; title: string }>; })
+        .then((saved) => applyChecklists(checklists.map((item) => item.id === checklist.id ? { ...item, title: saved.title } : item)))
+        .catch(() => { applyChecklists(checklists.map((item) => item.id === checklist.id ? { ...item, title: previous } : item)); showToast('Название чек-листа не сохранено'); });
+    }
+  }
+  function renameChecklistItem(checklist: Checklist, item: ChecklistItem, title: string) {
+    setEditingChecklistItemTitleId(null);
+    if (title === item.title || selected?.archived || isSelectedReadOnly) return;
+    const previous = item.title;
+    updateChecklistItem(checklist.id, item.id, { title });
+    if (persistence === 'connected' && !isParkingCardId(selected?.id) && typeof item.id === 'string' && !item.id.startsWith('local-')) {
+      void fetch(`${API_URL}/v1/checklist-items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })
+        .then(async (response) => { if (!response.ok) throw new Error('checklist item rename failed'); return response.json() as Promise<ChecklistItem>; })
+        .then((saved) => updateChecklistItem(checklist.id, item.id, saved))
+        .catch(() => { updateChecklistItem(checklist.id, item.id, { title: previous }); showToast('Название пункта не сохранено'); });
+    }
   }
   function deleteChecklist(checklist: Checklist) {
     if (selected?.archived) return;
