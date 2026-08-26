@@ -34,6 +34,8 @@ export type CommandPaletteProps = {
   assignSelf?: Action;
   /** Opens the notification center. */
   notifications?: Action;
+  /** Opens the current user's cross-board task queue. */
+  myTasks?: Action;
   /** Opens board filters. */
   filters?: Action;
   placeholder?: string;
@@ -63,6 +65,7 @@ export default function CommandPalette({
   goToBoard,
   assignSelf,
   notifications,
+  myTasks,
   filters,
   placeholder = 'Введите команду или найдите действие…',
   showTrigger = true,
@@ -92,11 +95,14 @@ export default function CommandPalette({
     if (notifications) result.push(paletteAction(notifications, {
       id: 'notifications', label: 'Открыть уведомления', group: 'Навигация', defaultDescription: 'Перейти к непрочитанным уведомлениям',
     }));
+    if (myTasks) result.push(paletteAction(myTasks, {
+      id: 'my-tasks', label: 'Открыть мои задачи', group: 'Навигация', defaultDescription: 'Посмотреть назначенные вам карточки из всех проектов',
+    }));
     if (filters) result.push(paletteAction(filters, {
       id: 'filters', label: 'Открыть фильтры', group: 'Доска', defaultDescription: 'Настроить отображение карточек', defaultShortcut: 'F',
     }));
     return result;
-  }, [assignSelf, createCard, filters, goToBoard, notifications]);
+  }, [assignSelf, createCard, filters, goToBoard, myTasks, notifications]);
 
   const visibleActions = useMemo(() => {
     const terms = normalize(query).split(/\s+/).filter(Boolean);

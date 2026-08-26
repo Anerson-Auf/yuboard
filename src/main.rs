@@ -634,6 +634,13 @@ struct UpdateCardRequest {
 struct CreateCardRelationRequest {
     target_card_id: Uuid,
     relation_type: String,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateCardRelationRequest {
+    note: String,
 }
 
 #[derive(Deserialize)]
@@ -899,6 +906,7 @@ struct CardResponse {
 struct CardRelationResponse {
     id: Uuid,
     relation_type: String,
+    note: String,
     direction: String,
     other_card_id: Uuid,
     other_card_title: String,
@@ -913,7 +921,41 @@ struct BoardRelationResponse {
     source_card_id: Uuid,
     target_card_id: Uuid,
     relation_type: String,
+    note: String,
     created_at: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct CardReviewRow {
+    status: String,
+    updated_at: String,
+}
+
+#[derive(Serialize)]
+struct CardReviewResponse {
+    status: String,
+    reviewers: Vec<MemberResponse>,
+    updated_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateCardReviewRequest {
+    status: String,
+    #[serde(default)]
+    reviewer_ids: Vec<Uuid>,
+}
+
+#[derive(Serialize, FromRow)]
+struct MyTaskResponse {
+    id: Uuid,
+    board_id: Uuid,
+    board_title: String,
+    list_title: String,
+    title: String,
+    priority: i16,
+    due_at: Option<String>,
+    completed_at: Option<String>,
+    updated_at: String,
 }
 
 #[derive(Serialize, FromRow)]
@@ -1414,6 +1456,7 @@ async fn main() {
         .route("/v1/auth/sessions", get(list_sessions).delete(revoke_other_sessions))
         .route("/v1/auth/sessions/{session_id}", axum::routing::delete(revoke_session))
         .route("/v1/auth/avatar", get(download_avatar).post(upload_avatar))
+        .route("/v1/me/tasks", get(list_my_tasks))
         .route("/v1/profile-roles", get(list_profile_roles).post(create_profile_role))
         .route("/v1/profile-roles/{role_id}", patch(update_profile_role).delete(delete_profile_role))
         .route("/v1/profile-roles/self/{role_id}", put(assign_self_profile_role).delete(remove_self_profile_role))
@@ -1488,8 +1531,9 @@ async fn main() {
         .route("/v1/cards/{card_id}/background", put(update_card_background))
         .route("/v1/cards/{card_id}/background/file", get(download_card_background).post(upload_card_background))
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
+        .route("/v1/cards/{card_id}/review", get(get_card_review).put(update_card_review))
         .route("/v1/cards/{card_id}/relations", get(list_card_relations).post(create_card_relation))
-        .route("/v1/cards/{card_id}/relations/{relation_id}", axum::routing::delete(delete_card_relation))
+        .route("/v1/cards/{card_id}/relations/{relation_id}", patch(update_card_relation).delete(delete_card_relation))
         .route("/v1/cards/{card_id}/description-versions", get(list_card_description_versions))
         .route("/v1/cards/{card_id}/description-versions/{version_id}/restore", post(restore_card_description_version))
         .route("/v1/cards/{card_id}/polls", get(list_card_polls).post(create_card_poll))
@@ -5355,6 +5399,82 @@ async fn download_discord_comment_avatar(State(state): State<AppState>, Path((to
     avatar_response(&state, user_id).await
 }
 
+async fn list_my_tasks(State(state): State<AppState>, current: CurrentUser) -> ApiResult<Vec<MyTaskResponse>> {
+    let tasks = sqlx::query_as::<_, MyTaskResponse>(
+        "SELECT c.id, c.board_id, b.title AS board_title, l.title AS list_title, c.title, c.priority, c.due_at::text AS due_at, c.completed_at::text AS completed_at, c.updated_at::text AS updated_at \
+         FROM card_assignees ca \
+         INNER JOIN cards c ON c.id = ca.card_id \
+         INNER JOIN boards b ON b.id = c.board_id \
+         INNER JOIN lists l ON l.id = c.list_id \
+         WHERE ca.user_id = $1 AND c.archived_at IS NULL AND b.archived_at IS NULL \
+         ORDER BY c.completed_at IS NULL DESC, c.due_at NULLS LAST, c.updated_at DESC \
+         LIMIT 300",
+    )
+    .bind(current.id)
+    .fetch_all(database(&state)?)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(tasks))
+}
+
+async fn load_card_review(pool: &PgPool, card_id: Uuid) -> Result<CardReviewResponse, ApiError> {
+    let review = sqlx::query_as::<_, CardReviewRow>("SELECT status, updated_at::text AS updated_at FROM card_reviews WHERE card_id = $1")
+        .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?;
+    let reviewers = sqlx::query_as::<_, MemberResponse>(
+        "SELECT u.id, u.username AS display_name, u.avatar_url \
+         FROM card_reviewers cr INNER JOIN users u ON u.id = cr.user_id \
+         WHERE cr.card_id = $1 ORDER BY u.username COLLATE \"C\"",
+    )
+    .bind(card_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    Ok(CardReviewResponse {
+        status: review.as_ref().map(|item| item.status.clone()).unwrap_or_else(|| "none".to_owned()),
+        reviewers,
+        updated_at: review.map(|item| item.updated_at),
+    })
+}
+
+async fn get_card_review(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<CardReviewResponse> {
+    let pool = database(&state)?;
+    ensure_card_public_read(pool, card_id, current.0.map(|user| user.id)).await?;
+    Ok(Json(load_card_review(pool, card_id).await?))
+}
+
+async fn update_card_review(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardReviewRequest>) -> ApiResult<CardReviewResponse> {
+    if !matches!(request.status.as_str(), "none" | "requested" | "approved" | "changes_requested") {
+        return Err(ApiError::bad_request("review status is invalid."));
+    }
+    if request.reviewer_ids.len() > 30 {
+        return Err(ApiError::bad_request("a card can have at most 30 reviewers."));
+    }
+    let mut reviewer_ids = request.reviewer_ids;
+    reviewer_ids.sort(); reviewer_ids.dedup();
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    if !reviewer_ids.is_empty() {
+        let found: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM board_members bm \
+             WHERE bm.board_id = (SELECT board_id FROM cards WHERE id = $1) AND bm.user_id = ANY($2)",
+        )
+        .bind(card_id).bind(&reviewer_ids).fetch_one(pool).await.map_err(ApiError::internal)?;
+        if found != reviewer_ids.len() as i64 {
+            return Err(ApiError::bad_request("every reviewer must be a member of this board."));
+        }
+    }
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    sqlx::query("INSERT INTO card_reviews (card_id, status, updated_by, updated_at) VALUES ($1, $2, $3, now()) ON CONFLICT (card_id) DO UPDATE SET status = EXCLUDED.status, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at")
+        .bind(card_id).bind(&request.status).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    sqlx::query("DELETE FROM card_reviewers WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    for reviewer_id in &reviewer_ids {
+        sqlx::query("INSERT INTO card_reviewers (card_id, user_id) VALUES ($1, $2)").bind(card_id).bind(reviewer_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    }
+    transaction.commit().await.map_err(ApiError::internal)?;
+    let detail = if reviewer_ids.is_empty() { request.status.clone() } else { format!("{} · проверяющих: {}", request.status, reviewer_ids.len()) };
+    record_card_activity(pool, card_id, current.id, "Изменён статус проверки", &detail).await;
+    let result = load_card_review(pool, card_id).await?;
+    let _ = state.events.send(());
+    Ok(Json(result))
+}
+
 fn card_relation_type_label(relation_type: &str) -> &'static str {
     match relation_type {
         "blocks" => "Блокирует",
@@ -5365,11 +5485,30 @@ fn card_relation_type_label(relation_type: &str) -> &'static str {
     }
 }
 
+fn relation_dependency_direction(source_card_id: Uuid, target_card_id: Uuid, relation_type: &str) -> Option<(Uuid, Uuid)> {
+    match relation_type {
+        "blocks" => Some((source_card_id, target_card_id)),
+        "depends_on" => Some((target_card_id, source_card_id)),
+        _ => None,
+    }
+}
+
+async fn dependency_cycle_path(pool: &PgPool, prerequisite_card_id: Uuid, dependent_card_id: Uuid) -> Result<Option<Vec<Uuid>>, ApiError> {
+    sqlx::query_scalar::<_, Vec<Uuid>>(
+        "WITH RECURSIVE edges AS (SELECT CASE WHEN relation_type = 'depends_on' THEN target_card_id ELSE source_card_id END AS from_card_id, CASE WHEN relation_type = 'depends_on' THEN source_card_id ELSE target_card_id END AS to_card_id FROM card_relations WHERE relation_type IN ('blocks', 'depends_on')), walk(card_id, path) AS (SELECT e.to_card_id, ARRAY[e.from_card_id, e.to_card_id] FROM edges e WHERE e.from_card_id = $1 UNION ALL SELECT e.to_card_id, w.path || e.to_card_id FROM edges e INNER JOIN walk w ON e.from_card_id = w.card_id WHERE NOT e.to_card_id = ANY(w.path)) SELECT path FROM walk WHERE card_id = $2 LIMIT 1",
+    )
+    .bind(dependent_card_id)
+    .bind(prerequisite_card_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)
+}
+
 async fn list_card_relations(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CardRelationResponse>> {
     let pool = database(&state)?;
     ensure_card_access(pool, card_id, current.id).await?;
     let relations = sqlx::query_as::<_, CardRelationResponse>(
-        "SELECT r.id, r.relation_type, CASE WHEN r.source_card_id = $1 THEN 'outgoing' ELSE 'incoming' END AS direction, other.id AS other_card_id, other.title AS other_card_title, other.list_id AS other_card_list_id, other.completed_at::text AS other_card_completed_at, r.created_at::text AS created_at FROM card_relations r INNER JOIN cards other ON other.id = CASE WHEN r.source_card_id = $1 THEN r.target_card_id ELSE r.source_card_id END WHERE (r.source_card_id = $1 OR r.target_card_id = $1) AND other.archived_at IS NULL ORDER BY r.created_at DESC, r.id DESC",
+        "SELECT r.id, r.relation_type, r.note, CASE WHEN r.source_card_id = $1 THEN 'outgoing' ELSE 'incoming' END AS direction, other.id AS other_card_id, other.title AS other_card_title, other.list_id AS other_card_list_id, other.completed_at::text AS other_card_completed_at, r.created_at::text AS created_at FROM card_relations r INNER JOIN cards other ON other.id = CASE WHEN r.source_card_id = $1 THEN r.target_card_id ELSE r.source_card_id END WHERE (r.source_card_id = $1 OR r.target_card_id = $1) AND other.archived_at IS NULL ORDER BY r.created_at DESC, r.id DESC",
     )
     .bind(card_id)
     .fetch_all(pool)
@@ -5382,7 +5521,7 @@ async fn list_board_relations(State(state): State<AppState>, current: CurrentUse
     let pool = database(&state)?;
     ensure_board_layout_access(pool, board_id, current.id).await?;
     let relations = sqlx::query_as::<_, BoardRelationResponse>(
-        "SELECT r.id, r.source_card_id, r.target_card_id, r.relation_type, r.created_at::text AS created_at FROM card_relations r INNER JOIN cards source ON source.id = r.source_card_id INNER JOIN cards target ON target.id = r.target_card_id WHERE source.board_id = $1 AND target.board_id = $1 AND source.archived_at IS NULL AND target.archived_at IS NULL ORDER BY r.created_at ASC, r.id ASC",
+        "SELECT r.id, r.source_card_id, r.target_card_id, r.relation_type, r.note, r.created_at::text AS created_at FROM card_relations r INNER JOIN cards source ON source.id = r.source_card_id INNER JOIN cards target ON target.id = r.target_card_id WHERE source.board_id = $1 AND target.board_id = $1 AND source.archived_at IS NULL AND target.archived_at IS NULL ORDER BY r.created_at ASC, r.id ASC",
     )
     .bind(board_id)
     .fetch_all(pool)
@@ -5396,16 +5535,30 @@ async fn create_card_relation(State(state): State<AppState>, current: CurrentUse
     if !matches!(request.relation_type.as_str(), "blocks" | "depends_on" | "duplicate" | "related") {
         return Err(ApiError::bad_request("relation_type must be blocks, depends_on, duplicate, or related."));
     }
+    let note = request.note.trim();
+    if note.chars().count() > 500 { return Err(ApiError::bad_request("relation note must contain at most 500 characters.")); }
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
     ensure_card_access(pool, request.target_card_id, current.id).await?;
+    if let Some((prerequisite, dependent)) = relation_dependency_direction(card_id, request.target_card_id, &request.relation_type) {
+        if let Some(path) = dependency_cycle_path(pool, prerequisite, dependent).await? {
+            let titles = sqlx::query_as::<_, (Uuid, String)>("SELECT id, title FROM cards WHERE id = ANY($1)")
+                .bind(&path).fetch_all(pool).await.map_err(ApiError::internal)?;
+            let title_by_id: HashMap<Uuid, String> = titles.into_iter().collect();
+            let mut loop_titles = path.iter().filter_map(|id| title_by_id.get(id).cloned()).collect::<Vec<_>>();
+            if let Some(first) = loop_titles.first().cloned() { loop_titles.push(first); }
+            let detail = if loop_titles.len() >= 2 { format!(": {}", loop_titles.join(" → ")) } else { String::new() };
+            return Err(ApiError::bad_request(format!("Нельзя создать связь: она замкнёт цикл зависимостей{detail}.")));
+        }
+    }
     let relation = sqlx::query_as::<_, CardRelationResponse>(
-        "WITH inserted AS (INSERT INTO card_relations (id, source_card_id, target_card_id, relation_type, created_by) SELECT $1, source.id, target.id, $4, $5 FROM cards source INNER JOIN cards target ON target.id = $3 AND target.board_id = source.board_id WHERE source.id = $2 AND source.archived_at IS NULL AND target.archived_at IS NULL ON CONFLICT (source_card_id, target_card_id, relation_type) DO NOTHING RETURNING id, relation_type, target_card_id, created_at) SELECT inserted.id, inserted.relation_type, 'outgoing' AS direction, target.id AS other_card_id, target.title AS other_card_title, target.list_id AS other_card_list_id, target.completed_at::text AS other_card_completed_at, inserted.created_at::text AS created_at FROM inserted INNER JOIN cards target ON target.id = inserted.target_card_id",
+        "WITH inserted AS (INSERT INTO card_relations (id, source_card_id, target_card_id, relation_type, note, created_by) SELECT $1, source.id, target.id, $4, $5, $6 FROM cards source INNER JOIN cards target ON target.id = $3 AND target.board_id = source.board_id WHERE source.id = $2 AND source.archived_at IS NULL AND target.archived_at IS NULL ON CONFLICT (source_card_id, target_card_id, relation_type) DO NOTHING RETURNING id, relation_type, note, target_card_id, created_at) SELECT inserted.id, inserted.relation_type, inserted.note, 'outgoing' AS direction, target.id AS other_card_id, target.title AS other_card_title, target.list_id AS other_card_list_id, target.completed_at::text AS other_card_completed_at, inserted.created_at::text AS created_at FROM inserted INNER JOIN cards target ON target.id = inserted.target_card_id",
     )
     .bind(Uuid::new_v4())
     .bind(card_id)
     .bind(request.target_card_id)
     .bind(&request.relation_type)
+    .bind(note)
     .bind(current.id)
     .fetch_optional(pool)
     .await
@@ -5413,6 +5566,26 @@ async fn create_card_relation(State(state): State<AppState>, current: CurrentUse
     .ok_or_else(|| ApiError(StatusCode::CONFLICT, "relation_exists", "This card relation already exists or the cards are in different projects.".to_owned()))?;
     let detail = format!("{}: {}", card_relation_type_label(&relation.relation_type), relation.other_card_title);
     record_card_activity(pool, card_id, current.id, "Добавлена связь карточек", &detail).await;
+    let _ = state.events.send(());
+    Ok(Json(relation))
+}
+
+async fn update_card_relation(State(state): State<AppState>, current: CurrentUser, Path((card_id, relation_id)): Path<(Uuid, Uuid)>, Json(request): Json<UpdateCardRelationRequest>) -> ApiResult<CardRelationResponse> {
+    let note = request.note.trim();
+    if note.chars().count() > 500 { return Err(ApiError::bad_request("relation note must contain at most 500 characters.")); }
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let relation = sqlx::query_as::<_, CardRelationResponse>(
+        "WITH updated AS (UPDATE card_relations r SET note = $1 WHERE r.id = $2 AND (r.source_card_id = $3 OR r.target_card_id = $3) RETURNING r.id, r.relation_type, r.note, r.source_card_id, r.target_card_id, r.created_at) SELECT updated.id, updated.relation_type, updated.note, CASE WHEN updated.source_card_id = $3 THEN 'outgoing' ELSE 'incoming' END AS direction, other.id AS other_card_id, other.title AS other_card_title, other.list_id AS other_card_list_id, other.completed_at::text AS other_card_completed_at, updated.created_at::text AS created_at FROM updated INNER JOIN cards other ON other.id = CASE WHEN updated.source_card_id = $3 THEN updated.target_card_id ELSE updated.source_card_id END",
+    )
+    .bind(note)
+    .bind(relation_id)
+    .bind(card_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "relation_not_found", "Card relation was not found.".to_owned()))?;
+    record_card_activity(pool, card_id, current.id, "Изменено пояснение связи", &relation.other_card_title).await;
     let _ = state.events.send(());
     Ok(Json(relation))
 }
