@@ -700,6 +700,11 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 .card-waiting-indicator { display: inline-flex; width: 17px; height: 17px; align-items: center; justify-content: center; color: #f4cb62; filter: drop-shadow(0 1px 3px rgb(0 0 0 / 32%)); }
 .card-waiting-indicator svg { width: 15px; height: 15px; }
+.card-waiting-corner { position: absolute; z-index: 5; top: 11px; right: 10px; width: 21px; height: 21px; border: 1px solid rgb(244 203 98 / 42%); border-radius: 7px; background: rgb(244 203 98 / 15%); box-shadow: 0 0 10px rgb(244 203 98 / 12%); }
+.card-waiting-corner svg { width: 16px; height: 16px; }
+.task-card:has(.card-priority-corner) .card-waiting-corner { right: 62px; }
+.task-card:has(.card-waiting-corner) .card-poll-attention { right: 62px; }
+.task-card:has(.card-priority-corner):has(.card-waiting-corner) .card-poll-attention { right: 114px; }
 .quick-action .card-waiting-indicator { width: 17px; height: 17px; }
 .quick-action.waiting-active { color: #f4cb62; }
 .card-waiting-panel { display: grid; gap: 10px; min-width: 290px; }
