@@ -908,6 +908,15 @@ struct CardRelationResponse {
 }
 
 #[derive(Serialize, FromRow)]
+struct BoardRelationResponse {
+    id: Uuid,
+    source_card_id: Uuid,
+    target_card_id: Uuid,
+    relation_type: String,
+    created_at: String,
+}
+
+#[derive(Serialize, FromRow)]
 struct CardDescriptionVersionResponse {
     id: Uuid,
     description: String,
@@ -1455,6 +1464,7 @@ async fn main() {
         .route("/v1/boards/{board_id}/export", get(export_board))
         .route("/v1/boards/{board_id}/archived-cards", get(list_archived_cards))
         .route("/v1/boards/{board_id}/activity", get(list_board_activity))
+        .route("/v1/boards/{board_id}/relations", get(list_board_relations))
         .route("/v1/boards/{board_id}/events", get(board_events))
         .route("/v1/boards/{board_id}/automations", get(list_board_automations).post(create_board_automation))
         .route("/v1/boards/{board_id}/automations/{automation_id}", patch(update_board_automation).delete(delete_board_automation))
@@ -2834,8 +2844,8 @@ async fn get_board_layout(State(state): State<AppState>, current: CurrentUser, P
 }
 
 async fn update_board_layout(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardLayoutRequest>) -> ApiResult<BoardLayoutResponse> {
-    if !matches!(request.view_mode.as_str(), "standard" | "freeform") {
-        return Err(ApiError::bad_request("view_mode must be either standard or freeform."));
+    if !matches!(request.view_mode.as_str(), "standard" | "freeform" | "dependencies") {
+        return Err(ApiError::bad_request("view_mode must be standard, freeform, or dependencies."));
     }
     if request.positions.len() > 500 {
         return Err(ApiError::bad_request("A board layout cannot contain more than 500 columns."));
@@ -5326,6 +5336,19 @@ async fn list_card_relations(State(state): State<AppState>, current: CurrentUser
         "SELECT r.id, r.relation_type, CASE WHEN r.source_card_id = $1 THEN 'outgoing' ELSE 'incoming' END AS direction, other.id AS other_card_id, other.title AS other_card_title, other.list_id AS other_card_list_id, other.completed_at::text AS other_card_completed_at, r.created_at::text AS created_at FROM card_relations r INNER JOIN cards other ON other.id = CASE WHEN r.source_card_id = $1 THEN r.target_card_id ELSE r.source_card_id END WHERE (r.source_card_id = $1 OR r.target_card_id = $1) AND other.archived_at IS NULL ORDER BY r.created_at DESC, r.id DESC",
     )
     .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(relations))
+}
+
+async fn list_board_relations(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<BoardRelationResponse>> {
+    let pool = database(&state)?;
+    ensure_board_layout_access(pool, board_id, current.id).await?;
+    let relations = sqlx::query_as::<_, BoardRelationResponse>(
+        "SELECT r.id, r.source_card_id, r.target_card_id, r.relation_type, r.created_at::text AS created_at FROM card_relations r INNER JOIN cards source ON source.id = r.source_card_id INNER JOIN cards target ON target.id = r.target_card_id WHERE source.board_id = $1 AND target.board_id = $1 AND source.archived_at IS NULL AND target.archived_at IS NULL ORDER BY r.created_at ASC, r.id ASC",
+    )
+    .bind(board_id)
     .fetch_all(pool)
     .await
     .map_err(ApiError::internal)?;
