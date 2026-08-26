@@ -19,13 +19,14 @@ function csrfHeaders() {
   return token ? { 'Content-Type': 'application/json', 'x-flowboard-csrf': decodeURIComponent(token) } : { 'Content-Type': 'application/json' };
 }
 
-export default function CardReviewPanel({ cardId, canEdit, members }: { cardId: string; canEdit: boolean; members: Member[] }) {
+export default function CardReviewPanel({ cardId, canEdit, members, compact = false }: { cardId: string; canEdit: boolean; members: Member[]; compact?: boolean }) {
   const [review, setReview] = useState<Review>({ status: 'none', reviewers: [], updated_at: null });
   const [reviewerIds, setReviewerIds] = useState<string[]>([]);
   const [isReviewerPickerOpen, setReviewerPickerOpen] = useState(false);
   const [reviewerQuery, setReviewerQuery] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [isCompactOpen, setCompactOpen] = useState(false);
   const available = useMemo(() => members.filter((member) => !reviewerIds.includes(member.id) && member.username.toLocaleLowerCase().includes(reviewerQuery.trim().toLocaleLowerCase())), [members, reviewerIds, reviewerQuery]);
 
   useEffect(() => {
@@ -50,9 +51,15 @@ export default function CardReviewPanel({ cardId, canEdit, members }: { cardId: 
 
   const initials = (username: string) => username.slice(0, 2).toUpperCase();
 
-  return <section className={`card-review-panel status-${review.status}`} aria-label="Проверка карточки">
+  const controls = <>
     <header><div><h3>Проверка</h3><span>Статус и ответственные за приёмку</span></div>{canEdit ? <select aria-label="Статус проверки" value={review.status} disabled={saving} onChange={(event) => { const status = event.target.value as ReviewStatus; setReview((current) => ({ ...current, status })); save(status); }}>{(Object.keys(statusLabels) as ReviewStatus[]).map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}</select> : <b>{statusLabels[review.status]}</b>}</header>
     {(review.status !== 'none' || review.reviewers.length > 0) && <div className="review-members"><div className="review-members-heading"><span>Проверяющие</span>{canEdit && <button type="button" className={isReviewerPickerOpen ? 'reviewer-add active' : 'reviewer-add'} disabled={saving || available.length === 0} onClick={() => { setReviewerPickerOpen((current) => !current); setReviewerQuery(''); }} aria-expanded={isReviewerPickerOpen}>＋ Добавить</button>}</div><div className="reviewer-chips">{review.reviewers.map((member) => <button type="button" key={member.id} className="reviewer-chip" disabled={!canEdit || saving} title={canEdit ? `Убрать @${member.username}` : `@${member.username}`} onClick={() => { const next = reviewerIds.filter((id) => id !== member.id); setReviewerIds(next); save(review.status, next); }}>{member.avatar_url ? <img src={member.avatar_url} alt="" /> : <i>{initials(member.username)}</i>}<span>@{member.username}</span>{canEdit && <b aria-hidden="true">×</b>}</button>)}</div>{canEdit && isReviewerPickerOpen && <div className="reviewer-picker"><input autoFocus value={reviewerQuery} onChange={(event) => setReviewerQuery(event.target.value)} placeholder="Найти участника" aria-label="Поиск проверяющего" />{available.length ? <div>{available.map((member) => <button type="button" key={member.id} disabled={saving} onClick={() => { const next = [...reviewerIds, member.id]; setReviewerIds(next); setReviewerQuery(''); setReviewerPickerOpen(false); save(review.status, next); }}>{member.avatar_url ? <img src={member.avatar_url} alt="" /> : <i>{initials(member.username)}</i>}<span>@{member.username}</span><b>Добавить</b></button>)}</div> : <p>Подходящих участников нет.</p>}</div>}</div>}
     {error && <p role="alert">{error}</p>}
+  </>;
+
+  if (compact) return <section className={`card-review-panel compact status-${review.status} ${isCompactOpen ? 'open' : ''}`} aria-label="Проверка карточки"><button type="button" className="review-compact-trigger" title={statusLabels[review.status]} aria-label={statusLabels[review.status]} onClick={() => setCompactOpen((current) => !current)}><span aria-hidden="true">{review.status === 'approved' ? '✓' : review.status === 'changes_requested' ? '!' : review.status === 'requested' ? '?' : '○'}</span><small>{review.reviewers.length || ''}</small></button>{isCompactOpen && <div className="review-compact-popover">{controls}</div>}</section>;
+
+  return <section className={`card-review-panel status-${review.status}`} aria-label="Проверка карточки">
+    {controls}
   </section>;
 }
