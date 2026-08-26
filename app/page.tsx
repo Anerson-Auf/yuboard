@@ -1745,7 +1745,7 @@ export default function Home() {
   function renderBoardLabelsControl() {
     return <div className="board-labels-control">
       <button className={`board-icon-button ${isBoardLabelsOpen ? 'active-filter' : ''}`} type="button" title="Метки проекта" aria-label="Метки проекта" aria-expanded={isBoardLabelsOpen} onClick={() => { setBoardLabelsOpen((current) => !current); setEditingBoardLabel(null); }}><BoardToolbarIcon type="labels" /></button>
-      {isBoardLabelsOpen && <div className="board-labels-popover">
+      {isBoardLabelsOpen && <div className="board-labels-popover" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
         <div className="popover-heading"><b>Метки проекта</b><button type="button" onClick={() => { setBoardLabelsOpen(false); setEditingBoardLabel(null); }} aria-label="Закрыть">×</button></div>
         <p className="board-labels-copy">Метки доступны только внутри этого проекта.</p>
         <div className="board-labels-list">{boardLabels.length ? boardLabels.map((label) => <article key={label.id}>
@@ -1755,7 +1755,7 @@ export default function Home() {
             <label className="label-editor-shape">Фигура<ShapePicker value={boardLabelShapeDraft} onChange={setBoardLabelShapeDraft} label="Фигура метки" /></label>
             <label>Цвет фигуры<input type="color" value={boardLabelIconColorDraft} onChange={(event) => setBoardLabelIconColorDraft(event.target.value)} aria-label="Цвет фигуры метки" /></label>
             <div className="label-editor-actions"><button type="button" className="shake-colors-button" onClick={() => { setBoardLabelColorDraft(randomChipColor()); setBoardLabelIconColorDraft(randomChipColor()); setBoardLabelShapeDraft(roleShapes[Math.floor(Math.random() * roleShapes.length)]); triggerColorShake(); }}>Взболтнуть</button><button type="submit" disabled={!boardLabelNameDraft.trim() || isSavingBoardLabel}>Сохранить</button><button type="button" className="text-action" onClick={() => setEditingBoardLabel(null)}>Отмена</button></div>
-          </form> : <><span className="board-label-chip" style={{ backgroundColor: label.color }}><ShapeIcon shape={label.icon_shape} color={label.icon_color ?? '#fff'} /><span>{label.name}</span></span>{!isPublicViewer && <span><button type="button" className="text-action" onClick={() => beginBoardLabelEdit(label)}>Изменить</button><button type="button" className="text-action danger-text" onClick={() => removeBoardLabel(label)}>Удалить</button></span>}</>}</article>) : <p className="empty-comments">На этой доске пока нет меток.</p>}</div>
+          </form> : <><span className="board-label-chip" style={{ backgroundColor: label.color }}><ShapeIcon shape={label.icon_shape} color={label.icon_color ?? '#fff'} /><span>{label.name}</span></span>{!isPublicViewer && <span><button type="button" className="text-action" onClick={(event) => { event.stopPropagation(); beginBoardLabelEdit(label); }}>Изменить</button><button type="button" className="text-action danger-text" onClick={() => removeBoardLabel(label)}>Удалить</button></span>}</>}</article>) : <p className="empty-comments">На этой доске пока нет меток.</p>}</div>
         {!isPublicViewer && <form className={`label-editor label-create-editor ${isColorShakeActive ? 'is-shaking' : ''}`} onSubmit={createLabel}>
           <label>Название<ChipNamePreview value={newLabelName} onChange={setNewLabelName} color={newLabelColor} iconColor={newLabelIconColor} shape={newLabelShape} placeholder="Новая метка" ariaLabel="Название новой метки" maxLength={60} /></label>
           <label>Цвет<input type="color" value={newLabelColor} onChange={(event) => setNewLabelColor(event.target.value)} aria-label="Цвет метки" /></label>
@@ -2936,6 +2936,7 @@ export default function Home() {
       .finally(() => setSavingLabel(false));
   }
   function beginBoardLabelEdit(label: Label) {
+    setBoardLabelsOpen(true);
     setEditingBoardLabel(label);
     setBoardLabelNameDraft(label.name);
     setBoardLabelColorDraft(label.color);
