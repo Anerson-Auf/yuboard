@@ -622,3 +622,6 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .column-head .column-menu { display: inline-flex; align-items: center; justify-content: center; width: 27px; height: 27px; border-radius: 7px; color: var(--muted); }.column-head .column-menu:hover, .column-head .column-menu:focus-visible { background: var(--surface-soft); color: var(--text); }
 @media (max-width: 520px) { .release-history-widget { right: 10px; bottom: max(10px, env(safe-area-inset-bottom)); }.release-history-panel { width: min(380px, calc(100vw - 20px)); max-height: min(560px, calc(100vh - 78px)); }.release-history-trigger { min-width: 103px; padding: 7px 9px; } }
 @media (prefers-reduced-motion: reduce) { .release-history-trigger, .release-history-list summary::after { transition: none; } }
+.card-quick-actions button[title="Режим фокуса"] {
+  display: none;
+}

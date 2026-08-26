@@ -4,174 +4,44 @@ import { PointerEvent as ReactPointerEvent, WheelEvent, useEffect, useMemo, useR
 import './dependency-graph.css';
 
 type RelationType = 'blocks' | 'depends_on' | 'duplicate' | 'related';
-
 export type DependencyGraphNode = { id: string; title: string; listTitle: string; completed: boolean; priority?: number };
-type DependencyRelation = { id: string; source_card_id: string; target_card_id: string; relation_type: RelationType; note: string; created_at: string };
-type NodePosition = { x: number; y: number };
+type Relation = { id: string; source_card_id: string; target_card_id: string; relation_type: RelationType; note: string };
+type Point = { x: number; y: number };
 
-const relationMeta: Record<RelationType, { label: string; hint: string; className: string; directed: boolean }> = {
-  blocks: { label: 'Блокирует', hint: 'Первая задача должна быть завершена до второй.', className: 'blocks', directed: true },
-  depends_on: { label: 'Зависит от', hint: 'Первая задача ждёт завершения второй.', className: 'depends-on', directed: true },
-  related: { label: 'Связана с', hint: 'Контекстная связь без блокировки выполнения.', className: 'related', directed: false },
-  duplicate: { label: 'Дубликат', hint: 'Обе карточки описывают одну и ту же работу.', className: 'duplicate', directed: false },
+const meta: Record<RelationType, { label: string; className: string; directed: boolean }> = {
+  blocks: { label: 'Блокирует', className: 'blocks', directed: true },
+  depends_on: { label: 'Зависит от', className: 'depends-on', directed: true },
+  related: { label: 'Связана с', className: 'related', directed: false },
+  duplicate: { label: 'Дубликат', className: 'duplicate', directed: false },
 };
-const NODE_WIDTH = 238;
-const NODE_HEIGHT = 96;
-const PADDING = 48;
-const COLUMN_GAP = 150;
-const ROW_GAP = 28;
+const TYPE_LIST = Object.keys(meta) as RelationType[];
+const NODE_WIDTH = 238, NODE_HEIGHT = 96, GAP_X = 150, GAP_Y = 28, PAD = 48;
 const INITIAL_PAN = { x: 28, y: 28 };
-
-function csrfHeaders() {
-  const token = document.cookie.split('; ').find((item) => item.startsWith('flowboard_csrf='))?.slice('flowboard_csrf='.length);
-  return token ? { 'Content-Type': 'application/json', 'x-flowboard-csrf': decodeURIComponent(token) } : { 'Content-Type': 'application/json' };
-}
-function relationDirection(relation: DependencyRelation) { return relation.relation_type === 'depends_on' ? { from: relation.target_card_id, to: relation.source_card_id } : { from: relation.source_card_id, to: relation.target_card_id }; }
-function priorityLabel(priority?: number) { return priority ? `Приоритет ${priority} из 5` : 'Без приоритета'; }
+const headers = () => { const token = document.cookie.split('; ').find((item) => item.startsWith('flowboard_csrf='))?.slice(15); return token ? { 'Content-Type': 'application/json', 'x-flowboard-csrf': decodeURIComponent(token) } : { 'Content-Type': 'application/json' }; };
+const direction = (relation: Relation) => relation.relation_type === 'depends_on' ? { from: relation.target_card_id, to: relation.source_card_id } : { from: relation.source_card_id, to: relation.target_card_id };
+const path = (from: Point, to: Point) => { const control = Math.max(46, Math.abs(to.x - from.x) * .45); return `M ${from.x} ${from.y} C ${from.x + control} ${from.y}, ${to.x - control} ${to.y}, ${to.x} ${to.y}`; };
 
 export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }: { boardId: string; nodes: DependencyGraphNode[]; canEdit: boolean; onOpenCard: (cardId: string) => void }) {
-  const [relations, setRelations] = useState<DependencyRelation[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [showUnrelated, setShowUnrelated] = useState(false);
-  const [optionsOpen, setOptionsOpen] = useState(false);
-  const [sourceId, setSourceId] = useState('');
-  const [targetId, setTargetId] = useState('');
-  const [relationType, setRelationType] = useState<RelationType>('blocks');
-  const [noteDraft, setNoteDraft] = useState('');
-  const [selectedRelationId, setSelectedRelationId] = useState<string | null>(null);
-  const [selectedNoteDraft, setSelectedNoteDraft] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState(INITIAL_PAN);
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const graphPanRef = useRef<{ pointerId: number; x: number; y: number; origin: { x: number; y: number } } | null>(null);
+  const [relations, setRelations] = useState<Relation[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [showUnrelated, setShowUnrelated] = useState(true);
+  const [zoom, setZoom] = useState(1); const [pan, setPan] = useState(INITIAL_PAN); const [selectedId, setSelectedId] = useState<string | null>(null); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false);
+  const [canvasMenu, setCanvasMenu] = useState<Point | null>(null); const [sourceMenu, setSourceMenu] = useState<Point | null>(null); const [draft, setDraft] = useState<{ sourceId: string; cursor: Point } | null>(null); const [typeMenu, setTypeMenu] = useState<{ sourceId: string; targetId: string; x: number; y: number } | null>(null); const [relationMenu, setRelationMenu] = useState<{ id: string; x: number; y: number } | null>(null); const [draftNote, setDraftNote] = useState('');
+  const viewportRef = useRef<HTMLDivElement>(null); const dragRef = useRef<{ id: number; x: number; y: number; pan: Point } | null>(null);
+  const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const load = async () => { setLoading(true); setError(''); try { const response = await fetch(`/v1/boards/${boardId}/relations`); if (!response.ok) throw new Error(); const data = await response.json() as Relation[]; setRelations(data.filter((item) => byId.has(item.source_card_id) && byId.has(item.target_card_id))); } catch { setError('Не удалось загрузить связи. Обновите представление.'); } finally { setLoading(false); } };
+  useEffect(() => { void load(); }, [boardId, nodes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const connected = useMemo(() => new Set(relations.flatMap((relation) => [relation.source_card_id, relation.target_card_id])), [relations]);
+  const graphNodes = useMemo(() => showUnrelated ? nodes : nodes.filter((node) => connected.has(node.id)), [nodes, showUnrelated, connected]);
+  const layout = useMemo(() => { const ranks = new Map(graphNodes.map((node) => [node.id, 0])); const out = new Map(graphNodes.map((node) => [node.id, [] as string[]])); const indegree = new Map(graphNodes.map((node) => [node.id, 0])); relations.filter((relation) => meta[relation.relation_type].directed).forEach((relation) => { const { from, to } = direction(relation); if (out.has(from) && indegree.has(to)) { out.get(from)?.push(to); indegree.set(to, (indegree.get(to) ?? 0) + 1); } }); const queue = [...indegree.entries()].filter(([, value]) => value === 0).map(([id]) => id).sort(); while (queue.length) { const id = queue.shift()!; (out.get(id) ?? []).forEach((to) => { ranks.set(to, Math.max(ranks.get(to) ?? 0, (ranks.get(id) ?? 0) + 1)); const next = (indegree.get(to) ?? 1) - 1; indegree.set(to, next); if (!next) queue.push(to); }); queue.sort(); } const layers = new Map<number, DependencyGraphNode[]>(); graphNodes.forEach((node) => { const rank = ranks.get(node.id) ?? 0; layers.set(rank, [...(layers.get(rank) ?? []), node]); }); const positions = new Map<string, Point>(); [...layers.entries()].sort(([a], [b]) => a - b).forEach(([, layer], column) => layer.sort((a, b) => a.title.localeCompare(b.title, 'ru')).forEach((node, row) => positions.set(node.id, { x: PAD + column * (NODE_WIDTH + GAP_X), y: PAD + row * (NODE_HEIGHT + GAP_Y) }))); const layerCount = Math.max(1, layers.size), maxRows = Math.max(1, ...[...layers.values()].map((layer) => layer.length)); return { positions, width: Math.max(720, PAD * 2 + layerCount * NODE_WIDTH + (layerCount - 1) * GAP_X), height: Math.max(420, PAD * 2 + maxRows * NODE_HEIGHT + (maxRows - 1) * GAP_Y) }; }, [graphNodes, relations]);
+  const visibleRelations = relations.filter((relation) => layout.positions.has(relation.source_card_id) && layout.positions.has(relation.target_card_id)); const selected = relations.find((relation) => relation.id === selectedId) ?? null;
+  const canvasPoint = (clientX: number, clientY: number) => { const rect = viewportRef.current?.getBoundingClientRect(); return rect ? { x: (clientX - rect.left - pan.x) / zoom, y: (clientY - rect.top - pan.y) / zoom } : { x: 0, y: 0 }; };
+  const chooseRelation = (id: string) => { const item = relations.find((relation) => relation.id === id); setSelectedId(id); setNote(item?.note ?? ''); };
+  const reset = () => { setZoom(1); setPan(INITIAL_PAN); };
+  const zoomAt = (x: number, y: number, next: number) => { const rect = viewportRef.current?.getBoundingClientRect(); if (!rect) return; const localX = x - rect.left, localY = y - rect.top; setPan((current) => ({ x: localX - ((localX - current.x) / zoom) * next, y: localY - ((localY - current.y) / zoom) * next })); setZoom(next); };
+  const create = async (sourceId: string, targetId: string, relationType: RelationType) => { setSaving(true); setError(''); try { const response = await fetch(`/v1/cards/${sourceId}/relations`, { method: 'POST', headers: headers(), body: JSON.stringify({ target_card_id: targetId, relation_type: relationType, note: draftNote }) }); if (!response.ok) { const body = await response.json().catch(() => null) as { message?: string } | null; throw new Error(body?.message || 'Не удалось создать связь.'); } setDraft(null); setTypeMenu(null); setDraftNote(''); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Не удалось создать связь.'); } finally { setSaving(false); } };
+  const remove = async () => { if (!selected) return; setSaving(true); try { const response = await fetch(`/v1/cards/${selected.source_card_id}/relations/${selected.id}`, { method: 'DELETE', headers: headers() }); if (!response.ok) throw new Error(); setSelectedId(null); setRelationMenu(null); await load(); } catch { setError('Не удалось удалить связь.'); } finally { setSaving(false); } };
+  const saveNote = async () => { if (!selected) return; setSaving(true); try { const response = await fetch(`/v1/cards/${selected.source_card_id}/relations/${selected.id}`, { method: 'PATCH', headers: headers(), body: JSON.stringify({ note }) }); if (!response.ok) throw new Error(); const updated = await response.json() as Relation; setRelations((current) => current.map((item) => item.id === updated.id ? { ...item, note: updated.note } : item)); } catch { setError('Не удалось сохранить пояснение.'); } finally { setSaving(false); } };
+  const changeType = async (type: RelationType) => { if (!selected) return; setSaving(true); try { const old = await fetch(`/v1/cards/${selected.source_card_id}/relations/${selected.id}`, { method: 'DELETE', headers: headers() }); if (!old.ok) throw new Error(); const created = await fetch(`/v1/cards/${selected.source_card_id}/relations`, { method: 'POST', headers: headers(), body: JSON.stringify({ target_card_id: selected.target_card_id, relation_type: type, note }) }); if (!created.ok) throw new Error(); setSelectedId(null); setRelationMenu(null); await load(); } catch { setError('Не удалось изменить связь.'); } finally { setSaving(false); } };
+  const begin = (sourceId: string) => { const position = layout.positions.get(sourceId); setCanvasMenu(null); setSourceMenu(null); setSelectedId(null); setDraft({ sourceId, cursor: position ? { x: position.x + NODE_WIDTH, y: position.y + NODE_HEIGHT / 2 } : { x: 0, y: 0 } }); };
 
-  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-  const loadRelations = async () => {
-    setIsLoading(true); setError('');
-    try {
-      const response = await fetch(`/v1/boards/${boardId}/relations`);
-      if (!response.ok) throw new Error('load failed');
-      const loaded = await response.json() as DependencyRelation[];
-      setRelations(loaded.filter((relation) => nodeById.has(relation.source_card_id) && nodeById.has(relation.target_card_id)));
-    } catch { setError('Не удалось загрузить связи. Обновите представление.'); }
-    finally { setIsLoading(false); }
-  };
-  useEffect(() => { void loadRelations(); }, [boardId, nodes]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const connectedIds = useMemo(() => new Set(relations.flatMap((relation) => [relation.source_card_id, relation.target_card_id])), [relations]);
-  const graphNodes = useMemo(() => showUnrelated ? nodes : nodes.filter((node) => connectedIds.has(node.id)), [connectedIds, nodes, showUnrelated]);
-  const graphNodeIds = useMemo(() => new Set(graphNodes.map((node) => node.id)), [graphNodes]);
-  const graphRelations = useMemo(() => relations.filter((relation) => graphNodeIds.has(relation.source_card_id) && graphNodeIds.has(relation.target_card_id)), [graphNodeIds, relations]);
-  const layout = useMemo(() => {
-    const rank = new Map(graphNodes.map((node) => [node.id, 0]));
-    const indegree = new Map(graphNodes.map((node) => [node.id, 0]));
-    const outgoing = new Map(graphNodes.map((node) => [node.id, [] as string[]]));
-    graphRelations.filter((relation) => relationMeta[relation.relation_type].directed).forEach((relation) => {
-      const { from, to } = relationDirection(relation);
-      if (!outgoing.has(from) || !indegree.has(to)) return;
-      outgoing.get(from)?.push(to); indegree.set(to, (indegree.get(to) ?? 0) + 1);
-    });
-    const queue = [...indegree.entries()].filter(([, count]) => count === 0).map(([id]) => id).sort();
-    while (queue.length) {
-      const id = queue.shift()!;
-      for (const target of outgoing.get(id) ?? []) {
-        rank.set(target, Math.max(rank.get(target) ?? 0, (rank.get(id) ?? 0) + 1));
-        const next = (indegree.get(target) ?? 1) - 1;
-        indegree.set(target, next);
-        if (next === 0) queue.push(target);
-      }
-      queue.sort();
-    }
-    const columns = new Map<number, DependencyGraphNode[]>();
-    graphNodes.forEach((node) => { const value = rank.get(node.id) ?? 0; columns.set(value, [...(columns.get(value) ?? []), node]); });
-    const layers = [...columns.entries()].sort(([left], [right]) => left - right).map(([, value]) => value.sort((left, right) => left.title.localeCompare(right.title, 'ru')));
-    const positions = new Map<string, NodePosition>();
-    layers.forEach((layer, columnIndex) => layer.forEach((node, rowIndex) => positions.set(node.id, { x: PADDING + columnIndex * (NODE_WIDTH + COLUMN_GAP), y: PADDING + rowIndex * (NODE_HEIGHT + ROW_GAP) })));
-    const layerHeight = Math.max(1, ...layers.map((layer) => layer.length));
-    return { positions, width: Math.max(680, PADDING * 2 + Math.max(1, layers.length) * NODE_WIDTH + Math.max(0, layers.length - 1) * COLUMN_GAP), height: Math.max(360, PADDING * 2 + layerHeight * NODE_HEIGHT + Math.max(0, layerHeight - 1) * ROW_GAP) };
-  }, [graphNodes, graphRelations]);
-  const selectedRelation = relations.find((relation) => relation.id === selectedRelationId) ?? null;
-
-  function resetView() { setZoom(1); setPan(INITIAL_PAN); }
-  function zoomAt(clientX: number, clientY: number, nextZoom: number) {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const rect = viewport.getBoundingClientRect();
-    const x = clientX - rect.left; const y = clientY - rect.top;
-    setPan((current) => ({ x: x - ((x - current.x) / zoom) * nextZoom, y: y - ((y - current.y) / zoom) * nextZoom }));
-    setZoom(nextZoom);
-  }
-  function onGraphWheel(event: WheelEvent<HTMLDivElement>) {
-    event.preventDefault(); event.stopPropagation();
-    const nextZoom = Math.min(1.8, Math.max(.38, zoom * (event.deltaY < 0 ? 1.12 : .89)));
-    if (nextZoom !== zoom) zoomAt(event.clientX, event.clientY, nextZoom);
-  }
-  function startGraphPan(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 || (event.target instanceof Element && event.target.closest('button, input, select, textarea, label'))) return;
-    event.stopPropagation();
-    graphPanRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, origin: pan };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-  function moveGraphPan(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = graphPanRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault(); event.stopPropagation();
-    setPan({ x: drag.origin.x + event.clientX - drag.x, y: drag.origin.y + event.clientY - drag.y });
-  }
-  function endGraphPan(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = graphPanRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    graphPanRef.current = null; event.stopPropagation();
-  }
-  async function createRelation() {
-    if (!sourceId || !targetId || sourceId === targetId) return;
-    setIsSaving(true); setError('');
-    try {
-      const response = await fetch(`/v1/cards/${sourceId}/relations`, { method: 'POST', headers: csrfHeaders(), body: JSON.stringify({ target_card_id: targetId, relation_type: relationType, note: noteDraft }) });
-      if (!response.ok) { const payload = await response.json().catch(() => null) as { message?: string } | null; throw new Error(payload?.message ?? 'Не удалось создать связь.'); }
-      setTargetId(''); setNoteDraft(''); await loadRelations();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Не удалось создать связь.'); }
-    finally { setIsSaving(false); }
-  }
-  async function saveSelectedRelationNote() {
-    if (!selectedRelation) return;
-    setIsSaving(true); setError('');
-    try {
-      const response = await fetch(`/v1/cards/${selectedRelation.source_card_id}/relations/${selectedRelation.id}`, { method: 'PATCH', headers: csrfHeaders(), body: JSON.stringify({ note: selectedNoteDraft }) });
-      if (!response.ok) throw new Error('Не удалось сохранить пояснение.');
-      const updated = await response.json() as DependencyRelation;
-      setRelations((current) => current.map((relation) => relation.id === updated.id ? { ...relation, note: updated.note } : relation));
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Не удалось сохранить пояснение.'); }
-    finally { setIsSaving(false); }
-  }
-  async function removeSelectedRelation() {
-    if (!selectedRelation) return;
-    setIsSaving(true); setError('');
-    try {
-      const response = await fetch(`/v1/cards/${selectedRelation.source_card_id}/relations/${selectedRelation.id}`, { method: 'DELETE', headers: csrfHeaders() });
-      if (!response.ok) throw new Error('Не удалось удалить связь.');
-      setSelectedRelationId(null); await loadRelations();
-    } catch { setError('Не удалось удалить связь.'); }
-    finally { setIsSaving(false); }
-  }
-  function selectRelation(id: string) { const relation = relations.find((item) => item.id === id); setSelectedRelationId(id); setSelectedNoteDraft(relation?.note ?? ''); }
-  function selectNode(id: string) { setSourceId(id); if (targetId === id) setTargetId(''); setSelectedRelationId(null); }
-
-  return <section className="dependency-graph" aria-label="Граф зависимостей карточек">
-    <header className="dependency-graph-header"><div><p className="eyebrow">СВЯЗИ КАРТОЧЕК</p><h2>Зависимости</h2><p>Стрелка показывает порядок работы: слева — условие, справа — задача, которая его ждёт.</p></div><div className="dependency-header-actions"><label className="dependency-unrelated-toggle"><input type="checkbox" checked={showUnrelated} onChange={(event) => setShowUnrelated(event.target.checked)} />Показать без связей</label><button type="button" className="dependency-reset" onClick={resetView}>↺ Исходный вид</button></div></header>
-    <div className="dependency-legend" aria-label="Типы связей">{(Object.keys(relationMeta) as RelationType[]).map((type) => <span key={type} className={`dependency-legend-item ${relationMeta[type].className}`}><i />{relationMeta[type].label}</span>)}</div>
-    {canEdit && <section className="dependency-options"><button className="dependency-options-trigger" type="button" onClick={() => setOptionsOpen((current) => !current)} aria-expanded={optionsOpen}>Дополнительные опции <span>{optionsOpen ? '⌃' : '⌄'}</span></button>{optionsOpen && <form className="dependency-builder" onSubmit={(event) => { event.preventDefault(); void createRelation(); }}><label>Откуда<select value={sourceId} onChange={(event) => { setSourceId(event.target.value); if (event.target.value === targetId) setTargetId(''); }}><option value="">Выберите карточку</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.title} · {node.listTitle}</option>)}</select></label><label>Связь<select value={relationType} onChange={(event) => setRelationType(event.target.value as RelationType)}>{(Object.keys(relationMeta) as RelationType[]).map((type) => <option key={type} value={type}>{relationMeta[type].label}</option>)}</select></label><label>С чем<select value={targetId} onChange={(event) => setTargetId(event.target.value)} disabled={!sourceId}><option value="">Выберите карточку</option>{nodes.filter((node) => node.id !== sourceId).map((node) => <option key={node.id} value={node.id}>{node.title} · {node.listTitle}</option>)}</select></label><label className="dependency-note-field">Пояснение<textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} maxLength={500} placeholder="Например, ждём API-метод" /></label><button className="create-button" type="submit" disabled={isSaving || !sourceId || !targetId || sourceId === targetId}>Связать</button><small>{relationMeta[relationType].hint} Циклические зависимости блокируются.</small></form>}</section>}
-    {selectedRelation && <aside className="dependency-selected-relation"><div><span><b>{nodeById.get(selectedRelation.source_card_id)?.title ?? 'Карточка'}</b> · {relationMeta[selectedRelation.relation_type].label.toLowerCase()} · <b>{nodeById.get(selectedRelation.target_card_id)?.title ?? 'Карточка'}</b></span>{canEdit ? <label>Пояснение<textarea value={selectedNoteDraft} onChange={(event) => setSelectedNoteDraft(event.target.value)} maxLength={500} placeholder="Добавьте контекст этой связи" /></label> : selectedRelation.note && <p>{selectedRelation.note}</p>}</div>{canEdit && <div><button type="button" onClick={() => void saveSelectedRelationNote()} disabled={isSaving || selectedNoteDraft === selectedRelation.note}>Сохранить</button><button type="button" onClick={() => void removeSelectedRelation()} disabled={isSaving}>Удалить связь</button></div>}</aside>}
-    {error && <p className="dependency-error" role="alert">{error}</p>}
-    <div ref={viewportRef} className="dependency-graph-scroll" onWheelCapture={onGraphWheel} onPointerDown={startGraphPan} onPointerMove={moveGraphPan} onPointerUp={endGraphPan} onPointerCancel={endGraphPan}>
-      <div className="dependency-zoom-readout">{Math.round(zoom * 100)}%</div>
-      {isLoading ? <p className="dependency-empty">Загружаем связи…</p> : !graphNodes.length ? <p className="dependency-empty">Связей пока нет. Раскройте «Дополнительные опции», чтобы собрать первое дерево.</p> : <div className="dependency-canvas" style={{ width: layout.width, height: layout.height, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
-        <svg className="dependency-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true"><defs><marker id="dependency-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" /></marker></defs>{graphRelations.map((relation) => { const direction = relationDirection(relation); const from = layout.positions.get(direction.from); const to = layout.positions.get(direction.to); if (!from || !to) return null; const fromX = from.x + NODE_WIDTH; const fromY = from.y + NODE_HEIGHT / 2; const toX = to.x; const toY = to.y + NODE_HEIGHT / 2; const curve = Math.max(46, Math.abs(toX - fromX) * .45); const meta = relationMeta[relation.relation_type]; return <g key={relation.id} className={`dependency-line ${meta.className} ${selectedRelationId === relation.id ? 'selected' : ''}`} onClick={() => selectRelation(relation.id)}><path className="dependency-line-hitbox" d={`M ${fromX} ${fromY} C ${fromX + curve} ${fromY}, ${toX - curve} ${toY}, ${toX} ${toY}`} /><path className="dependency-line-stroke" d={`M ${fromX} ${fromY} C ${fromX + curve} ${fromY}, ${toX - curve} ${toY}, ${toX} ${toY}`} markerEnd={meta.directed ? 'url(#dependency-arrow)' : undefined} /><text x={(fromX + toX) / 2} y={(fromY + toY) / 2 - 10} textAnchor="middle">{meta.label}</text></g>; })}</svg>
-        {graphNodes.map((node) => { const position = layout.positions.get(node.id); if (!position) return null; return <button className={`dependency-node ${sourceId === node.id ? 'selected' : ''} ${node.completed ? 'completed' : ''}`} key={node.id} type="button" style={{ left: position.x, top: position.y }} onClick={() => selectNode(node.id)} onDoubleClick={() => onOpenCard(node.id)} title="Нажмите, чтобы выбрать. Двойной клик открывает карточку."><span className="dependency-node-list">{node.listTitle}</span><b>{node.title}</b><footer><span title={priorityLabel(node.priority)}>{node.priority ? '▮'.repeat(node.priority) : '—'}</span>{node.completed && <em>Выполнено</em>}</footer></button>; })}
-      </div>}
-    </div>
-  </section>;
+  return <section className="dependency-graph" aria-label="Граф зависимостей карточек"><header className="dependency-graph-header"><div><p className="eyebrow">СВЯЗИ КАРТОЧЕК</p><h2>Зависимости</h2><p>ПКМ по пустому месту создаёт связь. Потяните круг справа от карточки на другую карточку и выберите тип.</p></div><div className="dependency-header-actions"><label className="dependency-unrelated-toggle"><input type="checkbox" checked={showUnrelated} onChange={(event) => setShowUnrelated(event.target.checked)} />Показать без связей</label><button type="button" className="dependency-reset" onClick={reset}>↺ Исходный вид</button></div></header><div className="dependency-legend">{TYPE_LIST.map((type) => <span key={type} className={`dependency-legend-item ${meta[type].className}`}><i />{meta[type].label}</span>)}</div>{selected && <aside className="dependency-selected-relation"><div><span><b>{byId.get(selected.source_card_id)?.title}</b> · {meta[selected.relation_type].label.toLowerCase()} · <b>{byId.get(selected.target_card_id)?.title}</b></span>{canEdit ? <label>Пояснение<textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} placeholder="Например, ждём API-метод" /></label> : selected.note && <p>{selected.note}</p>}</div>{canEdit && <div><button type="button" disabled={saving || note === selected.note} onClick={() => void saveNote()}>Сохранить</button><button type="button" disabled={saving} onClick={() => void remove()}>Удалить связь</button></div>}</aside>}{error && <p className="dependency-error">{error}</p>}<div ref={viewportRef} className={`dependency-graph-scroll ${draft ? 'is-linking' : ''}`} onWheelCapture={(event: WheelEvent<HTMLDivElement>) => { event.preventDefault(); event.stopPropagation(); const next = Math.min(1.8, Math.max(.38, zoom * (event.deltaY < 0 ? 1.12 : .89))); if (next !== zoom) zoomAt(event.clientX, event.clientY, next); }} onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => { if (event.button !== 0 || draft || (event.target instanceof Element && event.target.closest('button, textarea, .dependency-menu'))) return; dragRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY, pan }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (draft) { setDraft((current) => current ? { ...current, cursor: canvasPoint(event.clientX, event.clientY) } : null); return; } const drag = dragRef.current; if (drag?.id === event.pointerId) setPan({ x: drag.pan.x + event.clientX - drag.x, y: drag.pan.y + event.clientY - drag.y }); }} onPointerUp={(event) => { if (dragRef.current?.id === event.pointerId) { dragRef.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } }} onContextMenu={(event) => { if (!canEdit || (event.target instanceof Element && event.target.closest('.dependency-node, .dependency-line, .dependency-menu'))) return; event.preventDefault(); setCanvasMenu({ x: event.clientX, y: event.clientY }); setRelationMenu(null); }}><div className="dependency-zoom-readout">{Math.round(zoom * 100)}%</div>{canvasMenu && <div className="dependency-menu dependency-canvas-menu" style={{ left: canvasMenu.x, top: canvasMenu.y }}><button type="button" onClick={() => { setSourceMenu(canvasMenu); setCanvasMenu(null); }}>↗ Создать зависимость</button></div>}{sourceMenu && <div className="dependency-menu dependency-source-picker" style={{ left: sourceMenu.x, top: sourceMenu.y }}><b>От какой карточки?</b>{nodes.map((node) => <button key={node.id} type="button" onClick={() => begin(node.id)}><small>{node.listTitle}</small>{node.title}</button>)}</div>}{typeMenu && <div className="dependency-menu dependency-type-picker" style={{ left: typeMenu.x, top: typeMenu.y }}><b>Как связать?</b>{TYPE_LIST.map((type) => <button key={type} type="button" disabled={saving} onClick={() => void create(typeMenu.sourceId, typeMenu.targetId, type)}><i className={meta[type].className} />{meta[type].label}</button>)}<textarea value={draftNote} onChange={(event) => setDraftNote(event.target.value)} maxLength={500} placeholder="Короткое пояснение (необязательно)" /><button type="button" className="dependency-cancel" onClick={() => { setTypeMenu(null); setDraft(null); }}>Отмена</button></div>}{relationMenu && selected && <div className="dependency-menu dependency-relation-menu" style={{ left: relationMenu.x, top: relationMenu.y }}><b>Изменить связь</b>{TYPE_LIST.map((type) => <button key={type} type="button" disabled={saving || type === selected.relation_type} onClick={() => void changeType(type)}><i className={meta[type].className} />{meta[type].label}</button>)}<button type="button" className="dependency-menu-danger" onClick={() => void remove()}>Разорвать связь</button></div>}{loading ? <p className="dependency-empty">Загружаем связи…</p> : <div className="dependency-canvas" style={{ width: layout.width, height: layout.height, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}><svg className="dependency-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`}><defs><marker id="dependency-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" /></marker></defs>{visibleRelations.map((relation) => { const order = direction(relation), from = layout.positions.get(order.from), to = layout.positions.get(order.to); if (!from || !to) return null; const start = { x: from.x + NODE_WIDTH, y: from.y + NODE_HEIGHT / 2 }, end = { x: to.x, y: to.y + NODE_HEIGHT / 2 }, type = meta[relation.relation_type]; return <g key={relation.id} className={`dependency-line ${type.className} ${selectedId === relation.id ? 'selected' : ''}`} onClick={() => chooseRelation(relation.id)} onContextMenu={(event) => { if (!canEdit) return; event.preventDefault(); event.stopPropagation(); chooseRelation(relation.id); setRelationMenu({ id: relation.id, x: event.clientX, y: event.clientY }); }}><path className="dependency-line-hitbox" d={path(start, end)} /><path className="dependency-line-stroke" d={path(start, end)} markerEnd={type.directed ? 'url(#dependency-arrow)' : undefined} /><text x={(start.x + end.x) / 2} y={(start.y + end.y) / 2 - 10} textAnchor="middle">{type.label}</text></g>; })}{draft && (() => { const pos = layout.positions.get(draft.sourceId); return pos ? <path className="dependency-draft-line" d={path({ x: pos.x + NODE_WIDTH, y: pos.y + NODE_HEIGHT / 2 }, draft.cursor)} markerEnd="url(#dependency-arrow)" /> : null; })()}</svg>{graphNodes.map((node) => { const position = layout.positions.get(node.id); if (!position) return null; return <button key={node.id} className={`dependency-node ${draft?.sourceId === node.id ? 'selected' : ''} ${node.completed ? 'completed' : ''}`} type="button" style={{ left: position.x, top: position.y }} onClick={(event) => { if (draft && draft.sourceId !== node.id) setTypeMenu({ sourceId: draft.sourceId, targetId: node.id, x: event.clientX, y: event.clientY }); else if (!draft) onOpenCard(node.id); }}><span className="dependency-node-list">{node.listTitle}</span><b>{node.title}</b><footer><span title={node.priority ? `Приоритет ${node.priority} из 5` : 'Без приоритета'}>{node.priority ? '▮'.repeat(node.priority) : '—'}</span>{node.completed && <em>Выполнено</em>}</footer>{canEdit && <span className="dependency-output" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); begin(node.id); viewportRef.current?.setPointerCapture(event.pointerId); }} />}</button>; })}</div>}</div></section>;
 }

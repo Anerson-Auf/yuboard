@@ -1,43 +1,20 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { DragEvent, FormEvent, useEffect, useRef, useState } from 'react';
 import './parking-shelf.css';
 
 export type ParkingCard = { id: string; title: string; description: string; priority: number; createdAt: string };
 type ColumnChoice = { id: string; title: string };
 
-export default function ParkingShelf({ storageKey, columns, cards, onChange, onMoveToBoard }: {
-  storageKey: string;
-  columns: ColumnChoice[];
-  cards: ParkingCard[];
-  onChange: (cards: ParkingCard[]) => void;
-  onMoveToBoard: (card: ParkingCard, listId: string) => Promise<boolean>;
-}) {
-  const [isOpen, setOpen] = useState(false);
-  const [draftTitle, setDraftTitle] = useState('');
-  const [draftDescription, setDraftDescription] = useState('');
-  const [targetListId, setTargetListId] = useState('');
-  const [movingId, setMovingId] = useState<string | null>(null);
-
+export default function ParkingShelf({ storageKey, columns, cards, onChange, onMoveToBoard, onParkServerCard, draggedServerCard }: { storageKey: string; columns: ColumnChoice[]; cards: ParkingCard[]; onChange: (cards: ParkingCard[]) => void; onMoveToBoard: (card: ParkingCard, listId: string) => Promise<boolean>; onParkServerCard: () => void; draggedServerCard: boolean }) {
+  const [draftTitle, setDraftTitle] = useState(''); const [editing, setEditing] = useState<ParkingCard | null>(null); const [targetListId, setTargetListId] = useState(''); const [movingId, setMovingId] = useState<string | null>(null); const dragPoint = useRef({ x: 0, y: 0 });
   useEffect(() => { if (!targetListId && columns[0]) setTargetListId(columns[0].id); }, [columns, targetListId]);
   useEffect(() => { window.localStorage.setItem(storageKey, JSON.stringify(cards)); }, [cards, storageKey]);
-
-  function addLocalCard(event: FormEvent) {
-    event.preventDefault(); const title = draftTitle.trim();
-    if (!title) return;
-    onChange([{ id: `parking-${crypto.randomUUID()}`, title, description: draftDescription.trim(), priority: 0, createdAt: new Date().toISOString() }, ...cards]);
-    setDraftTitle(''); setDraftDescription('');
-  }
-  function updateCard(id: string, patch: Partial<ParkingCard>) { onChange(cards.map((card) => card.id === id ? { ...card, ...patch } : card)); }
-  async function moveCard(card: ParkingCard) {
-    if (!targetListId || movingId) return;
-    setMovingId(card.id);
-    try { if (await onMoveToBoard(card, targetListId)) onChange(cards.filter((item) => item.id !== card.id)); }
-    finally { setMovingId(null); }
-  }
-
-  return <aside className={`parking-shelf ${isOpen ? 'open' : ''}`} aria-label="Локальная парковка задач">
-    {isOpen && <section className="parking-panel"><header><div><span>ЛОКАЛЬНО НА ЭТОМ УСТРОЙСТВЕ</span><h2>Парковка</h2></div><button type="button" onClick={() => setOpen(false)} aria-label="Закрыть парковку">×</button></header><p>Эти карточки хранятся только в браузере. Они не попадают в API и вернутся после перезагрузки.</p><form onSubmit={addLocalCard}><input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} maxLength={200} placeholder="Новая локальная задача" /><textarea value={draftDescription} onChange={(event) => setDraftDescription(event.target.value)} maxLength={10_000} placeholder="Описание (необязательно)" /><button type="submit">＋ Добавить в парковку</button></form><label className="parking-target">Вернуть в колонку<select value={targetListId} onChange={(event) => setTargetListId(event.target.value)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select></label><div className="parking-list">{cards.length ? cards.map((card) => <article key={card.id}><input value={card.title} onChange={(event) => updateCard(card.id, { title: event.target.value.slice(0, 200) })} aria-label="Название локальной задачи" /><textarea value={card.description} onChange={(event) => updateCard(card.id, { description: event.target.value.slice(0, 10_000) })} placeholder="Описание" aria-label="Описание локальной задачи" /><div><label>Приоритет<select value={card.priority} onChange={(event) => updateCard(card.id, { priority: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value || 'Нет'}</option>)}</select></label><button type="button" onClick={() => void moveCard(card)} disabled={!columns.length || movingId === card.id}>{movingId === card.id ? 'Переносим…' : 'На доску →'}</button><button type="button" className="parking-delete" onClick={() => onChange(cards.filter((item) => item.id !== card.id))} aria-label={`Удалить ${card.title}`}>×</button></div></article>) : <span className="parking-empty">Парковка пуста.</span>}</div></section>}
-    <button type="button" className="parking-trigger" onClick={() => setOpen((current) => !current)} aria-expanded={isOpen} title="Локальная парковка">▱ <span>Парковка</span>{cards.length > 0 && <b>{cards.length}</b>}</button>
-  </aside>;
+  function updateCard(id: string, patch: Partial<ParkingCard>) { onChange(cards.map((card) => card.id === id ? { ...card, ...patch } : card)); setEditing((card) => card?.id === id ? { ...card, ...patch } : card); }
+  function addLocalCard(event: FormEvent) { event.preventDefault(); const title = draftTitle.trim(); if (!title) return; onChange([...cards, { id: `parking-${crypto.randomUUID()}`, title, description: '', priority: 0, createdAt: new Date().toISOString() }]); setDraftTitle(''); }
+  async function promote(card: ParkingCard, listId = targetListId) { if (!listId || movingId) return; setMovingId(card.id); try { if (await onMoveToBoard(card, listId)) { onChange(cards.filter((item) => item.id !== card.id)); setEditing(null); } } finally { setMovingId(null); } }
+  function startLocalDrag(event: DragEvent<HTMLElement>, card: ParkingCard) { event.dataTransfer.setData('application/x-flowboard-parking-card', card.id); event.dataTransfer.effectAllowed = 'move'; }
+  function trackLocalDrag(event: DragEvent<HTMLElement>) { if (event.clientX > 0 && event.clientY > 0) dragPoint.current = { x: event.clientX, y: event.clientY }; }
+  function finishLocalDrag(card: ParkingCard) { const listId = document.elementFromPoint(dragPoint.current.x, dragPoint.current.y)?.closest<HTMLElement>('[data-list-id]')?.dataset.listId; if (listId) void promote(card, listId); }
+  return <><section className={`column parking-column ${draggedServerCard ? 'drag-target' : ''}`} data-parking-drop aria-label="Локальная парковка" onDragOver={(event) => { if (draggedServerCard) event.preventDefault(); }} onDrop={(event) => { if (!draggedServerCard) return; event.preventDefault(); onParkServerCard(); }}><div className="column-head"><span className="column-drag-icon" aria-hidden="true">▱</span><div><h2>Парковка</h2><span>{cards.length}</span></div><small>локально</small></div><div className="card-list">{cards.map((card) => <article key={card.id} className="task-card parking-task-card" draggable onDragStart={(event) => startLocalDrag(event, card)} onDrag={trackLocalDrag} onDragEnd={() => finishLocalDrag(card)} onClick={() => setEditing(card)}><div className="card-main"><div className="card-title-row"><span className="card-complete" /><h3>{card.title}</h3></div>{card.description && <p className="parking-card-description">{card.description}</p>}</div>{card.priority ? <span className="card-priority-corner">{'▮'.repeat(card.priority)}</span> : null}</article>)}</div><form className="parking-add" onSubmit={addLocalCard}><input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} maxLength={200} placeholder="Добавить локальную задачу" /><button type="submit">＋</button></form></section>{editing && <div className="modal-backdrop parking-modal-backdrop" onMouseDown={() => setEditing(null)}><section className="task-modal parking-task-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setEditing(null)}>×</button><p className="eyebrow">ТОЛЬКО НА ЭТОМ УСТРОЙСТВЕ</p><input className="card-title-input" value={editing.title} onChange={(event) => updateCard(editing.id, { title: event.target.value.slice(0, 200) })} /><textarea className="card-description-input parking-description-input" value={editing.description} onChange={(event) => updateCard(editing.id, { description: event.target.value.slice(0, 10_000) })} placeholder="Описание" /><label className="parking-priority">Приоритет<select value={editing.priority} onChange={(event) => updateCard(editing.id, { priority: Number(event.target.value) })}>{[0, 1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value || 'Без приоритета'}</option>)}</select></label><footer className="parking-modal-actions"><select value={targetListId} onChange={(event) => setTargetListId(event.target.value)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select><button type="button" className="create-button" onClick={() => void promote(editing)} disabled={!targetListId || movingId === editing.id}>{movingId === editing.id ? 'Переносим…' : 'Перенести на доску'}</button><button type="button" className="archive-button" onClick={() => { onChange(cards.filter((card) => card.id !== editing.id)); setEditing(null); }}>Удалить локально</button></footer></section></div>}</>;
 }
