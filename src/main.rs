@@ -2586,10 +2586,30 @@ async fn ensure_board_permission(pool: &PgPool, board_id: Uuid, actor_id: Uuid, 
     if allowed { Ok(()) } else { Err(ApiError::forbidden("This action is not permitted in the workspace.")) }
 }
 
-async fn ensure_card_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
+async fn ensure_card_access_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
     let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards c JOIN boards b ON b.id = c.board_id LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NULL AND b.archived_at IS NULL AND flowboard_has_permission(b.workspace_id, $2, $3::workspace_permission) AND (bm.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))))")
         .bind(card_id).bind(actor_id).bind(permission).fetch_optional(pool).await.map_err(ApiError::internal)?.unwrap_or(false);
     if allowed { Ok(()) } else { Err(ApiError::forbidden("This action is not permitted in the workspace.")) }
+}
+
+async fn ensure_card_unfrozen(pool: &PgPool, card_id: Uuid) -> Result<(), ApiError> {
+    let is_frozen = sqlx::query_scalar::<_, bool>("SELECT is_frozen FROM cards WHERE id = $1 AND archived_at IS NULL")
+        .bind(card_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("Card was not found."))?;
+    if is_frozen {
+        return Err(ApiError::forbidden("This card is frozen. A Full Access member must unfreeze it before changes can be made."));
+    }
+    Ok(())
+}
+
+/// All ordinary mutations go through this guard. A frozen card is deliberately
+/// immutable even to Full Access until that user explicitly unfreezes it.
+async fn ensure_card_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
+    ensure_card_access_permission(pool, card_id, actor_id, permission).await?;
+    ensure_card_unfrozen(pool, card_id).await
 }
 
 async fn ensure_archived_card_permission(pool: &PgPool, card_id: Uuid, actor_id: Uuid, permission: &str) -> Result<(), ApiError> {
@@ -4473,6 +4493,10 @@ async fn create_checklist(State(state): State<AppState>, current: CurrentUser, P
 
 async fn delete_checklist(State(state): State<AppState>, current: CurrentUser, Path(checklist_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM checklists WHERE id = $1")
+        .bind(checklist_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_not_found", "Checklist was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
     let attachment_keys = sqlx::query_scalar::<_, Option<String>>("SELECT a.object_key FROM attachments a INNER JOIN checklist_items i ON i.id = a.checklist_item_id WHERE i.checklist_id = $1")
         .bind(checklist_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let checklist = sqlx::query_as::<_, ChecklistActivityRow>("DELETE FROM checklists cl USING cards c, boards b, board_members bm WHERE cl.id = $1 AND cl.card_id = c.id AND c.board_id = b.id AND bm.board_id = b.id AND bm.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING cl.card_id, cl.title")
@@ -4488,6 +4512,10 @@ async fn create_checklist_item(State(state): State<AppState>, current: CurrentUs
     let actor_id = current.id;
     let title = valid_text(&request.title, "title", 500)?;
     let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM checklists WHERE id = $1")
+        .bind(checklist_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_not_found", "Checklist was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, actor_id, "edit_cards").await?;
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
         "INSERT INTO checklist_items (id, checklist_id, card_id, title, position) SELECT $1, cl.id, cl.card_id, $2, COALESCE((SELECT MAX(position) FROM checklist_items WHERE checklist_id = cl.id), 0) + 1000 FROM checklists cl JOIN cards c ON c.id = cl.card_id JOIN boards b ON b.id = c.board_id JOIN board_members bm ON bm.board_id = b.id WHERE cl.id = $3 AND c.archived_at IS NULL AND bm.user_id = $4 AND flowboard_has_permission(b.workspace_id, $4, 'edit_cards'::workspace_permission) RETURNING id, card_id, title, is_completed, description, (SELECT title FROM checklists WHERE id = checklist_id) AS checklist_title",
     )
@@ -4502,6 +4530,10 @@ async fn create_checklist_item(State(state): State<AppState>, current: CurrentUs
 async fn update_checklist_item(State(state): State<AppState>, current: CurrentUser, Path(item_id): Path<Uuid>, Json(request): Json<UpdateChecklistItemRequest>) -> ApiResult<ChecklistItemResponse> {
     let actor_id = current.id;
     let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM checklist_items WHERE id = $1")
+        .bind(item_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, actor_id, "edit_cards").await?;
     let description = request.description.as_deref().map(|value| {
         if value.chars().count() > 4_000 { Err(ApiError::bad_request("Checklist item description must be at most 4000 characters.")) }
         else { Ok(value.to_owned()) }
@@ -4530,6 +4562,10 @@ async fn update_checklist_item(State(state): State<AppState>, current: CurrentUs
 async fn delete_checklist_item(State(state): State<AppState>, current: CurrentUser, Path(item_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let actor_id = current.id;
     let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM checklist_items WHERE id = $1")
+        .bind(item_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, actor_id, "edit_cards").await?;
     let attachment_keys = sqlx::query_scalar::<_, Option<String>>("SELECT object_key FROM attachments WHERE checklist_item_id = $1")
         .bind(item_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     let item = sqlx::query_as::<_, ChecklistItemActivityRow>(
@@ -4971,6 +5007,7 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
     let card_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL)")
         .bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
+    ensure_card_unfrozen(pool, card_id).await?;
     let author_name = valid_text(&request.author_name, "author_name", 120)?.to_owned();
     let author_avatar_url = request.author_avatar_url.as_deref().map(valid_discord_asset_url).transpose()?.map(ToOwned::to_owned);
     let mut attachment_rows = Vec::new();
@@ -5074,6 +5111,11 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
 
 async fn update_comment(State(state): State<AppState>, current: CurrentUser, Path(comment_id): Path<Uuid>, Json(request): Json<UpdateCommentRequest>) -> ApiResult<CommentResponse> {
     let body = valid_text(&request.body, "body", 10_000)?;
+    let pool = database(&state)?;
+    let comment_card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM comments WHERE id = $1")
+        .bind(comment_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "comment_not_found", "Comment was not found.".to_owned()))?;
+    ensure_card_permission(pool, comment_card_id, current.id, "edit_cards").await?;
     let card_id = sqlx::query_scalar::<_, Uuid>(
         "UPDATE comments c SET body = $1, edited_at = now() FROM cards card INNER JOIN boards b ON b.id = card.board_id INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $2 AND c.card_id = card.id AND c.author_id = $3 AND m.user_id = $3 AND card.archived_at IS NULL AND flowboard_has_permission(b.workspace_id, $3, 'edit_cards'::workspace_permission) RETURNING c.card_id",
     )
@@ -5122,6 +5164,11 @@ async fn toggle_comment_reaction(State(state): State<AppState>, current: Current
 }
 
 async fn delete_comment(State(state): State<AppState>, current: CurrentUser, Path(comment_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    let comment_card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM comments WHERE id = $1")
+        .bind(comment_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "comment_not_found", "Comment was not found.".to_owned()))?;
+    ensure_card_permission(pool, comment_card_id, current.id, "edit_cards").await?;
     let card_id = sqlx::query_scalar::<_, Uuid>(
         "DELETE FROM comments c USING cards card, boards b, board_members m WHERE c.id = $1 AND c.card_id = card.id AND card.board_id = b.id AND m.board_id = b.id AND m.user_id = $2 AND c.author_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING c.card_id",
     )
@@ -5181,6 +5228,11 @@ async fn upload_attachment(State(state): State<AppState>, current: CurrentUser, 
 
 async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, Path(attachment_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let actor_id = current.id;
+    let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM attachments WHERE id = $1")
+        .bind(attachment_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, actor_id, "edit_cards").await?;
     let object_key = sqlx::query_scalar::<_, Option<String>>(
         "DELETE FROM attachments a USING cards c, boards b, board_members m WHERE a.id = $1 AND a.card_id = c.id AND c.board_id = b.id AND c.archived_at IS NULL AND m.board_id = b.id AND m.user_id = $2 AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) RETURNING a.object_key",
     )
@@ -5233,6 +5285,7 @@ async fn upload_checklist_item_attachment(State(state): State<AppState>, current
     )
     .bind(item_id).bind(current.id).fetch_optional(pool).await.map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "checklist_item_not_found", "Checklist item was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
     let field = multipart.next_field().await.map_err(|_| ApiError::bad_request("Attachment form is invalid."))?
         .ok_or_else(|| ApiError::bad_request("Attachment file is required."))?;
     if field.name() != Some("file") { return Err(ApiError::bad_request("Attachment field must be named file.")); }
@@ -5383,7 +5436,11 @@ async fn create_card(State(state): State<AppState>, current: CurrentUser, Path(l
 }
 
 async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardRequest>) -> ApiResult<CardResponse> {
-    ensure_card_permission(database(&state)?, card_id, current.id, "edit_cards").await?;
+    let pool = database(&state)?;
+    // This endpoint is the sole escape hatch from a frozen card. Changing its
+    // frozen state itself is administrative; all other changes wait for an
+    // explicit unfreeze request.
+    ensure_card_access_permission(pool, card_id, current.id, "edit_cards").await?;
     let actor_id = current.id;
     let title = match request.title {
         Some(title) => Some(valid_text(&title, "title", 500)?.to_owned()),
@@ -5406,6 +5463,16 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
         None => None,
     };
     if title.is_none() && description.is_none() && priority.is_none() && is_frozen.is_none() && start_at.is_none() { return Err(ApiError::bad_request("At least one editable field is required.")); }
+    let currently_frozen = sqlx::query_scalar::<_, bool>("SELECT is_frozen FROM cards WHERE id = $1 AND archived_at IS NULL")
+        .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("Card was not found."))?;
+    if is_frozen.is_some() {
+        // Otherwise an ordinary editor could lock everybody else out of a card.
+        ensure_card_full_access(pool, card_id, actor_id).await?;
+    }
+    if currently_frozen && (is_frozen != Some(false) || title.is_some() || description.is_some() || priority.is_some() || start_at.is_some()) {
+        return Err(ApiError::forbidden("This card is frozen. Unfreeze it first, then make changes."));
+    }
     let text_change_detail = match (title.is_some(), description.is_some()) {
         (true, true) => "Название и описание карточки",
         (true, false) => "Название карточки",
@@ -5839,6 +5906,7 @@ async fn create_card_relation(State(state): State<AppState>, current: CurrentUse
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
     ensure_card_access(pool, request.target_card_id, current.id).await?;
+    ensure_card_unfrozen(pool, request.target_card_id).await?;
     if let Some((prerequisite, dependent)) = relation_dependency_direction(card_id, request.target_card_id, &request.relation_type) {
         if let Some(path) = dependency_cycle_path(pool, prerequisite, dependent).await? {
             let titles = sqlx::query_as::<_, (Uuid, String)>("SELECT id, title FROM cards WHERE id = ANY($1)")
@@ -5990,6 +6058,7 @@ async fn vote_card_poll(State(state): State<AppState>, current: CurrentUser, Pat
         .bind(poll_id).bind(request.option_id).fetch_optional(pool).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::bad_request("Poll option was not found."))?;
     ensure_card_access(pool, card_id, current.id).await?;
+    ensure_card_unfrozen(pool, card_id).await?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
     sqlx::query("DELETE FROM card_poll_votes WHERE poll_id = $1 AND user_id = $2").bind(poll_id).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     sqlx::query("INSERT INTO card_poll_votes (poll_id, option_id, user_id) VALUES ($1, $2, $3)").bind(poll_id).bind(request.option_id).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;

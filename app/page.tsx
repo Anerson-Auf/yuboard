@@ -2336,7 +2336,7 @@ export default function Home() {
     setCardDragPreview((current) => current ? { ...current, x: event.clientX, y: event.clientY } : current);
   }
   function beginPointerCardDrag(event: ReactPointerEvent<HTMLElement>, card: Card, sourceListId: EntityId) {
-    if (event.button !== 0 || boardViewMode !== 'standard' || isPublicViewer) return;
+    if (event.button !== 0 || boardViewMode !== 'standard' || isPublicViewer || card.frozen) return;
     if (event.target instanceof Element && event.target.closest('button, a, input, textarea, select')) return;
     if (isBulkMode) {
       didDragRef.current = true;
@@ -2391,6 +2391,7 @@ export default function Home() {
   function moveCard(cardId: EntityId, sourceListId: EntityId, targetListId: EntityId, beforeCardId?: EntityId) {
     const card = columns.find((column) => column.id === sourceListId)?.cards.find((item) => item.id === cardId);
     if (!card) return;
+    if (card.frozen) { clearDragState(); showToast('Карточка заморожена: сначала её нужно разморозить'); return; }
     const targetColumn = columns.find((column) => column.id === targetListId);
     const exceedsLimit = Boolean(targetListId !== sourceListId && targetColumn?.cardLimit && targetColumn.cards.length >= Math.max(0, targetColumn.cardLimit - 1));
     setColumns((current) => {
@@ -2523,6 +2524,7 @@ export default function Home() {
     openParkingCard(card);
   }
   function archiveCard(card: Card) {
+    if (card.frozen && !isParkingCardId(card.id)) { showToast('Карточка заморожена: сначала её нужно разморозить'); return; }
     if (isParkingCardId(card.id)) {
       setParkingCards((current) => current.filter((item) => item.id !== card.id));
       setSelected(null);
@@ -2537,6 +2539,7 @@ export default function Home() {
     } else { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); showToast('Задача удалена'); }
   }
   function parkServerCard(card: Card) {
+    if (card.frozen) { showToast('Карточка заморожена: сначала её нужно разморозить'); return; }
     const frozen = card.frozen;
     const base: ParkingCard = { id: `parking-${crypto.randomUUID()}`, title: card.title, description: card.description ?? '', priority: card.priority ?? 0, createdAt: new Date().toISOString(), completedAt: card.completedAt ?? null, startAt: card.startAt, dueAt: card.dueAt, coverAttachmentId: card.coverAttachmentId, coverMode: card.coverMode, backgroundImageUrl: card.backgroundImageUrl, labels: card.labels.map((label) => ({ ...label })), roles: card.roles.map((role) => ({ ...role })), members: card.members.map((member) => ({ id: String(member.id), name: member.name, initials: member.initials, color: member.color, avatarUrl: member.avatarUrl })), checklists: [], attachments: [], comments: [] };
     const moveToParking = (snapshot: ParkingCard) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); setParkingCards((current) => [snapshot, ...current]); showToast('Карточка перемещена в локальную парковку'); };
@@ -3787,6 +3790,7 @@ export default function Home() {
   }
   function toggleCardCompletion(card: Card, event?: ReactMouseEvent<HTMLButtonElement>) {
     event?.stopPropagation();
+    if (card.frozen && !isParkingCardId(card.id)) { showToast('Карточка заморожена: сначала её нужно разморозить'); return; }
     const completedAt = card.completedAt ? undefined : new Date().toISOString();
     if (isParkingCardId(card.id)) {
       updateParkingCard(String(card.id), (current) => ({ ...current, completedAt: completedAt ?? null }));
@@ -3844,6 +3848,7 @@ export default function Home() {
   }
   function setSelectedCardPriority(priority: number) {
     if (!selected || priority < 0 || priority > 5) return;
+    if (selected.frozen && !isSelectedParkingCard) { showToast('Карточка заморожена: сначала её нужно разморозить'); return; }
     const previous = selected.priority ?? 0;
     if (priority === previous) return;
     setPriorityMotionKey((current) => current + 1);
@@ -3855,6 +3860,7 @@ export default function Home() {
   }
   function toggleCardFrozen(card: Card) {
     if (!card || isPublicViewer) return;
+    if (!isParkingCardId(card.id) && !canManageBoardAdministration) { showToast('Заморозка доступна только с полным доступом'); return; }
     const frozen = !card.frozen;
     const applyFrozen = (value: boolean) => {
       if (isParkingCardId(card.id)) {
@@ -4368,10 +4374,11 @@ export default function Home() {
     </div>}
 
     {selected && <div className="modal-backdrop" role="presentation" onMouseDown={closeSelectedCard}>
-      <section className="task-modal" role="dialog" aria-modal="true" aria-label="Детали задачи" onMouseDown={(event) => event.stopPropagation()}>
+      <section className={`task-modal ${selected.frozen && !isSelectedParkingCard ? 'frozen-card-modal' : ''}`} role="dialog" aria-modal="true" aria-label="Детали задачи" onMouseDown={(event) => event.stopPropagation()}>
         <button className="modal-close" onClick={closeSelectedCard} aria-label="Закрыть">×</button>
         <div className="task-layout">
           <div className="task-content">
+            {selected.frozen && !isSelectedParkingCard && <div className="frozen-card-notice">❄ Карточка заморожена. Сначала разморозьте её, чтобы что-либо изменить.</div>}
             <div className={`card-detail-top ${hasSelectedCardBackground ? 'has-card-background' : ''}`} style={hasSelectedCardBackground ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
               <div className="card-property-area">
               <div className="card-quick-actions"><span className="card-quick-actions-left">{renderCardMilestoneControl()}<button className={`quick-action ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(false); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }} title="Метки" aria-label="Настроить метки"><BoardToolbarIcon type="labels" /></button><button className={`quick-action ${sidebarPanel === 'background' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'background' ? null : 'background')} title="Фон карточки" aria-label="Настроить фон карточки">▧</button>{canManageBoardAdministration && <button className={`quick-action ${sidebarPanel === 'public-visibility' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'public-visibility' ? null : 'public-visibility')} title="Доступ" aria-label="Настроить доступ к карточке">◉</button>}</span><span className="card-quick-actions-right">{authState === 'signed-in' && <button type="button" className={`quick-action card-watch-toggle ${isWatchingCard ? 'active' : ''}`} onClick={toggleCardWatch} title={isWatchingCard ? 'Отключить уведомления об этой карточке' : 'Подписаться на изменения карточки'} aria-label={isWatchingCard ? 'Отключить уведомления об этой карточке' : 'Подписаться на изменения карточки'}>{isWatchingCard ? '◉' : '◌'}</button>}<button type="button" className="quick-action" onClick={() => openFocusMode(selected)} title="Режим фокуса" aria-label="Показать только эту карточку и её связи">◉</button><button className={`quick-action ${sidebarPanel === 'due' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'due' ? null : 'due')} title={selected.dueAt ? `Дедлайн: ${formatDue(selected.dueAt)}` : 'Дедлайн'} aria-label="Настроить дедлайн">◷</button><button className="quick-action" onClick={openDiagram} title="Схема" aria-label="Открыть схему">⌁</button></span></div>
@@ -4405,8 +4412,8 @@ export default function Home() {
                 <button className="create-button" disabled={!parkingRestoreListId} onClick={() => void restoreParkingCard(selectedParkingCard, parkingRestoreListId)}>Перенести на доску</button>
                 <button className="archive-button" onClick={archiveSelectedCard}>Удалить локально</button>
               </> : <>
-                {!isPublicViewer && <button className={`freeze-card-action ${selected.frozen ? 'active' : ''}`} type="button" onClick={() => toggleCardFrozen(selected)} title={selected.frozen ? 'Разморозить карточку' : 'Заморозить карточку'}>{selected.frozen ? '❄ Разморозить' : '❄ Заморозить'}</button>}
-                <button className="archive-button" onClick={archiveSelectedCard}>Архивировать</button>
+                {!isPublicViewer && canManageBoardAdministration && <button className={`freeze-card-action ${selected.frozen ? 'active' : ''}`} type="button" onClick={() => toggleCardFrozen(selected)} title={selected.frozen ? 'Разморозить карточку' : 'Заморозить карточку'}>{selected.frozen ? '❄ Разморозить' : '❄ Заморозить'}</button>}
+                <button className="archive-button" disabled={selected.frozen} onClick={archiveSelectedCard}>Архивировать</button>
               </>}
               <span className={`autosave-status ${cardSaveStatus}`}>{isSelectedParkingCard ? 'Сохранено локально' : cardSaveStatus === 'saving' ? 'Изменения сохраняются' : cardSaveStatus === 'error' ? 'Не удалось сохранить' : 'Все изменения сохранены'}</span>
             </footer>
@@ -4451,10 +4458,12 @@ export default function Home() {
       <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openFocusMode(cardContextMenu.card); setCardContextMenu(null); }}>◉ Фокус на карточке</button>
       {!isPublicViewer && <>
         <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setBulkMode(true); toggleBulkCard(cardContextMenu.card.id); setCardContextMenu(null); }}>☷ Выбрать</button>
-        <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button>
-        <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardFrozen(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.frozen ? '❄ Разморозить' : '❄ Заморозить'}</button>
-        <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); parkServerCard(cardContextMenu.card); setCardContextMenu(null); }}>В локальную парковку</button>
-        <button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button>
+        {!cardContextMenu.card.frozen && <>
+          <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button>
+          <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); parkServerCard(cardContextMenu.card); setCardContextMenu(null); }}>В локальную парковку</button>
+          <button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button>
+        </>}
+        {canManageBoardAdministration && <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardFrozen(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.frozen ? '❄ Разморозить' : '❄ Заморозить'}</button>}
       </>}
     </div>}
     {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); moveColumn(columnContextMenu.column.id); setColumnContextMenu(null); }}>Вынести в отдельный ряд справа</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}

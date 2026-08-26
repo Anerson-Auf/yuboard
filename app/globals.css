@@ -671,6 +671,11 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .parking-restore-control select { width: 100%; min-height: 28px; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 11px; font-weight: 750; letter-spacing: 0; text-transform: none; }
 .freeze-card-action { min-height: 31px; padding: 0 9px; border: 1px solid color-mix(in srgb, #8adfff 36%, var(--line)); border-radius: 8px; background: color-mix(in srgb, #8adfff 8%, transparent); color: #a9e9ff; font-size: 10px; font-weight: 800; }
 .freeze-card-action.active { border-color: color-mix(in srgb, #8adfff 68%, var(--line)); background: color-mix(in srgb, #8adfff 16%, transparent); box-shadow: 0 0 14px rgb(110 211 255 / 16%); }
+.frozen-card-notice { margin: 0 0 10px; padding: 8px 10px; border: 1px solid rgb(132 220 255 / 38%); border-radius: 9px; background: rgb(59 126 151 / 12%); color: #b8ebff; font-size: 11px; font-weight: 700; }
+.frozen-card-modal .task-content > :not(.modal-actions):not(.frozen-card-notice) { pointer-events: none; opacity: .72; filter: saturate(.72); }
+.frozen-card-modal .task-sidebar { opacity: .72; filter: saturate(.72); }
+.frozen-card-modal .task-sidebar .comment-composer { display: none; }
+.frozen-card-modal .task-sidebar .conversation-scroll button { pointer-events: none; }
 .task-card:has(.card-frozen-badge)::before { position: absolute; z-index: 2; inset: -1px; border: 1px solid rgb(132 220 255 / 78%); border-radius: inherit; box-shadow: inset 0 0 16px rgb(103 207 255 / 11%), 0 0 15px rgb(103 207 255 / 15%); content: ''; pointer-events: none; }
 .card-frozen-badge { position: absolute; z-index: 5; top: 10px; right: 42px; display: grid; width: 21px; height: 21px; place-items: center; border: 1px solid rgb(132 220 255 / 42%); border-radius: 7px; background: rgb(47 117 144 / 24%); color: #b5edff; font-size: 13px; line-height: 1; text-shadow: 0 0 8px rgb(146 229 255 / 80%); }
 .task-card:not(:has(.card-priority-corner)) .card-frozen-badge { right: 10px; }
