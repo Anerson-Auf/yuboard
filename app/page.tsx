@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element -- self-hosted attachment URLs are served by the Rust API. */
 
 import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, CSSProperties, DragEvent as ReactDragEvent, FormEvent, forwardRef, MouseEvent as ReactMouseEvent, MouseEventHandler, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import './auth.css';
 import ReleaseHistoryWidget from './release-history-widget';
 
@@ -799,6 +800,7 @@ export default function Home() {
   const [boardStickers, setBoardStickers] = useState<BoardSticker[]>([]);
   const [reactionPickerCommentId, setReactionPickerCommentId] = useState<EntityId | null>(null);
   const [stickerPickerTarget, setStickerPickerTarget] = useState<'comment' | 'thread' | null>(null);
+  const [stickerPickerPosition, setStickerPickerPosition] = useState<CSSProperties | null>(null);
   const [threadRoot, setThreadRoot] = useState<Comment | null>(null);
   const [threadComments, setThreadComments] = useState<Comment[]>([]);
   const [threadDraft, setThreadDraft] = useState('');
@@ -1005,6 +1007,7 @@ export default function Home() {
   const workspaceBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const cardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const boardStickerFileRef = useRef<HTMLInputElement | null>(null);
+  const stickerComposerButtonRefs = useRef<{ comment: HTMLButtonElement | null; thread: HTMLButtonElement | null }>({ comment: null, thread: null });
   const commentComposerRef = useRef<InlineStickerComposerHandle | null>(null);
   const threadComposerRef = useRef<InlineStickerComposerHandle | null>(null);
   const isDrawingRef = useRef(false);
@@ -1380,7 +1383,7 @@ export default function Home() {
       if (columnMenuId && !event.target.closest('.column-actions')) setColumnMenuId(null);
       if (sidebarPanel && !event.target.closest('.property-popover, .quick-action, .member-plus, .label-plus')) setSidebarPanel(null);
       if (reactionPickerCommentId && !event.target.closest('.reaction-picker-control')) setReactionPickerCommentId(null);
-      if (stickerPickerTarget && !event.target.closest('.sticker-composer-control')) setStickerPickerTarget(null);
+      if (stickerPickerTarget && !event.target.closest('.sticker-composer-control, .sticker-picker')) { setStickerPickerTarget(null); setStickerPickerPosition(null); }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -1390,6 +1393,35 @@ export default function Home() {
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('pointerdown', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
   }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, reactionPickerCommentId, sidebarPanel, stickerPickerTarget]);
+
+  function updateStickerPickerPosition(target: 'comment' | 'thread') {
+    const trigger = stickerComposerButtonRefs.current[target];
+    if (!trigger) return;
+    const padding = 12;
+    const gap = 8;
+    const pickerWidth = Math.min(310, window.innerWidth - padding * 2);
+    const rect = trigger.getBoundingClientRect();
+    const roomAbove = rect.top - padding - gap;
+    const roomBelow = window.innerHeight - rect.bottom - padding - gap;
+    const opensAbove = roomAbove >= roomBelow;
+    const availableHeight = Math.max(96, Math.min(360, opensAbove ? roomAbove : roomBelow));
+    const left = Math.max(padding, Math.min(rect.right - pickerWidth, window.innerWidth - pickerWidth - padding));
+    setStickerPickerPosition({
+      left,
+      width: pickerWidth,
+      maxHeight: availableHeight,
+      ...(opensAbove ? { bottom: window.innerHeight - rect.top + gap } : { top: rect.bottom + gap }),
+    });
+  }
+
+  useEffect(() => {
+    if (!stickerPickerTarget) return;
+    const update = () => updateStickerPickerPosition(stickerPickerTarget);
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); };
+  }, [stickerPickerTarget]);
 
   useEffect(() => {
     if (!cardContextMenu && !columnContextMenu && !freeformContextMenu) return;
@@ -2981,15 +3013,20 @@ export default function Home() {
   function renderStickerComposerButton(target: 'comment' | 'thread') {
     if (isPublicViewer || !canEditBoard) return null;
     const open = stickerPickerTarget === target;
-    return <span className="sticker-composer-control">
-      <button className={`sticker-composer-button ${open ? 'active' : ''}`} type="button" onClick={() => setStickerPickerTarget(open ? null : target)} aria-label="Отправить стикер" title="Отправить стикер"><StickerIcon /></button>
-      {open && <div className="sticker-picker" role="dialog" aria-label="Стикеры">
+    const toggle = () => {
+      if (open) { setStickerPickerTarget(null); setStickerPickerPosition(null); return; }
+      setStickerPickerPosition(null);
+      setStickerPickerTarget(target);
+    };
+    const picker = open && stickerPickerPosition && <div className="sticker-picker" role="dialog" aria-label="Стикеры" style={stickerPickerPosition}>
         <b>Стандартные</b>
         <div className="sticker-picker-grid sticker-picker-defaults">{DEFAULT_STICKERS.map((sticker) => <button type="button" key={sticker.emoji} onClick={() => sendDefaultSticker(target, sticker.emoji)} title={sticker.name} aria-label={sticker.name}>{sticker.emoji}</button>)}</div>
         {boardStickers.length > 0 && <><b className="sticker-picker-section-title">Стикеры доски</b><div className="sticker-picker-grid">{boardStickers.map((sticker) => <span key={sticker.id} className="sticker-picker-item"><button type="button" onClick={() => sendBoardSticker(target, sticker)} title={sticker.name}><img src={assetUrl(sticker.url)} alt={sticker.name} /></button>{canManageBoardAdministration && <button type="button" className="sticker-remove" onClick={() => deleteBoardSticker(sticker)} aria-label={`Удалить стикер ${sticker.name}`}>×</button>}</span>)}</div></>}
         {canManageBoardAdministration && <button type="button" className="sticker-upload-button" onClick={() => boardStickerFileRef.current?.click()}><span>＋</span> Добавить стикер</button>}
-      </div>}
-    </span>;
+      </div>;
+    return <><span className="sticker-composer-control">
+      <button ref={(element) => { stickerComposerButtonRefs.current[target] = element; }} className={`sticker-composer-button ${open ? 'active' : ''}`} type="button" onClick={toggle} aria-label="Отправить стикер" title="Отправить стикер"><StickerIcon /></button>
+    </span>{picker && createPortal(picker, document.body)}</>;
   }
   function commentMember(comment: Comment): Member {
     return comment.author_id === account?.user.id
