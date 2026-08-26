@@ -5,9 +5,4 @@
 .card-priority-review-row { position: relative; }
 .card-priority-review-row:has(.review-compact-popover) { z-index: 90; }
 .card-review-panel.compact { isolation: isolate; }
-.review-compact-popover { z-index: 1200; }
-
-/* In the read-only archive the compact control sits close to the card's
-   left clipping edge. Keep its panel inside the card instead of unfolding
-   into that edge. */
-.archived-card-modal .review-compact-popover { left: 0; right: auto; }
+.review-compact-popover { z-index: 1200; left: 0; right: auto; }
