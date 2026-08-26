@@ -1,7 +1,7 @@
 'use client';
 /* eslint-disable @next/next/no-img-element -- self-hosted attachment URLs are served by the Rust API. */
 
-import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, CSSProperties, DragEvent as ReactDragEvent, FormEvent, MouseEvent as ReactMouseEvent, MouseEventHandler, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, CSSProperties, DragEvent as ReactDragEvent, FormEvent, forwardRef, MouseEvent as ReactMouseEvent, MouseEventHandler, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import './auth.css';
 import ReleaseHistoryWidget from './release-history-widget';
 
@@ -227,8 +227,10 @@ const weekdayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const dueTimeOptions = ['09:00', '12:00', '15:00', '18:00'];
 
 function inlineMarkdown(value: string, highlightMentions = false): ReactNode[] {
-  const token = /(\!\[[^\]]*\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)|\[[^\]]+\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|(?<!\*)\*[^*\r\n]+\*(?!\*)|(?<!_)_[^_\r\n]+_(?!_)|@[a-zA-Z0-9_.-]+|https?:\/\/[^\s<]+)/g;
+  const token = /(\[\[sticker:[^\]\r\n]{1,16}\]\]|\!\[[^\]]*\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)|\[[^\]]+\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|(?<!\*)\*[^*\r\n]+\*(?!\*)|(?<!_)_[^_\r\n]+_(?!_)|@[a-zA-Z0-9_.-]+|https?:\/\/[^\s<]+)/g;
   return value.split(token).filter(Boolean).map((part, index) => {
+    const defaultSticker = /^\[\[sticker:([^\]\r\n]{1,16})\]\]$/.exec(part);
+    if (defaultSticker) return <span className="chat-sticker chat-sticker-emoji inline-chat-sticker" key={index} role="img" aria-label="Стикер">{defaultSticker[1]}</span>;
     const image = /^!\[([^\]]*)\]\(([^\s)]+)/.exec(part);
     if (image) {
       const mediaUrl = assetUrl(image[2]);
@@ -240,7 +242,7 @@ function inlineMarkdown(value: string, highlightMentions = false): ReactNode[] {
         ? <audio className="markdown-media markdown-audio" controls preload="metadata" src={mediaUrl} aria-label={name} />
         : isVideo
         ? <video className="markdown-media markdown-video" key={index} controls preload="metadata" src={mediaUrl} aria-label={name} />
-        : <a className={`markdown-image-link ${isSticker ? 'chat-sticker-link' : ''}`} key={index} href={mediaUrl} target="_blank" rel="noreferrer"><img className={`markdown-media ${isSticker ? 'chat-sticker' : ''}`} src={mediaUrl} alt={name} /></a>;
+        : <a className={`markdown-image-link ${isSticker ? 'chat-sticker-link inline-chat-sticker-link' : ''}`} key={index} href={mediaUrl} target="_blank" rel="noreferrer"><img className={`markdown-media ${isSticker ? 'chat-sticker inline-chat-sticker' : ''}`} src={mediaUrl} alt={name} /></a>;
     }
     const link = /^\[([^\]]+)\]\(([^\s)]+)/.exec(part);
     if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
@@ -462,11 +464,9 @@ type MentionTextareaProps = {
   onPaste?: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   onSubmitShortcut?: () => void;
   commands?: { command: string; label: string }[];
-  draftStickers?: DraftSticker[];
-  onRemoveDraftSticker?: (id: string) => void;
 };
 
-function MentionTextarea({ value, onValueChange, members, className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [], draftStickers = [], onRemoveDraftSticker }: MentionTextareaProps) {
+function MentionTextarea({ value, onValueChange, members, className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }: MentionTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [query, setQuery] = useState<string | null>(null);
   const [commandQuery, setCommandQuery] = useState<string | null>(null);
@@ -513,8 +513,162 @@ function MentionTextarea({ value, onValueChange, members, className, placeholder
   if (isChecklistDescription && isMarkdownPreview) {
     return <div className={`checklist-description-preview markdown-editable-description ${className ?? ''}`} role={disabled ? undefined : 'button'} tabIndex={disabled ? undefined : 0} onClick={() => { if (!disabled) setMarkdownPreview(false); }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMarkdownPreview(false); } }}><MarkdownDescription value={value} emptyText="Добавьте описание пункта…" /></div>;
   }
-  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); else onSubmitShortcut(); } }} onBlur={() => { setQuery(null); setCommandQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{draftStickers.length > 0 && <div className="draft-sticker-preview" aria-label="Стикеры в сообщении">{draftStickers.map((sticker) => <span className="draft-sticker" key={sticker.id}>{sticker.emoji ? <span role="img" aria-label={sticker.name}>{sticker.emoji}</span> : <img src={sticker.url} alt={sticker.name} />}<button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => onRemoveDraftSticker?.(sticker.id)} aria-label={`Убрать стикер ${sticker.name}`}>×</button></span>)}</div>}{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); insertCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
+  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); else onSubmitShortcut(); } }} onBlur={() => { setQuery(null); setCommandQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); insertCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
 }
+
+type InlineStickerComposerHandle = { insertSticker: (sticker: DraftSticker) => void };
+type InlineStickerComposerProps = {
+  value: string;
+  onValueChange: (value: string) => void;
+  members: Member[];
+  className?: string;
+  placeholder?: string;
+  ariaLabel: string;
+  disabled?: boolean;
+  onDragOver?: (event: ReactDragEvent<HTMLDivElement>) => void;
+  onDrop?: (event: ReactDragEvent<HTMLDivElement>) => void;
+  onPaste?: (event: ReactClipboardEvent<HTMLDivElement>) => void;
+  onSubmitShortcut?: () => void;
+  commands?: { command: string; label: string }[];
+};
+
+const inlineStickerToken = /(\[\[sticker:([^\]\r\n]{1,16})\]\]|!\[sticker:([^\]]*)\]\(([^\s)]+)\))/g;
+
+function composerNodeText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+  if (!(node instanceof HTMLElement)) return '';
+  if (node.dataset.stickerBody) return node.dataset.stickerBody;
+  if (node.tagName === 'BR') return '\n';
+  const content = Array.from(node.childNodes, composerNodeText).join('');
+  return /^(DIV|P)$/.test(node.tagName) ? `${content}\n` : content;
+}
+
+function composerText(root: HTMLElement) {
+  return Array.from(root.childNodes, composerNodeText).join('').replace(/\n$/, '');
+}
+
+function composerSelectionOffset(root: HTMLElement) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !selection.anchorNode || !root.contains(selection.anchorNode)) return composerText(root).length;
+  const target = selection.anchorNode;
+  const targetOffset = selection.anchorOffset;
+  let offset = 0;
+  const visit = (node: Node): boolean => {
+    if (node === target) {
+      if (node.nodeType === Node.TEXT_NODE) offset += targetOffset;
+      else offset += Array.from(node.childNodes).slice(0, targetOffset).map(composerNodeText).join('').length;
+      return true;
+    }
+    if (node instanceof HTMLElement && node.dataset.stickerBody) { offset += node.dataset.stickerBody.length; return false; }
+    for (const child of node.childNodes) if (visit(child)) return true;
+    if (node.nodeType === Node.TEXT_NODE) offset += node.textContent?.length ?? 0;
+    else if (node instanceof HTMLElement && node.tagName === 'BR') offset += 1;
+    return false;
+  };
+  visit(root);
+  return offset;
+}
+
+function placeComposerCaret(root: HTMLElement, targetOffset: number) {
+  const range = document.createRange();
+  const selection = window.getSelection();
+  let remaining = targetOffset;
+  for (const child of root.childNodes) {
+    const length = composerNodeText(child).length;
+    if (remaining > length) { remaining -= length; continue; }
+    if (child.nodeType === Node.TEXT_NODE) range.setStart(child, Math.min(remaining, child.textContent?.length ?? 0));
+    else if (remaining === 0) range.setStartBefore(child);
+    else range.setStartAfter(child);
+    range.collapse(true); selection?.removeAllRanges(); selection?.addRange(range); return;
+  }
+  range.selectNodeContents(root); range.collapse(false); selection?.removeAllRanges(); selection?.addRange(range);
+}
+
+function renderComposerText(root: HTMLElement, value: string) {
+  const fragment = document.createDocumentFragment();
+  let index = 0;
+  for (const match of value.matchAll(inlineStickerToken)) {
+    const start = match.index ?? 0;
+    if (start > index) fragment.append(document.createTextNode(value.slice(index, start)));
+    const sticker = document.createElement('span');
+    sticker.className = 'inline-draft-sticker';
+    sticker.contentEditable = 'false';
+    sticker.dataset.stickerBody = match[1];
+    sticker.title = 'Стикер — удаляется клавишами Backspace или Delete';
+    if (match[2] !== undefined) {
+      sticker.textContent = match[2];
+      sticker.setAttribute('role', 'img');
+      sticker.setAttribute('aria-label', 'Стикер');
+    } else {
+      const image = document.createElement('img');
+      image.src = assetUrl(match[4]);
+      image.alt = match[3] || 'Стикер';
+      sticker.append(image);
+    }
+    fragment.append(sticker);
+    index = start + match[1].length;
+  }
+  if (index < value.length) fragment.append(document.createTextNode(value.slice(index)));
+  root.replaceChildren(fragment);
+}
+
+const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStickerComposerProps>(function InlineStickerComposer({ value, onValueChange, members, className, placeholder, ariaLabel, disabled, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }, ref) {
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const pendingCaret = useRef<number | null>(null);
+  const [query, setQuery] = useState<string | null>(null);
+  const [commandQuery, setCommandQuery] = useState<string | null>(null);
+  const findQuery = (nextValue: string, caret: number) => {
+    const beforeCaret = nextValue.slice(0, caret);
+    const mention = beforeCaret.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);
+    const command = beforeCaret.match(/(?:^|\s)\/([a-zA-Z]*)$/);
+    setQuery(mention ? mention[1].toLowerCase() : null);
+    setCommandQuery(command ? command[1].toLowerCase() : null);
+  };
+  const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().startsWith(query)).slice(0, 7);
+  const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
+  const updateValue = (next: string, caret: number) => { pendingCaret.current = caret; onValueChange(next); findQuery(next, caret); };
+  useEffect(() => {
+    const composer = composerRef.current;
+    if (!composer) return;
+    if (composerText(composer) !== value) renderComposerText(composer, value);
+    if (pendingCaret.current !== null) { placeComposerCaret(composer, pendingCaret.current); pendingCaret.current = null; }
+  }, [value]);
+  useImperativeHandle(ref, () => ({
+    insertSticker(sticker) {
+      const composer = composerRef.current;
+      const current = composer ? composerText(composer) : value;
+      const caret = composer ? composerSelectionOffset(composer) : current.length;
+      updateValue(`${current.slice(0, caret)}${sticker.body}${current.slice(caret)}`, caret + sticker.body.length);
+      window.requestAnimationFrame(() => composerRef.current?.focus());
+    },
+  }), [updateValue, value]);
+  const replaceMention = (member: Member) => {
+    const composer = composerRef.current; if (!composer) return;
+    const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@');
+    if (at < 0) return;
+    updateValue(`${current.slice(0, at)}@${member.name} ${current.slice(caret)}`, at + member.name.length + 2);
+  };
+  const replaceCommand = (item: { command: string }) => {
+    const composer = composerRef.current; if (!composer) return;
+    const current = composerText(composer); const caret = composerSelectionOffset(composer); const slash = current.slice(0, caret).lastIndexOf('/');
+    if (slash < 0) return;
+    updateValue(`${current.slice(0, slash)}/${item.command} ${current.slice(caret)}`, slash + item.command.length + 2);
+  };
+  const removeStickerNearCaret = (direction: 'backward' | 'forward') => {
+    const composer = composerRef.current; if (!composer) return false;
+    const current = composerText(composer); const caret = composerSelectionOffset(composer);
+    const stickers = [...current.matchAll(inlineStickerToken)];
+    const found = stickers.find((match) => {
+      const start = match.index ?? 0; const end = start + match[1].length;
+      return direction === 'backward' ? end === caret : start === caret;
+    });
+    if (!found) return false;
+    const start = found.index ?? 0;
+    updateValue(`${current.slice(0, start)}${current.slice(start + found[1].length)}`, start);
+    return true;
+  };
+  return <div className="mention-textarea inline-sticker-composer-wrap"><div ref={composerRef} className={`inline-sticker-composer ${className ?? ''}`} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-multiline="true" aria-label={ariaLabel} data-placeholder={placeholder} onInput={(event) => { const composer = event.currentTarget; const next = composerText(composer); updateValue(next, composerSelectionOffset(composer)); }} onClick={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyUp={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); return; } if (event.key === 'Backspace' && removeStickerNearCaret('backward')) { event.preventDefault(); return; } if (event.key === 'Delete' && removeStickerNearCaret('forward')) { event.preventDefault(); return; } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); return; } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); else onSubmitShortcut(); } }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} />{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); replaceMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); replaceCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
+});
 
 function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramElement) {
   context.save();
@@ -642,14 +796,12 @@ export default function Home() {
   const [isUpdatingOwnAssignment, setUpdatingOwnAssignment] = useState(false);
   const [coverModeDraft, setCoverModeDraft] = useState<'full' | 'top'>('full');
   const [commentDraft, setCommentDraft] = useState('');
-  const [commentDraftStickers, setCommentDraftStickers] = useState<DraftSticker[]>([]);
   const [boardStickers, setBoardStickers] = useState<BoardSticker[]>([]);
   const [reactionPickerCommentId, setReactionPickerCommentId] = useState<EntityId | null>(null);
   const [stickerPickerTarget, setStickerPickerTarget] = useState<'comment' | 'thread' | null>(null);
   const [threadRoot, setThreadRoot] = useState<Comment | null>(null);
   const [threadComments, setThreadComments] = useState<Comment[]>([]);
   const [threadDraft, setThreadDraft] = useState('');
-  const [threadDraftStickers, setThreadDraftStickers] = useState<DraftSticker[]>([]);
   const [isThreadLoading, setThreadLoading] = useState(false);
   const [isSendingThread, setSendingThread] = useState(false);
   const [voiceRecordingTarget, setVoiceRecordingTarget] = useState<'comment' | 'thread' | null>(null);
@@ -853,6 +1005,8 @@ export default function Home() {
   const workspaceBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const cardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const boardStickerFileRef = useRef<HTMLInputElement | null>(null);
+  const commentComposerRef = useRef<InlineStickerComposerHandle | null>(null);
+  const threadComposerRef = useRef<InlineStickerComposerHandle | null>(null);
   const isDrawingRef = useRef(false);
   const diagramStartRef = useRef<DiagramPoint | null>(null);
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
@@ -2596,23 +2750,19 @@ export default function Home() {
         .catch(() => showToast('Удаление пункта не сохранено'));
     }
   }
-  function composeCommentBody(draft: string, stickers: DraftSticker[]) {
-    return [draft.trim(), ...stickers.map((sticker) => sticker.body)].filter(Boolean).join('\n');
-  }
   function addComment(event?: FormEvent) {
     event?.preventDefault();
-    const body = composeCommentBody(commentDraft, commentDraftStickers);
+    const body = commentDraft.trim();
     if (!selected || !body || isSendingComment) return;
     if (persistence !== 'connected' || typeof selected.id !== 'string') {
       setComments((current) => [{ id: `local-comment-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: null, created_at: new Date().toISOString(), reactions: [] }, ...current]);
       setCommentDraft('');
-      setCommentDraftStickers([]);
       return;
     }
     setSendingComment(true);
     void fetch(`${API_URL}/v1/cards/${selected.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
       .then(async (response) => { if (!response.ok) throw new Error('comment save failed'); return response.json() as Promise<Comment>; })
-      .then((comment) => { setComments((current) => [comment, ...current]); setCommentDraft(''); setCommentDraftStickers([]); })
+      .then((comment) => { setComments((current) => [comment, ...current]); setCommentDraft(''); })
       .catch(() => showToast('Не удалось отправить комментарий'))
       .finally(() => setSendingComment(false));
   }
@@ -2621,7 +2771,6 @@ export default function Home() {
     setThreadRoot(comment);
     setThreadComments([]);
     setThreadDraft('');
-    setThreadDraftStickers([]);
     setEditingCommentId(null);
     setThreadLoading(true);
     void fetch(`${API_URL}/v1/comments/${comment.id}/thread`)
@@ -2639,7 +2788,7 @@ export default function Home() {
   }
   function addThreadComment(event?: FormEvent) {
     event?.preventDefault();
-    const body = composeCommentBody(threadDraft, threadDraftStickers);
+    const body = threadDraft.trim();
     if (!selected || !threadRoot || typeof threadRoot.id !== 'string' || !body || isSendingThread) return;
     const parentCommentId = threadRoot.id;
     const localComment: Comment = { id: `local-thread-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: parentCommentId, created_at: new Date().toISOString() };
@@ -2647,7 +2796,6 @@ export default function Home() {
       setThreadComments((current) => [...current, localComment]);
       setComments((current) => [...current, localComment]);
       setThreadDraft('');
-      setThreadDraftStickers([]);
       return;
     }
     setSendingThread(true);
@@ -2659,7 +2807,6 @@ export default function Home() {
         setThreadComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
         setComments((current) => current.map((item) => item.id === localComment.id ? comment : item));
         setThreadDraft('');
-        setThreadDraftStickers([]);
       })
       .catch(() => {
         setThreadComments((current) => current.filter((item) => item.id !== localComment.id));
@@ -2783,8 +2930,8 @@ export default function Home() {
     return `![sticker:${name}](${assetUrl(sticker.url)})`;
   }
   function appendDraftSticker(target: 'comment' | 'thread', sticker: DraftSticker) {
-    if (target === 'comment') setCommentDraftStickers((current) => [...current, sticker]);
-    else setThreadDraftStickers((current) => [...current, sticker]);
+    const composer = target === 'comment' ? commentComposerRef.current : threadComposerRef.current;
+    composer?.insertSticker(sticker);
     setStickerPickerTarget(null);
   }
   function sendBoardSticker(target: 'comment' | 'thread', sticker: BoardSticker) {
@@ -2932,13 +3079,13 @@ export default function Home() {
     event.target.value = '';
     await uploadMediaFiles(files);
   }
-  function handleMediaDrop(event: ReactDragEvent<HTMLTextAreaElement>, target: 'description' | 'comment' | 'thread') {
+  function handleMediaDrop(event: ReactDragEvent<HTMLTextAreaElement | HTMLDivElement>, target: 'description' | 'comment' | 'thread') {
     const files = Array.from(event.dataTransfer.files);
     if (!files.length) return;
     event.preventDefault();
     void uploadMediaFiles(files, target);
   }
-  function handleMediaPaste(event: ReactClipboardEvent<HTMLTextAreaElement>, target: 'description' | 'comment' | 'thread') {
+  function handleMediaPaste(event: ReactClipboardEvent<HTMLTextAreaElement | HTMLDivElement>, target: 'description' | 'comment' | 'thread') {
     const files = Array.from(event.clipboardData.files);
     if (!files.length) return;
     event.preventDefault();
@@ -3601,7 +3748,7 @@ export default function Home() {
                 {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
                 {activity.map((item) => <div className="activity-message" key={item.id}><i>Console</i><p><b>@{item.actor_name ?? 'Deleted user'}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>)}
               </div>}
-              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} maxLength={10000} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" draftStickers={commentDraftStickers} onRemoveDraftSticker={(id) => setCommentDraftStickers((current) => current.filter((sticker) => sticker.id !== id))} />{renderStickerComposerButton('comment')}<button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || (!commentDraft.trim() && !commentDraftStickers.length)}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
+              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><InlineStickerComposer ref={commentComposerRef} className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" />{renderStickerComposerButton('comment')}<button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
             </section>
           </aside>
         </div>
@@ -3616,8 +3763,8 @@ export default function Home() {
           {isThreadLoading ? <p className="detail-loading">Загружаем тред…</p> : threadComments.length ? threadComments.map((comment) => <div className="thread-message comment-arrive" key={comment.id}>{renderCommentMessage(comment, '', false)}</div>) : <p className="empty-comments">Пока никто не ответил.</p>}
         </div>
         {!isPublicViewer && <form className="comment-composer thread-composer" onSubmit={addThreadComment}>
-          <MentionTextarea className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} onSubmitShortcut={() => addThreadComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} maxLength={10000} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" draftStickers={threadDraftStickers} onRemoveDraftSticker={(id) => setThreadDraftStickers((current) => current.filter((sticker) => sticker.id !== id))} />{renderStickerComposerButton('thread')}
-          <button className={`voice-record-button ${voiceRecordingTarget === 'thread' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'thread' ? stopVoiceRecording() : void startVoiceRecording('thread')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'thread') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'thread' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'thread' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingThread || (!threadDraft.trim() && !threadDraftStickers.length)}>{isSendingThread ? 'Отправка…' : 'Отправить'}</button>
+          <InlineStickerComposer ref={threadComposerRef} className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} onSubmitShortcut={() => addThreadComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" />{renderStickerComposerButton('thread')}
+          <button className={`voice-record-button ${voiceRecordingTarget === 'thread' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'thread' ? stopVoiceRecording() : void startVoiceRecording('thread')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'thread') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'thread' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'thread' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingThread || !threadDraft.trim()}>{isSendingThread ? 'Отправка…' : 'Отправить'}</button>
         </form>}
       </section>
     </div>}
