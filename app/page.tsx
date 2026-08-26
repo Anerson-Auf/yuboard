@@ -1598,12 +1598,12 @@ export default function Home() {
       if (key === 'c' && canEditBoard && columns[0]) { event.preventDefault(); setComposerOpen(columns[0].id); }
       else if (key === 'f') { event.preventDefault(); setFilterOpen(true); }
       else if (event.key === ' ' && selected) { event.preventDefault(); openCard(selected); }
-      else if (key === 'e' && selected && !isPublicViewer) { event.preventDefault(); setEditingCardDescription(true); }
+      else if (key === 'e' && selected && !isSelectedReadOnly) { event.preventDefault(); setEditingCardDescription(true); }
       else if (event.key === 'Escape' && selected) { event.preventDefault(); setSelected(null); }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [canEditBoard, columns, isPublicViewer, lastOpenedCard, selected]);
+  }, [canEditBoard, columns, isSelectedReadOnly, lastOpenedCard, selected]);
 
   function updateStickerPickerPosition(target: 'comment' | 'thread') {
     const trigger = stickerComposerButtonRefs.current[target];
