@@ -22,9 +22,11 @@ function csrfHeaders() {
 export default function CardReviewPanel({ cardId, canEdit, members }: { cardId: string; canEdit: boolean; members: Member[] }) {
   const [review, setReview] = useState<Review>({ status: 'none', reviewers: [], updated_at: null });
   const [reviewerIds, setReviewerIds] = useState<string[]>([]);
+  const [isReviewerPickerOpen, setReviewerPickerOpen] = useState(false);
+  const [reviewerQuery, setReviewerQuery] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const available = useMemo(() => members.filter((member) => !reviewerIds.includes(member.id)), [members, reviewerIds]);
+  const available = useMemo(() => members.filter((member) => !reviewerIds.includes(member.id) && member.username.toLocaleLowerCase().includes(reviewerQuery.trim().toLocaleLowerCase())), [members, reviewerIds, reviewerQuery]);
 
   useEffect(() => {
     let active = true;
@@ -46,9 +48,11 @@ export default function CardReviewPanel({ cardId, canEdit, members }: { cardId: 
       .finally(() => setSaving(false));
   }
 
+  const initials = (username: string) => username.slice(0, 2).toUpperCase();
+
   return <section className={`card-review-panel status-${review.status}`} aria-label="Проверка карточки">
-    <header><h3>Проверка</h3>{canEdit ? <select aria-label="Статус проверки" value={review.status} disabled={saving} onChange={(event) => { const status = event.target.value as ReviewStatus; setReview((current) => ({ ...current, status })); save(status); }}>{(Object.keys(statusLabels) as ReviewStatus[]).map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}</select> : <b>{statusLabels[review.status]}</b>}</header>
-    {(review.status !== 'none' || review.reviewers.length > 0) && <div className="review-members"><span>Проверяющие</span><div>{review.reviewers.map((member) => <button type="button" key={member.id} className="reviewer-chip" disabled={!canEdit || saving} title={canEdit ? `Убрать @${member.username}` : `@${member.username}`} onClick={() => { const next = reviewerIds.filter((id) => id !== member.id); setReviewerIds(next); save(review.status, next); }}>{member.avatar_url && <img src={member.avatar_url} alt="" />}@{member.username}{canEdit && ' ×'}</button>)}{canEdit && available.length > 0 && <select value="" disabled={saving} aria-label="Добавить проверяющего" onChange={(event) => { const id = event.target.value; if (!id) return; const next = [...reviewerIds, id]; setReviewerIds(next); save(review.status, next); }}><option value="">+ Проверяющий</option>{available.map((member) => <option value={member.id} key={member.id}>@{member.username}</option>)}</select>}</div></div>}
+    <header><div><h3>Проверка</h3><span>Статус и ответственные за приёмку</span></div>{canEdit ? <select aria-label="Статус проверки" value={review.status} disabled={saving} onChange={(event) => { const status = event.target.value as ReviewStatus; setReview((current) => ({ ...current, status })); save(status); }}>{(Object.keys(statusLabels) as ReviewStatus[]).map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}</select> : <b>{statusLabels[review.status]}</b>}</header>
+    {(review.status !== 'none' || review.reviewers.length > 0) && <div className="review-members"><div className="review-members-heading"><span>Проверяющие</span>{canEdit && <button type="button" className={isReviewerPickerOpen ? 'reviewer-add active' : 'reviewer-add'} disabled={saving || available.length === 0} onClick={() => { setReviewerPickerOpen((current) => !current); setReviewerQuery(''); }} aria-expanded={isReviewerPickerOpen}>＋ Добавить</button>}</div><div className="reviewer-chips">{review.reviewers.map((member) => <button type="button" key={member.id} className="reviewer-chip" disabled={!canEdit || saving} title={canEdit ? `Убрать @${member.username}` : `@${member.username}`} onClick={() => { const next = reviewerIds.filter((id) => id !== member.id); setReviewerIds(next); save(review.status, next); }}>{member.avatar_url ? <img src={member.avatar_url} alt="" /> : <i>{initials(member.username)}</i>}<span>@{member.username}</span>{canEdit && <b aria-hidden="true">×</b>}</button>)}</div>{canEdit && isReviewerPickerOpen && <div className="reviewer-picker"><input autoFocus value={reviewerQuery} onChange={(event) => setReviewerQuery(event.target.value)} placeholder="Найти участника" aria-label="Поиск проверяющего" />{available.length ? <div>{available.map((member) => <button type="button" key={member.id} disabled={saving} onClick={() => { const next = [...reviewerIds, member.id]; setReviewerIds(next); setReviewerQuery(''); setReviewerPickerOpen(false); save(review.status, next); }}>{member.avatar_url ? <img src={member.avatar_url} alt="" /> : <i>{initials(member.username)}</i>}<span>@{member.username}</span><b>Добавить</b></button>)}</div> : <p>Подходящих участников нет.</p>}</div>}</div>}
     {error && <p role="alert">{error}</p>}
   </section>;
 }

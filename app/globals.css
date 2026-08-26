@@ -592,7 +592,21 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .inline-sticker-composer { box-sizing: border-box; width: 100%; min-height: 70px; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; outline: 0; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }.inline-sticker-composer:empty::before { color: var(--faint); content: attr(data-placeholder); pointer-events: none; }.inline-sticker-composer:focus, .inline-sticker-composer:hover { border-color: color-mix(in srgb, var(--primary) 62%, var(--line)); background: color-mix(in srgb, var(--primary) 6%, var(--surface-raised)); }.inline-sticker-composer.uploading { cursor: wait; opacity: .7; }
 .inline-draft-sticker { display: inline-flex; width: 54px; height: 54px; align-items: center; justify-content: center; margin: 0 2px; border-radius: 7px; vertical-align: middle; font-size: 42px; line-height: 1; user-select: all; }.inline-draft-sticker img { display: block; max-width: 54px; max-height: 54px; object-fit: contain; }.inline-draft-sticker:focus { outline: 2px solid var(--primary); }
 .comment-text .inline-chat-sticker-link { display: inline-flex; margin: 0 2px; vertical-align: middle; }.comment-text .markdown-media.chat-sticker.inline-chat-sticker { display: inline-block; width: auto; max-width: 88px; max-height: 88px; margin: 0; vertical-align: middle; }.comment-text .chat-sticker-emoji.inline-chat-sticker { display: inline-block; width: auto; margin: 0 2px; vertical-align: middle; font-size: 44px; }
-.card-column-caption { margin: 12px 0 -8px 36px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .05em; text-shadow: -1px -1px 0 rgb(0 0 0 / 65%), 1px -1px 0 rgb(0 0 0 / 65%), -1px 1px 0 rgb(0 0 0 / 65%), 1px 1px 0 rgb(0 0 0 / 65%); text-transform: uppercase; }
+.card-column-caption { margin: 12px 0 -8px 36px; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-shadow: -1px -1px 0 rgb(0 0 0 / 65%), 1px -1px 0 rgb(0 0 0 / 65%), -1px 1px 0 rgb(0 0 0 / 65%), 1px 1px 0 rgb(0 0 0 / 65%); text-transform: uppercase; }
+
+/* Small shared motion language: feedback is visible without making the board
+   feel busy. Every animation is disabled for users who request less motion. */
+@keyframes flowboard-pop-in { from { opacity: 0; transform: translateY(-5px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes flowboard-toast-in { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: no-preference) {
+  .filter-popover, .board-labels-popover, .board-members-popover, .board-milestones-popover, .card-milestone-popover, .column-popover, .card-context-menu, .notifications-popover, .sticker-picker { animation: flowboard-pop-in .18s cubic-bezier(.22, .8, .25, 1) both; transform-origin: top right; }
+  .modal-backdrop { animation: flowboard-pop-in .2s ease both; }
+  .task-modal { animation: flowboard-pop-in .24s cubic-bezier(.22, .8, .25, 1) both; }
+  .toast { animation: flowboard-toast-in .24s cubic-bezier(.22, .8, .25, 1) both; }
+  .attachment-preview, .attachment-file { transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+  .attachment-preview:hover, .attachment-file:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 10px 24px rgb(0 0 0 / 14%); transform: translateY(-2px); }
+  .property-button, .quick-action, .member-plus, .add-task, .add-column { transition: transform .18s ease, color .18s ease, background-color .18s ease, border-color .18s ease; }
+}
 
 /* Persistent, intentionally low-contrast version history. */
 .release-history-widget { position: fixed; z-index: 190; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); display: grid; justify-items: end; pointer-events: none; }.release-history-widget > * { pointer-events: auto; }
