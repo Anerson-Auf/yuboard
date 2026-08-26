@@ -681,6 +681,19 @@ struct UpdateCardRelationRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateDependencyGraphNodePositionRequest {
+    x: i32,
+    y: i32,
+}
+
+#[derive(Serialize, FromRow)]
+struct DependencyGraphNodePositionResponse {
+    card_id: Uuid,
+    x: i32,
+    y: i32,
+}
+
+#[derive(Deserialize)]
 struct UpdateCardPublicVisibilityRequest {
     is_public: bool,
 }
@@ -1561,6 +1574,8 @@ async fn main() {
         .route("/v1/boards/{board_id}/members/{user_id}", patch(update_board_member).delete(remove_board_member))
         .route("/v1/boards/{board_id}", get(get_board).patch(update_board).delete(delete_board))
         .route("/v1/boards/{board_id}/layout", get(get_board_layout).patch(update_board_layout))
+        .route("/v1/boards/{board_id}/dependency-layout", get(get_dependency_graph_node_positions))
+        .route("/v1/boards/{board_id}/dependency-layout/{card_id}", put(update_dependency_graph_node_position))
         .route("/v1/boards/{board_id}/freeform/cards", get(get_board_freeform_card_positions))
         .route("/v1/boards/{board_id}/freeform/cards/{card_id}", put(update_board_freeform_card_position).delete(clear_board_freeform_card_position))
         .route("/v1/boards/{board_id}/freeform/live", get(get_freeform_live).post(update_freeform_live))
@@ -3049,6 +3064,30 @@ async fn clear_board_freeform_card_position(State(state): State<AppState>, curre
     if removed.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "freeform_card_not_found", "Card is not detached on this board.".to_owned())); }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_dependency_graph_node_positions(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<DependencyGraphNodePositionResponse>> {
+    ensure_board_layout_access(database(&state)?, board_id, current.id).await?;
+    let positions = sqlx::query_as::<_, DependencyGraphNodePositionResponse>(
+        "SELECT card_id, x, y FROM board_dependency_node_positions WHERE board_id = $1 ORDER BY updated_at DESC",
+    )
+    .bind(board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
+    Ok(Json(positions))
+}
+
+async fn update_dependency_graph_node_position(State(state): State<AppState>, current: CurrentUser, Path((board_id, card_id)): Path<(Uuid, Uuid)>, Json(request): Json<UpdateDependencyGraphNodePositionRequest>) -> ApiResult<DependencyGraphNodePositionResponse> {
+    if !(0..=200_000).contains(&request.x) || !(0..=200_000).contains(&request.y) {
+        return Err(ApiError::bad_request("Dependency graph coordinates must be between 0 and 200000."));
+    }
+    let pool = database(&state)?;
+    ensure_board_permission(pool, board_id, current.id, "edit_cards").await?;
+    let position = sqlx::query_as::<_, DependencyGraphNodePositionResponse>(
+        "INSERT INTO board_dependency_node_positions (board_id, card_id, x, y) SELECT $1, c.id, $2, $3 FROM cards c WHERE c.id = $4 AND c.board_id = $1 AND c.archived_at IS NULL ON CONFLICT (board_id, card_id) DO UPDATE SET x = EXCLUDED.x, y = EXCLUDED.y, updated_at = now() RETURNING card_id, x, y",
+    )
+    .bind(board_id).bind(request.x).bind(request.y).bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found in this board.".to_owned()))?;
+    let _ = state.events.send(());
+    Ok(Json(position))
 }
 
 async fn freeform_live_snapshot(state: &AppState, board_id: Uuid) -> ApiResult<FreeformLiveResponse> {
