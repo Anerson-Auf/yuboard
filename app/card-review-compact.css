@@ -5,4 +5,4 @@
 .card-priority-review-row { position: relative; }
 .card-priority-review-row:has(.review-compact-popover) { z-index: 90; }
 .card-review-panel.compact { isolation: isolate; }
-.review-compact-popover { z-index: 1200; left: 0; right: auto; }
+.review-compact-popover { z-index: 1200; left: auto; right: 0; }
