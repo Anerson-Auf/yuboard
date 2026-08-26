@@ -648,6 +648,7 @@ struct ListResponse {
     title: String,
     grid_column: i32,
     grid_row: i32,
+    card_limit: i32,
 }
 
 #[derive(Deserialize)]
@@ -686,7 +687,10 @@ struct UpdateCardPublicVisibilityRequest {
 
 #[derive(Deserialize)]
 struct UpdateListRequest {
-    title: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    card_limit: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -756,6 +760,27 @@ struct DiscordAttachmentRequest {
     message_id: Option<String>,
     #[serde(default)]
     attachment_id: Option<String>,
+}
+
+// Flowboard keeps its own UUID for the rendered comment, while these fields
+// identify the original Discord asset when its signed CDN URL expires.
+struct DiscordAttachmentUpsert {
+    id: Uuid,
+    url: String,
+    filename: String,
+    media_type: String,
+    byte_size: i64,
+    channel_id: Option<String>,
+    message_id: Option<String>,
+    attachment_id: Option<String>,
+}
+
+#[derive(FromRow)]
+struct CommentAttachmentReference {
+    id: Uuid,
+    discord_channel_id: Option<String>,
+    discord_message_id: Option<String>,
+    discord_attachment_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2018,9 +2043,10 @@ fn is_external_attachment_url(url: &reqwest::Url) -> bool {
 }
 
 fn discord_attachment_refresh_from_env() -> Option<DiscordAttachmentRefresh> {
-    let endpoint = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_URL").ok().filter(|value| !value.trim().is_empty());
-    let signing_secret = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_SIGNING_SECRET").ok().filter(|value| value.trim().len() >= 32);
+    let endpoint = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_URL").ok().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
+    let signing_secret = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_SIGNING_SECRET").ok().map(|value| value.trim().to_owned()).filter(|value| value.len() >= 32);
     let (Some(endpoint), Some(signing_secret)) = (endpoint, signing_secret) else {
+        tracing::warn!("Discord attachment refresh is disabled: configure FLOWBOARD_DISCORD_MEDIA_REFRESH_URL and FLOWBOARD_DISCORD_MEDIA_REFRESH_SIGNING_SECRET");
         return None;
     };
     match reqwest::Url::parse(&endpoint) {
@@ -2815,7 +2841,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
-    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row FROM lists WHERE board_id = $1 ORDER BY position, id")
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row, card_limit FROM lists WHERE board_id = $1 ORDER BY position, id")
         .bind(board_id)
         .fetch_all(pool)
         .await
@@ -3709,7 +3735,7 @@ async fn create_list(State(state): State<AppState>, current: CurrentUser, Path(b
     let grid_column = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_column), 0) + 1 FROM lists WHERE board_id = $1")
         .bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     let list = sqlx::query_as::<_, ListResponse>(
-        "INSERT INTO lists (id, board_id, title, position, grid_column, grid_row) VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) FROM lists WHERE board_id = $2), 0) + 1000, $4, 1) RETURNING id, title, grid_column, grid_row",
+        "INSERT INTO lists (id, board_id, title, position, grid_column, grid_row) VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) FROM lists WHERE board_id = $2), 0) + 1000, $4, 1) RETURNING id, title, grid_column, grid_row, card_limit",
     )
     .bind(Uuid::new_v4()).bind(board_id).bind(title).bind(grid_column)
     .fetch_one(pool).await.map_err(ApiError::internal)?;
@@ -3815,11 +3841,17 @@ async fn delete_milestone(State(state): State<AppState>, current: CurrentUser, P
 async fn update_list(State(state): State<AppState>, current: CurrentUser, Path(list_id): Path<Uuid>, Json(request): Json<UpdateListRequest>) -> ApiResult<ListResponse> {
     ensure_list_permission(database(&state)?, list_id, current.id, "create_lists").await?;
     let actor_id = current.id;
-    let title = valid_text(&request.title, "title", 200)?;
+    let existing = sqlx::query_as::<_, (String, i32)>("SELECT title, card_limit FROM lists WHERE id = $1")
+        .bind(list_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "list_not_found", "List was not found.".to_owned()))?;
+    let title = request.title.as_deref().map(|value| valid_text(value, "title", 200).map(ToOwned::to_owned)).transpose()?.unwrap_or(existing.0);
+    let card_limit = request.card_limit.unwrap_or(existing.1);
+    if !(0..=10_000).contains(&card_limit) { return Err(ApiError::bad_request("Card limit must be between 0 and 10000.")); }
     let list = sqlx::query_as::<_, ListResponse>(
-        "UPDATE lists l SET title = $1, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE l.id = $2 AND l.board_id = b.id AND m.user_id = $3 RETURNING l.id, l.title, l.grid_column, l.grid_row",
+        "UPDATE lists l SET title = $1, card_limit = $2, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE l.id = $3 AND l.board_id = b.id AND m.user_id = $4 RETURNING l.id, l.title, l.grid_column, l.grid_row, l.card_limit",
     )
     .bind(title)
+    .bind(card_limit)
     .bind(list_id)
     .bind(actor_id)
     .fetch_optional(database(&state)?)
@@ -4567,7 +4599,7 @@ async fn create_discord_card(State(state): State<AppState>, integration: Discord
 }
 
 async fn list_discord_board_lists(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<ListResponse>> {
-    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row FROM lists WHERE board_id = $1 ORDER BY position, id")
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row, card_limit FROM lists WHERE board_id = $1 ORDER BY position, id")
         .bind(integration.board_id)
         .fetch_all(database(&state)?)
         .await
@@ -4891,12 +4923,6 @@ async fn archive_discord_card(State(state): State<AppState>, integration: Discor
 async fn create_discord_comment(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>, Json(request): Json<CreateDiscordCommentRequest>) -> ApiResult<CommentResponse> {
     let pool = database(&state)?;
     let message_id = valid_text(&request.message_id, "message_id", 128)?.to_owned();
-    if let Some(comment_id) = sqlx::query_scalar::<_, Uuid>("SELECT id FROM comments WHERE discord_integration_id = $1 AND discord_message_id = $2")
-        .bind(integration.id).bind(&message_id).fetch_optional(pool).await.map_err(ApiError::internal)? {
-        let comment = load_card_comments(pool, card_id, None).await?.into_iter().find(|comment| comment.id == comment_id)
-            .ok_or_else(|| ApiError::bad_request("Discord comment belongs to another card."))?;
-        return Ok(Json(comment));
-    }
     let card_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cards WHERE id = $1 AND board_id = $2 AND archived_at IS NULL)")
         .bind(card_id).bind(integration.board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
@@ -4921,9 +4947,66 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
             return Err(ApiError::bad_request("Discord attachments must be JPEG, PNG, GIF, WebP, MP4, WebM, or MOV."));
         }
         if !(0..=50 * 1024 * 1024).contains(&attachment.byte_size) { return Err(ApiError::bad_request("Discord attachment size must be between 0 and 50 MiB.")); }
-        let attachment_id = Uuid::new_v4();
-        parts.push(discord_media_markdown(&filename, &attachment.media_type, &format!("/v1/attachments/{attachment_id}/content")));
-        attachment_rows.push((attachment_id, url, filename, attachment.media_type.clone(), attachment.byte_size, discord_reference.0, discord_reference.1, discord_reference.2));
+        attachment_rows.push(DiscordAttachmentUpsert {
+            id: Uuid::new_v4(), url, filename, media_type: attachment.media_type.clone(), byte_size: attachment.byte_size,
+            channel_id: discord_reference.0, message_id: discord_reference.1, attachment_id: discord_reference.2,
+        });
+    }
+
+    if let Some((comment_id, existing_card_id, existing_body)) = sqlx::query_as::<_, (Uuid, Uuid, String)>("SELECT id, card_id, body FROM comments WHERE discord_integration_id = $1 AND discord_message_id = $2")
+        .bind(integration.id).bind(&message_id).fetch_optional(pool).await.map_err(ApiError::internal)? {
+        if existing_card_id != card_id { return Err(ApiError::bad_request("Discord comment belongs to another card.")); }
+
+        // Replays are normal during media resync. Keep the Flowboard UUIDs
+        // embedded in the comment body, but replace stale CDN URLs and add the
+        // durable source identifiers required by the refresh endpoint.
+        let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+        let existing_attachments = sqlx::query_as::<_, CommentAttachmentReference>(
+            "SELECT id, discord_channel_id, discord_message_id, discord_attachment_id FROM attachments WHERE card_id = $1 AND $2 LIKE '%' || '/v1/attachments/' || id::text || '/content' || '%' ORDER BY strpos($2, '/v1/attachments/' || id::text || '/content')",
+        )
+        .bind(card_id).bind(&existing_body).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
+        let mut used_attachment_ids = HashSet::new();
+        let mut appended_media = Vec::new();
+        for attachment in attachment_rows {
+            let exact_match = attachment.attachment_id.as_deref().and_then(|discord_attachment_id| existing_attachments.iter().find(|existing| {
+                !used_attachment_ids.contains(&existing.id)
+                    && existing.discord_channel_id.as_deref() == attachment.channel_id.as_deref()
+                    && existing.discord_message_id.as_deref() == attachment.message_id.as_deref()
+                    && existing.discord_attachment_id.as_deref() == Some(discord_attachment_id)
+            }));
+            // Legacy rows have no stable source identifier. Discord preserves
+            // attachment order within a message, so pair those rows in order.
+            let existing = exact_match.or_else(|| existing_attachments.iter().find(|existing| {
+                !used_attachment_ids.contains(&existing.id) && existing.discord_attachment_id.is_none()
+            }));
+            if let Some(existing) = existing {
+                sqlx::query("UPDATE attachments SET external_url = $1, original_name = $2, media_type = $3, byte_size = $4, discord_channel_id = $5, discord_message_id = $6, discord_attachment_id = $7 WHERE id = $8")
+                    .bind(&attachment.url).bind(&attachment.filename).bind(&attachment.media_type).bind(attachment.byte_size)
+                    .bind(&attachment.channel_id).bind(&attachment.message_id).bind(&attachment.attachment_id).bind(existing.id)
+                    .execute(&mut *transaction).await.map_err(ApiError::internal)?;
+                used_attachment_ids.insert(existing.id);
+            } else {
+                sqlx::query("INSERT INTO attachments (id, card_id, uploaded_by, object_key, original_name, media_type, byte_size, external_url, discord_channel_id, discord_message_id, discord_attachment_id) VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, $8, $9)")
+                    .bind(attachment.id).bind(card_id).bind(&attachment.filename).bind(&attachment.media_type).bind(attachment.byte_size)
+                    .bind(&attachment.url).bind(&attachment.channel_id).bind(&attachment.message_id).bind(&attachment.attachment_id)
+                    .execute(&mut *transaction).await.map_err(ApiError::internal)?;
+                appended_media.push(discord_media_markdown(&attachment.filename, &attachment.media_type, &format!("/v1/attachments/{}/content", attachment.id)));
+            }
+        }
+        if !appended_media.is_empty() {
+            let separator = if existing_body.is_empty() { "" } else { "\n" };
+            let body = valid_text(&format!("{existing_body}{separator}{}", appended_media.join("\n")), "body", 10_000)?.to_owned();
+            sqlx::query("UPDATE comments SET body = $1 WHERE id = $2").bind(body).bind(comment_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        }
+        transaction.commit().await.map_err(ApiError::internal)?;
+        let comment = load_card_comments(pool, card_id, None).await?.into_iter().find(|comment| comment.id == comment_id)
+            .ok_or_else(|| ApiError::bad_request("Discord comment could not be loaded."))?;
+        let _ = state.events.send(());
+        return Ok(Json(comment));
+    }
+
+    for attachment in &attachment_rows {
+        parts.push(discord_media_markdown(&attachment.filename, &attachment.media_type, &format!("/v1/attachments/{}/content", attachment.id)));
     }
     let body = valid_text(&parts.join("\n"), "body", 10_000)?.to_owned();
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
@@ -4931,9 +5014,9 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
     sqlx::query("INSERT INTO comments (id, card_id, author_id, body, external_author_name, external_author_avatar_url, discord_integration_id, discord_message_id) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)")
         .bind(comment_id).bind(card_id).bind(&body).bind(&author_name).bind(&author_avatar_url).bind(integration.id).bind(&message_id)
         .execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    for (attachment_id, url, filename, media_type, byte_size, channel_id, message_id, discord_attachment_id) in attachment_rows {
+    for attachment in attachment_rows {
         sqlx::query("INSERT INTO attachments (id, card_id, uploaded_by, object_key, original_name, media_type, byte_size, external_url, discord_channel_id, discord_message_id, discord_attachment_id) VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, $8, $9)")
-            .bind(attachment_id).bind(card_id).bind(filename).bind(media_type).bind(byte_size).bind(url).bind(channel_id).bind(message_id).bind(discord_attachment_id)
+            .bind(attachment.id).bind(card_id).bind(attachment.filename).bind(attachment.media_type).bind(attachment.byte_size).bind(attachment.url).bind(attachment.channel_id).bind(attachment.message_id).bind(attachment.attachment_id)
             .execute(&mut *transaction).await.map_err(ApiError::internal)?;
     }
     transaction.commit().await.map_err(ApiError::internal)?;
