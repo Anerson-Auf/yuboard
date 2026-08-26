@@ -922,6 +922,10 @@ export default function Home() {
   const [isSavingBoardLabel, setSavingBoardLabel] = useState(false);
   const [boardTitle, setBoardTitle] = useState('');
   const [boardBackgroundUrl, setBoardBackgroundUrl] = useState<string | null>(null);
+  // A remote URL may be saved by a user and later become unavailable (403/404).
+  // This is deliberately display-only: never overwrite the board setting just
+  // because a visitor cannot fetch an external image.
+  const [boardBackgroundFailed, setBoardBackgroundFailed] = useState(false);
   const [boardBackgroundFit, setBoardBackgroundFit] = useState<BoardBackgroundFit>('cover');
   const [boardBackgroundPosition, setBoardBackgroundPosition] = useState<BoardBackgroundPosition>('center');
   const [boardVisibility, setBoardVisibility] = useState<'public' | 'private'>('private');
@@ -1053,7 +1057,8 @@ export default function Home() {
   const dueDays = useMemo(() => calendarDays(dueCursor), [dueCursor]);
   const currentMember = account ? memberFromApi({ id: account.user.id, username: account.user.username, avatar_url: account.user.avatar_url }) : { id: '', initials: '—', color: 'violet', name: 'Пользователь' };
   const boardPresence = useBoardPresence({ boardId, currentUserId: account?.user.id, activeCardId: selected && typeof selected.id === 'string' ? selected.id : null, editingDescription: isEditingCardDescription, isBoardOpen: view === 'board' });
-  const boardBackgroundStyle = view === 'board' && boardBackgroundUrl ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${assetUrl(boardBackgroundUrl)}")`, backgroundSize: boardBackgroundFit === 'fill' ? '100% 100%' : boardBackgroundFit, backgroundPosition: boardBackgroundPosition === 'top' ? 'center top' : boardBackgroundPosition === 'bottom' ? 'center bottom' : 'center', backgroundRepeat: 'no-repeat' } : undefined;
+  const usesDefaultBoardBackground = view === 'board' && (!boardBackgroundUrl || boardBackgroundFailed);
+  const boardBackgroundStyle = view === 'board' && boardBackgroundUrl && !boardBackgroundFailed ? { backgroundImage: `linear-gradient(rgb(18 17 16 / 48%), rgb(18 17 16 / 72%)), url("${assetUrl(boardBackgroundUrl)}")`, backgroundSize: boardBackgroundFit === 'fill' ? '100% 100%' : boardBackgroundFit, backgroundPosition: boardBackgroundPosition === 'top' ? 'center top' : boardBackgroundPosition === 'bottom' ? 'center bottom' : 'center', backgroundRepeat: 'no-repeat' } : undefined;
 
   const visibleColumns = useMemo(() => columns.map((column) => {
     const cards = column.cards.filter((card) => {
@@ -1507,6 +1512,22 @@ export default function Home() {
     previousWorkspaceBackgroundDraftRef.current = workspaceBackgroundDraft;
     if (workspaceBackgroundEditorId && previous.trim() && !workspaceBackgroundDraft.trim()) clearWorkspaceBackground();
   }, [workspaceBackgroundDraft, workspaceBackgroundEditorId]);
+
+  useEffect(() => {
+    setBoardBackgroundFailed(false);
+    if (!boardBackgroundUrl) return;
+
+    let disposed = false;
+    const image = new Image();
+    image.onload = () => { if (!disposed) setBoardBackgroundFailed(false); };
+    image.onerror = () => {
+      if (disposed) return;
+      setBoardBackgroundFailed(true);
+      showToast('Фон проекта недоступен — показан стандартный фон');
+    };
+    image.src = assetUrl(boardBackgroundUrl);
+    return () => { disposed = true; image.onload = null; image.onerror = null; };
+  }, [boardBackgroundUrl, boardId]);
 
   useEffect(() => {
     const previous = boardBackgroundDisplayRef.current;
@@ -3443,6 +3464,7 @@ export default function Home() {
     setWorkspaceMembers(data.members.map(memberFromApi));
     setWorkspaceId(data.workspace_id);
     setBoardTitle(data.title);
+    setBoardBackgroundFailed(false);
     setBoardBackgroundUrl(data.background_image_url);
     boardBackgroundDisplayRef.current = { fit: data.background_fit ?? 'cover', position: data.background_position ?? 'center' };
     setBoardBackgroundFit(data.background_fit ?? 'cover');
@@ -3725,7 +3747,7 @@ export default function Home() {
     return <main className="app-shell dark auth-shell"><section className="auth-card"><button className="brand auth-brand" type="button" onClick={() => setAuthMode('login')}><span className="brand-mark">✓</span><span>Flowboard</span></button><p className="eyebrow">FLOWBOARD</p><h1>{isRegistering ? inviteToken ? 'Активировать аккаунт' : 'Создать первый аккаунт' : 'С возвращением'}</h1><p className="auth-copy">{isRegistering ? inviteToken ? 'Выберите уникальный ник и пароль.' : 'Первый аккаунт станет system owner.' : 'Войдите по нику, чтобы продолжить.'}</p><form className="auth-form" onSubmit={submitAuth}><label>Ник<input value={authName} onChange={(event) => setAuthName(event.target.value)} maxLength={32} required autoComplete="username" placeholder="your_nick" /></label><label>Пароль<input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} minLength={10} maxLength={256} required autoComplete={isRegistering ? 'new-password' : 'current-password'} /></label>{authError && <p className="auth-error">{authError}</p>}<button className="create-button auth-submit" type="submit" disabled={isAuthorizing}>{isAuthorizing ? 'Подключаем…' : isRegistering ? inviteToken ? 'Активировать' : 'Создать аккаунт' : 'Войти'}</button></form></section><ReleaseHistoryWidget /></main>;
   }
 
-  return <main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' ? 'has-board-background' : ''} ${!boardBackgroundUrl && view === 'board' ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
+  return <main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
     <header className="topbar">
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
       <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам" aria-label="Поиск по задачам" /></label>
@@ -3743,7 +3765,7 @@ export default function Home() {
     </header>
     <input ref={workspaceBackgroundFileRef} className="workspace-background-file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadWorkspaceBackground} />
 
-    <AmbientStarfall />
+    {(view === 'home' || usesDefaultBoardBackground) && <AmbientStarfall />}
 
     {isProfileOpen && account && <div className="modal-backdrop" role="presentation" onMouseDown={() => setProfileOpen(false)}><section className="archive-modal profile-modal" role="dialog" aria-modal="true" aria-label="Профиль" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setProfileOpen(false)} aria-label="Закрыть профиль">×</button>{profilePanel === 'overview' ? <><header className="profile-modal-head"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /><div><p className="eyebrow">ПРОФИЛЬ</p><div className="profile-name-row"><h2>@{account.user.username}</h2><div className="profile-role-list">{profileRoles.filter((role) => myProfileRoleIds.includes(role.id)).map((role) => <ProfileRoleChip role={role} key={role.id} compact />)}<button className="profile-role-plus" type="button" onClick={() => setProfileRolePickerOpen((current) => !current)} aria-label="Выбрать роли">＋</button></div></div>{isProfileRolePickerOpen && <div className="profile-role-picker"><b>Мои роли</b>{profileRoles.length ? profileRoles.map((role) => <button type="button" key={role.id} className={myProfileRoleIds.includes(role.id) ? 'selected' : ''} onClick={() => toggleSelfProfileRole(role)}><ProfileRoleChip role={role} />{myProfileRoleIds.includes(role.id) && <span>✓</span>}</button>) : <p>System owner ещё не создал роли.</p>}</div>}</div></header><div className="profile-action-list"><button onClick={() => { setProfileName(account.user.username); setProfilePanel('username'); }}>Изменить ник <span>›</span></button><button onClick={() => setProfilePanel('password')}>Изменить пароль <span>›</span></button><label>Изменить аватар<input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadProfileAvatar} disabled={isSavingProfile} /></label></div><button className="profile-signout" onClick={signOut}>Выйти из аккаунта</button></> : profilePanel === 'username' ? <><button className="text-action" onClick={() => setProfilePanel('overview')}>← Профиль</button><h2>Изменить ник</h2><form className="profile-form" onSubmit={saveProfileName}><label>Новый ник<input autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={32} /></label><div><button type="button" className="secondary-button" onClick={() => setProfilePanel('overview')}>Отмена</button><button className="create-button" type="submit" disabled={isSavingProfile}>Сохранить</button></div></form></> : <><button className="text-action" onClick={() => setProfilePanel('overview')}>← Профиль</button><h2>Изменить пароль</h2><form className="profile-form" onSubmit={changeProfilePassword}><label>Текущий пароль<input autoFocus type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>Новый пароль<input type="password" value={nextPassword} onChange={(event) => setNextPassword(event.target.value)} minLength={10} /></label><div><button type="button" className="secondary-button" onClick={() => setProfilePanel('overview')}>Отмена</button><button className="create-button" type="submit" disabled={isSavingProfile}>Сохранить</button></div></form></>}{profileError && <p className="profile-error">{profileError}</p>}</section></div>}
 
