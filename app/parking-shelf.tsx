@@ -20,6 +20,7 @@ export type ParkingCard = {
   title: string;
   description: string;
   priority: number;
+  frozen?: boolean;
   createdAt: string;
   completedAt?: string | null;
   startAt?: string;

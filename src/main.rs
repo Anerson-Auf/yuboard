@@ -663,6 +663,7 @@ struct UpdateCardRequest {
     title: Option<String>,
     description: Option<String>,
     priority: Option<i16>,
+    is_frozen: Option<bool>,
     #[serde(default)]
     start_at: Option<Option<String>>,
 }
@@ -1165,6 +1166,7 @@ struct BoardCardRow {
     title: String,
     description: String,
     priority: i16,
+    is_frozen: bool,
     last_activity_at: Option<String>,
     is_public: bool,
     background_image_url: Option<String>,
@@ -1258,6 +1260,7 @@ struct BoardCard {
     title: String,
     description: String,
     priority: i16,
+    is_frozen: bool,
     last_activity_at: Option<String>,
     is_public: bool,
     background_image_url: Option<String>,
@@ -2862,7 +2865,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.start_at::text AS start_at, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ($2::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM card_polls p WHERE p.card_id = c.id AND NOT EXISTS(SELECT 1 FROM card_poll_votes v WHERE v.poll_id = p.id AND v.user_id = $2))) AS has_unvoted_polls, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, c.is_frozen, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.start_at::text AS start_at, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ($2::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM card_polls p WHERE p.card_id = c.id AND NOT EXISTS(SELECT 1 FROM card_poll_votes v WHERE v.poll_id = p.id AND v.user_id = $2))) AS has_unvoted_polls, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -2913,6 +2916,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         title: card.title,
         description: card.description,
         priority: card.priority,
+        is_frozen: card.is_frozen,
         last_activity_at: card.last_activity_at,
         is_public: card.is_public,
         background_image_url: card.background_image_url,
@@ -5395,12 +5399,13 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
         Some(_) => return Err(ApiError::bad_request("priority must be between 0 and 5.")),
         None => None,
     };
+    let is_frozen = request.is_frozen;
     let start_at = match request.start_at {
         Some(Some(value)) => Some(Some(valid_due_at(&value)?)),
         Some(None) => Some(None),
         None => None,
     };
-    if title.is_none() && description.is_none() && priority.is_none() && start_at.is_none() { return Err(ApiError::bad_request("At least one editable field is required.")); }
+    if title.is_none() && description.is_none() && priority.is_none() && is_frozen.is_none() && start_at.is_none() { return Err(ApiError::bad_request("At least one editable field is required.")); }
     let text_change_detail = match (title.is_some(), description.is_some()) {
         (true, true) => "Название и описание карточки",
         (true, false) => "Название карточки",
@@ -5409,16 +5414,18 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
     };
     let description_changed = description.is_some();
     let priority_detail = priority.map(|value| if value == 0 { "Приоритет снят".to_owned() } else { format!("Приоритет: {value}/5") });
+    let freeze_detail = is_frozen.map(|value| if value { "Карточка заморожена" } else { "Карточка разморожена" });
     if let Some(description) = description.as_deref() {
         sqlx::query("INSERT INTO card_description_versions (id, card_id, description, created_by) SELECT $1, c.id, c.description, $3 FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $3 WHERE c.id = $2 AND c.archived_at IS NULL AND b.archived_at IS NULL AND c.description IS DISTINCT FROM $4 AND flowboard_has_permission(b.workspace_id, $3, 'edit_cards'::workspace_permission) AND (bm.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $3 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3 AND wm.role IN ('owner', 'full_access')))")
             .bind(Uuid::new_v4()).bind(card_id).bind(actor_id).bind(description).execute(database(&state)?).await.map_err(ApiError::internal)?;
     }
     let card = sqlx::query_as::<_, CardResponse>(
-        "UPDATE cards c SET title = COALESCE($1, c.title), description = COALESCE($2, c.description), priority = COALESCE($3, c.priority), start_at = CASE WHEN $4 THEN $5 ELSE c.start_at END, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $6 AND c.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $7 RETURNING c.id, c.list_id, c.title, c.description, c.start_at::text AS start_at",
+        "UPDATE cards c SET title = COALESCE($1, c.title), description = COALESCE($2, c.description), priority = COALESCE($3, c.priority), is_frozen = COALESCE($4, c.is_frozen), start_at = CASE WHEN $5 THEN $6 ELSE c.start_at END, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE c.id = $7 AND c.board_id = b.id AND c.archived_at IS NULL AND m.user_id = $8 RETURNING c.id, c.list_id, c.title, c.description, c.start_at::text AS start_at",
     )
     .bind(title)
     .bind(description)
     .bind(priority)
+    .bind(is_frozen)
     .bind(start_at.is_some())
     .bind(start_at.flatten())
     .bind(card_id)
@@ -5430,6 +5437,8 @@ async fn update_card(State(state): State<AppState>, current: CurrentUser, Path(c
     if description_changed { replace_card_mentions(database(&state)?, card.id, actor_id, "card_description", card.id, &card.description).await?; }
     if priority_detail.is_some() {
         record_card_activity(database(&state)?, card.id, actor_id, "Изменена задача", priority_detail.as_deref().unwrap()).await;
+    } else if let Some(detail) = freeze_detail {
+        record_card_activity(database(&state)?, card.id, actor_id, detail, "").await;
     } else {
         record_card_edit_activity(database(&state)?, card.id, actor_id, text_change_detail).await;
     }

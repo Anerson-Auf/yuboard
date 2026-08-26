@@ -31,14 +31,14 @@ type Milestone = { id: string; name: string; description: string; color: string;
 type BoardSticker = { id: string; name: string; media_type: string; url: string };
 type DraftSticker = { id: string; name: string; body: string; emoji?: string; url?: string };
 type CommentReaction = { emoji: string; count: number; reacted: boolean };
-type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; startAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; hasUnvotedPolls?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
+type Card = { id: EntityId; title: string; description?: string; priority?: number; frozen?: boolean; lastActivityAt?: string; startAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; hasUnvotedPolls?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
 type Column = { id: EntityId; title: string; cardLimit: number; cards: Card[] };
 type View = 'home' | 'board';
 type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
 type BoardBackgroundPosition = 'center' | 'top' | 'bottom';
 type ApiMember = { id: string; username: string; avatar_url?: string | null };
-type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; can_admin: boolean; labels: Label[]; milestones: Milestone[]; stickers?: BoardSticker[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; card_limit: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; start_at: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_media_type: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; has_unread_comments: boolean; has_unvoted_polls: boolean; labels: Label[]; roles?: ProfileRole[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
+type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; can_admin: boolean; labels: Label[]; milestones: Milestone[]; stickers?: BoardSticker[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; card_limit: number; cards: { id: string; title: string; description: string; priority: number; is_frozen: boolean; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; start_at: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_media_type: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; has_unread_comments: boolean; has_unvoted_polls: boolean; labels: Label[]; roles?: ProfileRole[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
@@ -54,7 +54,7 @@ type AuthAccount = { user: { id: string; username: string; avatar_url: string | 
 type AuthState = 'checking' | 'signed-out' | 'signed-in' | 'public';
 type Workspace = { id: string; name: string; background_image_url?: string | null; can_manage?: boolean };
 type BoardSummary = { id: string; title: string; visibility: string };
-type FilterMode = 'all' | 'assigned' | 'my_roles' | 'due' | 'overdue';
+type FilterMode = 'all' | 'assigned' | 'my_roles' | 'due' | 'overdue' | 'unread';
 type CardSort = 'manual' | 'priority' | 'activity';
 type BoardViewMode = 'standard' | 'freeform' | 'dependencies';
 type BoardContentMode = 'columns' | 'members' | 'schedule';
@@ -120,12 +120,13 @@ function assetUrl(url: string | null | undefined) {
   return /^(?:https?:|data:|blob:)/i.test(url) ? url : `${API_URL}${url}`;
 }
 
-function CardCover({ card }: { card: Pick<Card, 'coverUrl' | 'coverMediaType' | 'coverMode' | 'hasUnvotedPolls'> }) {
+function CardCover({ card }: { card: Pick<Card, 'coverUrl' | 'coverMediaType' | 'coverMode' | 'hasUnvotedPolls' | 'frozen'> }) {
   const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => { setLoadFailed(false); }, [card.coverUrl]);
-  if (!card.coverUrl || loadFailed) return <CardPollAttention card={card} />;
+  const frozenBadge = card.frozen ? <span className="card-frozen-badge" title="Карточка заморожена" aria-label="Карточка заморожена">❄</span> : null;
+  if (!card.coverUrl || loadFailed) return <>{frozenBadge}<CardPollAttention card={card} /></>;
   const isVideo = card.coverMediaType?.startsWith('video/');
-  return <><CardPollAttention card={card} /><div className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
+  return <>{frozenBadge}<CardPollAttention card={card} /><div className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
     {isVideo
       ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onError={() => setLoadFailed(true)} onLoadedMetadata={(event) => { event.currentTarget.controls = false; }} />
       : <img src={assetUrl(card.coverUrl)} alt="" onError={() => setLoadFailed(true)} />}
@@ -963,6 +964,7 @@ export default function Home() {
   const [authPassword, setAuthPassword] = useState('');
   const [inviteToken] = useState<string | null>(() => typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('invite'));
   const [sharedBoardId, setSharedBoardId] = useState<string | null>(() => typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('board'));
+  const [sharedCardId, setSharedCardId] = useState<string | null>(() => typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('card'));
   const [authError, setAuthError] = useState('');
   const [isAuthorizing, setAuthorizing] = useState(false);
   const [isProfileOpen, setProfileOpen] = useState(false);
@@ -1096,6 +1098,7 @@ export default function Home() {
       title: card.title,
       description: card.description,
       priority: card.priority || undefined,
+      frozen: card.frozen,
       startAt: card.startAt,
       dueAt: card.dueAt,
       completedAt: card.completedAt ?? undefined,
@@ -1152,6 +1155,7 @@ export default function Home() {
       if (filterMode === 'my_roles') return card.roles.some((role) => myProfileRoleIds.includes(role.id));
       if (filterMode === 'due') return Boolean(card.dueAt);
       if (filterMode === 'overdue') return Boolean(card.dueAt && new Date(card.dueAt).getTime() < Date.now());
+      if (filterMode === 'unread') return Boolean(card.hasUnreadMentions || card.hasUnreadComments || card.hasUnvotedPolls);
       return true;
     });
     // Manual order keeps completed work out of the active queue. The actual
@@ -1178,6 +1182,14 @@ export default function Home() {
   const freeformDetachedCards = useMemo(() => visibleColumns.flatMap((column) => column.cards
     .filter((card) => Boolean(freeformCardLayout[String(card.id)]))
     .map((card) => ({ card, listId: column.id, position: freeformCardLayout[String(card.id)] }))), [freeformCardLayout, visibleColumns]);
+
+  useEffect(() => {
+    document.querySelectorAll<HTMLElement>('[data-list-id]').forEach((element) => {
+      const column = columns.find((item) => String(item.id) === element.dataset.listId);
+      const isNearLimit = Boolean(column?.cardLimit && column.cards.length >= Math.max(1, column.cardLimit - 1));
+      element.classList.toggle('limit-warning', isNearLimit);
+    });
+  }, [columns]);
 
   const freeformCanvasSize = useMemo(() => {
     const positions = renderedColumns.map((column, index) => freeformLayout[String(column.id)] ?? { x: index * 336, y: 0 });
@@ -1356,6 +1368,14 @@ export default function Home() {
     setPendingNotificationCardId(null);
     openCard(card);
   }, [columns, pendingNotificationCardId]);
+
+  useEffect(() => {
+    if (!sharedCardId || !boardId) return;
+    const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === sharedCardId);
+    if (!card) return;
+    setSharedCardId(null);
+    openCard(card);
+  }, [boardId, columns, sharedCardId]);
 
   useEffect(() => {
     if (persistence !== 'connected' || typeof selectedCardId !== 'string' || isParkingCardId(selectedCardId) || uploadingAttachmentCardIdRef.current === selectedCardId) return;
@@ -1864,8 +1884,10 @@ export default function Home() {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
     if (nextBoardId) url.searchParams.set('board', nextBoardId); else url.searchParams.delete('board');
+    url.searchParams.delete('card');
     window.history[replace ? 'replaceState' : 'pushState']({}, '', `${url.pathname}${url.search}${url.hash}`);
     setSharedBoardId(nextBoardId);
+    setSharedCardId(null);
   }
   function openHome() { updateBoardRoute(null); setView('home'); setQuery(''); }
   function openBoard() { setView('board'); setQuery(''); }
@@ -2348,10 +2370,10 @@ export default function Home() {
     const title = draft.trim();
     if (!title) return;
     const targetColumn = columns.find((column) => column.id === columnId);
-    if (targetColumn?.cardLimit && targetColumn.cards.length >= targetColumn.cardLimit) showToast(`Лимит «${targetColumn.title}» будет превышен`);
+    const exceedsLimit = Boolean(targetColumn?.cardLimit && targetColumn.cards.length >= Math.max(0, targetColumn.cardLimit - 1));
     const card: Card = { id: nextCardId, title, labels: [], roles: [], members: [] };
     setColumns((current) => current.map((column) => column.id === columnId ? { ...column, cards: [...column.cards, card] } : column));
-    setNextCardId((current) => current + 1); setDraft(''); setComposerOpen(null); showToast('Задача добавлена в доску');
+    setNextCardId((current) => current + 1); setDraft(''); setComposerOpen(null); showToast(exceedsLimit ? `Лимит «${targetColumn?.title}» достигнут — задача всё равно добавлена` : 'Задача добавлена в доску');
     if (persistence === 'connected' && typeof columnId === 'string') {
       void fetch(`${API_URL}/v1/lists/${columnId}/cards`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })
         .then(async (response) => {
@@ -2366,7 +2388,7 @@ export default function Home() {
     const card = columns.find((column) => column.id === sourceListId)?.cards.find((item) => item.id === cardId);
     if (!card) return;
     const targetColumn = columns.find((column) => column.id === targetListId);
-    if (targetListId !== sourceListId && targetColumn?.cardLimit && targetColumn.cards.length >= targetColumn.cardLimit) showToast(`Лимит «${targetColumn.title}» будет превышен`);
+    const exceedsLimit = Boolean(targetListId !== sourceListId && targetColumn?.cardLimit && targetColumn.cards.length >= Math.max(0, targetColumn.cardLimit - 1));
     setColumns((current) => {
       const withoutCard = current.map((column) => column.id === sourceListId ? { ...column, cards: column.cards.filter((item) => item.id !== cardId) } : column);
       return withoutCard.map((column) => {
@@ -2378,7 +2400,7 @@ export default function Home() {
       });
     });
     clearFreeformCardPosition(cardId);
-    clearDragState(); showToast(`«${card.title}» перемещена`);
+    clearDragState(); showToast(exceedsLimit ? `Лимит «${targetColumn?.title}» достигнут — «${card.title}» перемещена` : `«${card.title}» перемещена`);
     if (persistence === 'connected' && typeof cardId === 'string' && typeof targetListId === 'string') {
       void fetch(`${API_URL}/v1/cards/${cardId}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target_list_id: targetListId, before_card_id: typeof beforeCardId === 'string' ? beforeCardId : null }) })
         .then((response) => { if (!response.ok) throw new Error('move failed'); })
@@ -2511,8 +2533,10 @@ export default function Home() {
     } else { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); showToast('Задача удалена'); }
   }
   function parkServerCard(card: Card) {
+    const frozen = card.frozen;
     const base: ParkingCard = { id: `parking-${crypto.randomUUID()}`, title: card.title, description: card.description ?? '', priority: card.priority ?? 0, createdAt: new Date().toISOString(), completedAt: card.completedAt ?? null, startAt: card.startAt, dueAt: card.dueAt, coverAttachmentId: card.coverAttachmentId, coverMode: card.coverMode, backgroundImageUrl: card.backgroundImageUrl, labels: card.labels.map((label) => ({ ...label })), roles: card.roles.map((role) => ({ ...role })), members: card.members.map((member) => ({ id: String(member.id), name: member.name, initials: member.initials, color: member.color, avatarUrl: member.avatarUrl })), checklists: [], attachments: [], comments: [] };
     const moveToParking = (snapshot: ParkingCard) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.filter((item) => item.id !== card.id) }))); setSelected((current) => current?.id === card.id ? null : current); setParkingCards((current) => [snapshot, ...current]); showToast('Карточка перемещена в локальную парковку'); };
+    base.frozen = frozen;
     if (persistence !== 'connected' || typeof card.id !== 'string') { moveToParking(base); return; }
     void fetch(`${API_URL}/v1/cards/${card.id}/details`)
       .then(async (response) => { if (!response.ok) throw new Error('detail load failed'); return response.json() as Promise<CardDetail>; })
@@ -2565,7 +2589,7 @@ export default function Home() {
       const saved = await response.json() as { id: string };
       const headers = { 'Content-Type': 'application/json' };
       await Promise.all([
-        fetch(`${API_URL}/v1/cards/${saved.id}`, { method: 'PATCH', headers, body: JSON.stringify({ priority: card.priority, start_at: card.startAt ?? null, due_at: card.dueAt ?? null }) }),
+        fetch(`${API_URL}/v1/cards/${saved.id}`, { method: 'PATCH', headers, body: JSON.stringify({ priority: card.priority, is_frozen: card.frozen, start_at: card.startAt ?? null, due_at: card.dueAt ?? null }) }),
         fetch(`${API_URL}/v1/cards/${saved.id}/labels`, { method: 'PUT', headers, body: JSON.stringify({ label_ids: (card.labels ?? []).map((label) => label.id) }) }),
         fetch(`${API_URL}/v1/cards/${saved.id}/profile-roles`, { method: 'PUT', headers, body: JSON.stringify({ role_ids: (card.roles ?? []).map((role) => role.id) }) }),
         fetch(`${API_URL}/v1/cards/${saved.id}/assignees`, { method: 'PUT', headers, body: JSON.stringify({ user_ids: (card.members ?? []).map((member) => member.id) }) }),
@@ -2806,6 +2830,7 @@ export default function Home() {
         title: updated.title,
         description: updated.description ?? '',
         priority: updated.priority ?? 0,
+        frozen: updated.frozen,
         startAt: updated.startAt,
         dueAt: updated.dueAt,
         completedAt: updated.completedAt ?? null,
@@ -3821,6 +3846,37 @@ export default function Home() {
       .then((response) => { if (!response.ok) throw new Error('priority update failed'); showToast(priority ? `Приоритет: ${priority}/5` : 'Приоритет снят'); })
       .catch(() => { updateSelectedCard({ priority: previous }); showToast('Не удалось сохранить приоритет'); });
   }
+  function toggleCardFrozen(card: Card) {
+    if (!card || isPublicViewer) return;
+    const frozen = !card.frozen;
+    const applyFrozen = (value: boolean) => {
+      if (isParkingCardId(card.id)) {
+        updateParkingCard(String(card.id), (current) => ({ ...current, frozen: value }));
+      } else {
+        setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((item) => item.id === card.id ? { ...item, frozen: value } : item) })));
+      }
+      setSelected((current) => current?.id === card.id ? { ...current, frozen: value } : current);
+    };
+    applyFrozen(frozen);
+    if (isParkingCardId(card.id)) { showToast(frozen ? 'Локальная карточка заморожена' : 'Локальная карточка разморожена'); return; }
+    if (persistence !== 'connected' || typeof card.id !== 'string') { showToast(frozen ? 'Карточка заморожена' : 'Карточка разморожена'); return; }
+    void fetch(`${API_URL}/v1/cards/${card.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_frozen: frozen }) })
+      .then((response) => { if (!response.ok) throw new Error('freeze update failed'); showToast(frozen ? 'Карточка заморожена' : 'Карточка разморожена'); })
+      .catch(() => { applyFrozen(!frozen); showToast('Не удалось изменить заморозку'); });
+  }
+
+  async function copyCardLink(card: Card) {
+    if (!boardId || typeof card.id !== 'string') { showToast('Ссылку можно скопировать только для карточки доски'); return; }
+    const url = new URL(window.location.href);
+    url.searchParams.set('board', boardId);
+    url.searchParams.set('card', card.id);
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      showToast('Ссылка на карточку скопирована');
+    } catch {
+      showToast('Не удалось скопировать ссылку');
+    }
+  }
   function renderDeadlinePeriodFields() {
     if (sidebarPanel !== 'due' || !selected || typeof selected.id !== 'string' || isSelectedParkingCard) return null;
     return <CardScheduleFields inDeadline cardId={selected.id} startAt={selected.startAt} dueAt={selected.dueAt} canEdit={!isPublicViewer} onChange={(patch) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, ...patch } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, ...patch } : current); }} />;
@@ -3884,6 +3940,8 @@ export default function Home() {
 
   function applyBoard(data: ApiBoard) {
     setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cardLimit: list.card_limit ?? 0, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, hasUnreadComments: card.has_unread_comments, hasUnvotedPolls: card.has_unvoted_polls, backgroundImageUrl: card.background_image_url ?? undefined, startAt: card.start_at ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMediaType: card.cover_media_type ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, roles: card.roles ?? [], milestone: card.milestone ?? null, members: card.assignees.map(memberFromApi) })) })));
+    const frozenByCardId = new Map(data.lists.flatMap((list) => list.cards.map((card) => [card.id, card.is_frozen] as const)));
+    setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => ({ ...card, frozen: frozenByCardId.get(String(card.id)) ?? false })) })));
     setBoardLabels(data.labels);
     setMilestones(data.milestones ?? []);
     setBoardStickers(data.stickers ?? []);
@@ -4213,7 +4271,7 @@ export default function Home() {
           {!isPublicViewer && boardContentMode === 'columns' && <SegmentedToggle className="board-segmented-toggle" label="Режим расположения колонок" options={boardViewToggleOptions} value={boardViewMode} onChange={(next) => changeBoardViewMode(next as BoardViewMode)} />}
           <div className="filter-control">
             <button className={`board-icon-button ${filterMode !== 'all' || cardSort !== 'manual' ? 'active-filter' : ''}`} type="button" title="Фильтры и сортировка" aria-label="Фильтры и сортировка" aria-expanded={isFilterOpen} onClick={() => setFilterOpen((current) => !current)}><BoardToolbarIcon type="filter" /></button>
-          {isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['my_roles', 'По моим ролям'], ['due', 'С дедлайном'], ['overdue', 'Просроченные']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}<p className="filter-popover-section">Порядок в колонках</p>{([['manual', 'Как на доске'], ['priority', 'Сначала важные'], ['activity', 'Недавно обновлённые']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => setCardSort(mode)}>{label}{cardSort === mode && <b>✓</b>}</button>)}</div>}
+          {isFilterOpen && <div className="filter-popover"><p>Показывать</p>{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['my_roles', 'По моим ролям'], ['due', 'С дедлайном'], ['overdue', 'Просроченные'], ['unread', 'Непрочитанное и голосования']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => { setFilterMode(mode); setFilterOpen(false); }}>{label}{filterMode === mode && <b>✓</b>}</button>)}<p className="filter-popover-section">Порядок в колонках</p>{([['manual', 'Как на доске'], ['priority', 'Сначала важные'], ['activity', 'Недавно обновлённые']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => setCardSort(mode)}>{label}{cardSort === mode && <b>✓</b>}</button>)}</div>}
           </div>
           {renderBoardLabelsControl()}
           {renderMilestonesControl()}
@@ -4328,7 +4386,23 @@ export default function Home() {
             {renderDeadlinePeriodFields()}
             {renderChecklists()}
             <div className="attachments"><div className="section-heading"><h3>Вложения</h3><span>{attachments.length}</span></div>{attachments.length ? <div className="attachment-grid">{attachments.map((attachment) => /^(image|video)\//.test(attachment.media_type) ? <figure className="attachment-preview" key={attachment.id}>{attachment.media_type.startsWith('video/') ? <video controls={selected.coverAttachmentId !== attachment.id} preload="metadata" src={assetUrl(attachment.url)} /> : <img src={assetUrl(attachment.url)} alt={attachment.original_name} />}<figcaption><span>{attachment.original_name}</span><div className="cover-controls"><select value={selected.coverAttachmentId === attachment.id ? selected.coverMode ?? 'full' : coverModeDraft} onChange={(event) => { const mode = event.target.value as 'full' | 'top'; setCoverModeDraft(mode); if (selected.coverAttachmentId === attachment.id) updateCardCover(attachment, mode); }} aria-label="Тип обложки"><option value="full">Фон</option><option value="top">Сверху</option></select><button className="cover-button" onClick={() => updateCardCover(selected.coverAttachmentId === attachment.id ? null : attachment)}>{selected.coverAttachmentId === attachment.id ? 'Снять' : 'Установить'}</button></div><button className="attachment-remove" onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure> : attachment.media_type.startsWith('video/') ? <figure className="attachment-preview" key={attachment.id}><video controls preload="metadata" src={assetUrl(attachment.url)} /><figcaption>{attachment.original_name}<button onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure> : <div className="attachment-file" key={attachment.id}><span>▶</span><a href={assetUrl(attachment.url)} target="_blank" rel="noreferrer">{attachment.original_name}</a><button onClick={() => deleteAttachment(attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></div>)}</div> : <p className="empty-attachments">Прикрепите изображение или видео до 50 МиБ.</p>}<button type="button" className="upload-button" disabled={isUploadingAttachment} onClick={() => attachmentUploadInputRef.current?.click()}>{isUploadingAttachment ? 'Загружаем…' : '＋ Добавить файл'}</button><input ref={attachmentUploadInputRef} className="attachment-upload-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple tabIndex={-1} aria-hidden="true" disabled={isUploadingAttachment} onChange={uploadAttachments} /></div>
-            <footer className="modal-actions">{isSelectedParkingCard && selectedParkingCard ? <><select value={parkingRestoreListId} onChange={(event) => setParkingRestoreListId(event.target.value)} aria-label="Колонка для возврата">{columns.map((column) => <option key={column.id} value={String(column.id)}>{column.title}</option>)}</select><button className="create-button" disabled={!parkingRestoreListId} onClick={() => void restoreParkingCard(selectedParkingCard, parkingRestoreListId)}>Перенести на доску</button><button className="archive-button" onClick={archiveSelectedCard}>Удалить локально</button></> : <button className="archive-button" onClick={archiveSelectedCard}>Архивировать</button>}<span className={`autosave-status ${cardSaveStatus}`}>{isSelectedParkingCard ? 'Сохранено локально' : cardSaveStatus === 'saving' ? 'Изменения сохраняются' : cardSaveStatus === 'error' ? 'Не удалось сохранить' : 'Все изменения сохранены'}</span></footer>
+            <footer className="modal-actions">
+              {isSelectedParkingCard && selectedParkingCard ? <>
+                <label className="parking-restore-control">
+                  <span>Вернуть в колонку</span>
+                  <select value={parkingRestoreListId} onChange={(event) => setParkingRestoreListId(event.target.value)} aria-label="Колонка для возврата">
+                    <option value="">Выберите колонку…</option>
+                    {columns.map((column) => <option key={column.id} value={String(column.id)}>{column.title}</option>)}
+                  </select>
+                </label>
+                <button className="create-button" disabled={!parkingRestoreListId} onClick={() => void restoreParkingCard(selectedParkingCard, parkingRestoreListId)}>Перенести на доску</button>
+                <button className="archive-button" onClick={archiveSelectedCard}>Удалить локально</button>
+              </> : <>
+                {!isPublicViewer && <button className={`freeze-card-action ${selected.frozen ? 'active' : ''}`} type="button" onClick={() => toggleCardFrozen(selected)} title={selected.frozen ? 'Разморозить карточку' : 'Заморозить карточку'}>{selected.frozen ? '❄ Разморозить' : '❄ Заморозить'}</button>}
+                <button className="archive-button" onClick={archiveSelectedCard}>Архивировать</button>
+              </>}
+              <span className={`autosave-status ${cardSaveStatus}`}>{isSelectedParkingCard ? 'Сохранено локально' : cardSaveStatus === 'saving' ? 'Изменения сохраняются' : cardSaveStatus === 'error' ? 'Не удалось сохранить' : 'Все изменения сохранены'}</span>
+            </footer>
           </div>
           <aside className="task-sidebar" aria-label="Комментарии и активность">
             <section className="conversation-panel" aria-label="Комментарии и активность">
@@ -4364,7 +4438,18 @@ export default function Home() {
     {isAutomationsOpen && boardId && <AutomationsOverlay boardId={boardId} columns={columns} onClose={() => setAutomationsOpen(false)} />}
     <input ref={boardStickerFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardSticker} style={{ display: 'none' }} />
     {imagePreview && <div className="image-preview-backdrop" role="presentation" onMouseDown={() => setImagePreview(null)}><figure className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Просмотр ${imagePreview.name}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" onClick={() => setImagePreview(null)} aria-label="Закрыть просмотр">×</button><img src={imagePreview.url} alt={imagePreview.name} /><figcaption>{imagePreview.name}</figcaption></figure></div>}
-    {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openFocusMode(cardContextMenu.card); setCardContextMenu(null); }}>◉ Фокус на карточке</button>{!isPublicViewer && <><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setBulkMode(true); toggleBulkCard(cardContextMenu.card.id); setCardContextMenu(null); }}>☷ Выбрать</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); parkServerCard(cardContextMenu.card); setCardContextMenu(null); }}>В локальную парковку</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button></>}</div>}
+    {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
+      <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button>
+      <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); void copyCardLink(cardContextMenu.card); setCardContextMenu(null); }}>Копировать ссылку</button>
+      <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openFocusMode(cardContextMenu.card); setCardContextMenu(null); }}>◉ Фокус на карточке</button>
+      {!isPublicViewer && <>
+        <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setBulkMode(true); toggleBulkCard(cardContextMenu.card.id); setCardContextMenu(null); }}>☷ Выбрать</button>
+        <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button>
+        <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardFrozen(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.frozen ? '❄ Разморозить' : '❄ Заморозить'}</button>
+        <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); parkServerCard(cardContextMenu.card); setCardContextMenu(null); }}>В локальную парковку</button>
+        <button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); archiveCard(cardContextMenu.card); setCardContextMenu(null); }}>Архивировать</button>
+      </>}
+    </div>}
     {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); moveColumn(columnContextMenu.column.id); setColumnContextMenu(null); }}>Вынести в отдельный ряд справа</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}
     {cardDragPreview && <div ref={cardDragPreviewElementRef} className="card-drag-preview" aria-hidden="true" style={{ left: cardDragPreview.x - 28, top: cardDragPreview.y - 20, width: cardDragPreview.width, height: cardDragPreview.height } as CSSProperties}>{<CardCover card={cardDragPreview.card} />}<div className="card-main">{(cardDragPreview.card.labels.length > 0 || cardDragPreview.card.roles.length > 0) && <div className="card-top"><div className="card-labels">{cardDragPreview.card.labels.map((label) => <LabelChip label={label} key={label.id} />)}{cardDragPreview.card.roles.map((role) => <ProfileRoleChip role={role} key={role.id} compact />)}</div></div>}<div className="card-title-row"><span className={`card-complete ${cardDragPreview.card.completedAt ? 'done' : ''}`}>{cardDragPreview.card.completedAt && '✓'}</span><h3>{cardDragPreview.card.title}</h3></div>{cardDragPreview.card.dueAt && <p className="due">◷ {formatDue(cardDragPreview.card.dueAt)}</p>}</div>{cardDragPreview.card.priority ? <span className="card-priority-corner"><PrioritySignal priority={cardDragPreview.card.priority} /></span> : null}{(cardDragPreview.card.checklist || cardDragPreview.card.comments || cardDragPreview.card.attachments || cardDragPreview.card.members.length > 0) && <footer className="card-footer"><div className="card-meta">{cardDragPreview.card.checklist && <span className={isChecklistComplete(cardDragPreview.card.checklist) ? 'checklist-complete' : ''}><CardMetaIcon type="checklist" />{cardDragPreview.card.checklist}</span>}{cardDragPreview.card.comments && <span><CardMetaIcon type="comments" />{cardDragPreview.card.comments}</span>}{cardDragPreview.card.attachments && <span><CardMetaIcon type="attachments" /></span>}</div><div className="card-avatars">{<VisibleAvatars members={cardDragPreview.card.members} />}</div></footer>}</div>}
     {cardMoveMotion && <div className="card-move-ghost" aria-hidden="true" style={{ left: cardMoveMotion.from.left, top: cardMoveMotion.from.top, width: cardMoveMotion.from.width, height: cardMoveMotion.from.height, '--card-move-x': `${cardMoveMotion.to.left - cardMoveMotion.from.left}px`, '--card-move-y': `${cardMoveMotion.to.top - cardMoveMotion.from.top}px`, '--card-move-scale-x': String(cardMoveMotion.to.width / cardMoveMotion.from.width), '--card-move-scale-y': String(cardMoveMotion.to.height / cardMoveMotion.from.height) } as CSSProperties}><b>{cardMoveMotion.title}</b></div>}
