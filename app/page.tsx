@@ -119,12 +119,14 @@ function assetUrl(url: string | null | undefined) {
 }
 
 function CardCover({ card }: { card: Pick<Card, 'coverUrl' | 'coverMediaType' | 'coverMode' | 'hasUnvotedPolls'> }) {
-  if (!card.coverUrl) return <CardPollAttention card={card} />;
+  const [loadFailed, setLoadFailed] = useState(false);
+  useEffect(() => { setLoadFailed(false); }, [card.coverUrl]);
+  if (!card.coverUrl || loadFailed) return <CardPollAttention card={card} />;
   const isVideo = card.coverMediaType?.startsWith('video/');
   return <><CardPollAttention card={card} /><div className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
     {isVideo
-      ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onLoadedMetadata={(event) => { event.currentTarget.controls = false; }} />
-      : <img src={assetUrl(card.coverUrl)} alt="" />}
+      ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onError={() => setLoadFailed(true)} onLoadedMetadata={(event) => { event.currentTarget.controls = false; }} />
+      : <img src={assetUrl(card.coverUrl)} alt="" onError={() => setLoadFailed(true)} />}
   </div></>;
 }
 
@@ -787,6 +789,7 @@ export default function Home() {
   const [isComposerOpen, setComposerOpen] = useState<EntityId | null>(null);
   const [draft, setDraft] = useState('');
   const [selected, setSelected] = useState<Card | null>(null);
+  const [unavailableCardBackgroundUrls, setUnavailableCardBackgroundUrls] = useState<Set<string>>(() => new Set());
   const [isCardAdditionalOptionsOpen, setCardAdditionalOptionsOpen] = useState(false);
   const [toast, setToast] = useState('');
   const [query, setQuery] = useState('');
@@ -1055,6 +1058,7 @@ export default function Home() {
   const isPublicViewer = authState === 'public' || !canEditBoard;
   const currentTeamPreset = account ? teamMembers.find((member) => member.id === account.user.id)?.preset : undefined;
   const canManageFullAccess = Boolean(account?.user.is_system_owner || currentTeamPreset === 'owner');
+  const hasSelectedCardBackground = Boolean(selected?.backgroundImageUrl && !unavailableCardBackgroundUrls.has(assetUrl(selected.backgroundImageUrl)));
   const selectedColumnTitle = selected ? columns.find((column) => column.cards.some((card) => String(card.id) === String(selected.id)))?.title : null;
   const unreadNotificationCount = notifications.filter((notification) => !notification.is_read).length;
   const dueDays = useMemo(() => calendarDays(dueCursor), [dueCursor]);
@@ -1531,6 +1535,23 @@ export default function Home() {
     image.src = assetUrl(boardBackgroundUrl);
     return () => { disposed = true; image.onload = null; image.onerror = null; };
   }, [boardBackgroundUrl, boardId]);
+
+  useEffect(() => {
+    const backgroundUrl = selected?.backgroundImageUrl;
+    if (!backgroundUrl) return;
+    const resolvedUrl = assetUrl(backgroundUrl);
+    if (unavailableCardBackgroundUrls.has(resolvedUrl)) return;
+
+    let disposed = false;
+    const image = new Image();
+    image.onerror = () => {
+      if (disposed) return;
+      setUnavailableCardBackgroundUrls((current) => new Set(current).add(resolvedUrl));
+      showToast('Фон карточки недоступен — показан обычный вид');
+    };
+    image.src = resolvedUrl;
+    return () => { disposed = true; image.onerror = null; };
+  }, [selected?.backgroundImageUrl, selected?.id, unavailableCardBackgroundUrls]);
 
   useEffect(() => {
     const previous = boardBackgroundDisplayRef.current;
@@ -3883,7 +3904,7 @@ export default function Home() {
         <button className="modal-close" onClick={closeSelectedCard} aria-label="Закрыть">×</button>
         <div className="task-layout">
           <div className="task-content">
-            <div className={`card-detail-top ${selected.backgroundImageUrl ? 'has-card-background' : ''}`} style={selected.backgroundImageUrl ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
+            <div className={`card-detail-top ${hasSelectedCardBackground ? 'has-card-background' : ''}`} style={hasSelectedCardBackground ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
             <div className="card-property-area">
               <div className="card-quick-actions"><span className="card-quick-actions-left">{renderCardMilestoneControl()}<button className={`quick-action ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(false); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }} title="Метки" aria-label="Настроить метки"><BoardToolbarIcon type="labels" /></button><button className={`quick-action ${sidebarPanel === 'background' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'background' ? null : 'background')} title="Фон карточки" aria-label="Настроить фон карточки">▧</button>{canManageBoardAdministration && <button className={`quick-action ${sidebarPanel === 'public-visibility' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'public-visibility' ? null : 'public-visibility')} title="Доступ" aria-label="Настроить доступ к карточке">◉</button>}</span><span className="card-quick-actions-right">{authState === 'signed-in' && <button type="button" className={`quick-action card-watch-toggle ${isWatchingCard ? 'active' : ''}`} onClick={toggleCardWatch} title={isWatchingCard ? 'Отключить уведомления об этой карточке' : 'Подписаться на изменения карточки'} aria-label={isWatchingCard ? 'Отключить уведомления об этой карточке' : 'Подписаться на изменения карточки'}>{isWatchingCard ? '◉' : '◌'}</button>}<button className={`quick-action ${sidebarPanel === 'due' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'due' ? null : 'due')} title={selected.dueAt ? `Дедлайн: ${formatDue(selected.dueAt)}` : 'Дедлайн'} aria-label="Настроить дедлайн">◷</button><button className="quick-action" onClick={openDiagram} title="Схема" aria-label="Открыть схему">⌁</button></span></div>
               {sidebarPanel && sidebarPanel !== 'assignees' && <div className="property-popover quick-property-popover" role="dialog" aria-label="Настройки карточки">
