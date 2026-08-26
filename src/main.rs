@@ -649,6 +649,7 @@ struct ListResponse {
     grid_column: i32,
     grid_row: i32,
     card_limit: i32,
+    is_public: bool,
 }
 
 #[derive(Deserialize)]
@@ -711,6 +712,8 @@ struct UpdateListRequest {
     title: Option<String>,
     #[serde(default)]
     card_limit: Option<i32>,
+    #[serde(default)]
+    is_public: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1546,6 +1549,7 @@ struct BoardList {
     grid_column: i32,
     grid_row: i32,
     card_limit: i32,
+    is_public: bool,
     cards: Vec<BoardCard>,
 }
 
@@ -2587,6 +2591,16 @@ async fn ensure_card_full_access(pool: &PgPool, card_id: Uuid, actor_id: Uuid) -
     ensure_workspace_full_access(pool, workspace_id, actor_id).await
 }
 
+async fn ensure_list_full_access(pool: &PgPool, list_id: Uuid, actor_id: Uuid) -> Result<(), ApiError> {
+    let workspace_id = sqlx::query_scalar::<_, Uuid>("SELECT b.workspace_id FROM lists l INNER JOIN boards b ON b.id = l.board_id WHERE l.id = $1 AND b.archived_at IS NULL")
+        .bind(list_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("Column was not found."))?;
+    ensure_workspace_full_access(pool, workspace_id, actor_id).await
+}
+
 /// `full_access` is an administrative preset, but it is deliberately not an
 /// owner-equivalent role.  Without this guard a full-access member could
 /// remove or demote themself (and lock the workspace into an unexpected
@@ -2998,12 +3012,13 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "board_not_found", "Board was not found.".to_owned()))?;
-    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row, card_limit FROM lists WHERE board_id = $1 ORDER BY position, id")
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row, card_limit, is_public FROM lists WHERE board_id = $1 AND ($2::uuid IS NOT NULL OR is_public) ORDER BY position, id")
         .bind(board_id)
+        .bind(actor_id)
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, c.is_frozen, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.min_view_preset, c.min_edit_preset, ($2::uuid IS NOT NULL AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) AND (EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS(SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_edit_preset WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 1 END))) AS can_edit, c.background_image_url, c.start_at::text AS start_at, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ($2::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM card_polls p WHERE p.card_id = c.id AND NOT EXISTS(SELECT 1 FROM card_poll_votes v WHERE v.poll_id = p.id AND v.user_id = $2))) AS has_unvoted_polls, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND ((b.visibility = 'public' AND c.is_public) OR ($2::uuid IS NOT NULL AND (EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS(SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END)))) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, c.is_frozen, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.min_view_preset, c.min_edit_preset, ($2::uuid IS NOT NULL AND flowboard_has_permission(b.workspace_id, $2, 'edit_cards'::workspace_permission) AND (EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS(SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_edit_preset WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 1 END))) AS can_edit, c.background_image_url, c.start_at::text AS start_at, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ($2::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM card_polls p WHERE p.card_id = c.id AND NOT EXISTS(SELECT 1 FROM card_poll_votes v WHERE v.poll_id = p.id AND v.user_id = $2))) AS has_unvoted_polls, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c INNER JOIN lists l ON l.id = c.list_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND ($2::uuid IS NOT NULL OR l.is_public) AND ((b.visibility = 'public' AND c.is_public) OR ($2::uuid IS NOT NULL AND (EXISTS(SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS(SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END)))) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -3102,6 +3117,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         grid_column: list.grid_column,
         grid_row: list.grid_row,
         card_limit: list.card_limit,
+        is_public: list.is_public,
         cards: cards.iter().filter(|card| card.list_id == list.id).cloned().collect(),
     }).collect();
     let uploaded_background_url = format!("/v1/boards/{}/background/file", board.id);
@@ -3927,7 +3943,7 @@ async fn create_list(State(state): State<AppState>, current: CurrentUser, Path(b
     let grid_column = sqlx::query_scalar::<_, i32>("SELECT COALESCE(MAX(grid_column), 0) + 1 FROM lists WHERE board_id = $1")
         .bind(board_id).fetch_one(pool).await.map_err(ApiError::internal)?;
     let list = sqlx::query_as::<_, ListResponse>(
-        "INSERT INTO lists (id, board_id, title, position, grid_column, grid_row) VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) FROM lists WHERE board_id = $2), 0) + 1000, $4, 1) RETURNING id, title, grid_column, grid_row, card_limit",
+        "INSERT INTO lists (id, board_id, title, position, grid_column, grid_row) VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) FROM lists WHERE board_id = $2), 0) + 1000, $4, 1) RETURNING id, title, grid_column, grid_row, card_limit, is_public",
     )
     .bind(Uuid::new_v4()).bind(board_id).bind(title).bind(grid_column)
     .fetch_one(pool).await.map_err(ApiError::internal)?;
@@ -4033,17 +4049,20 @@ async fn delete_milestone(State(state): State<AppState>, current: CurrentUser, P
 async fn update_list(State(state): State<AppState>, current: CurrentUser, Path(list_id): Path<Uuid>, Json(request): Json<UpdateListRequest>) -> ApiResult<ListResponse> {
     ensure_list_permission(database(&state)?, list_id, current.id, "create_lists").await?;
     let actor_id = current.id;
-    let existing = sqlx::query_as::<_, (String, i32)>("SELECT title, card_limit FROM lists WHERE id = $1")
+    let existing = sqlx::query_as::<_, (String, i32, bool)>("SELECT title, card_limit, is_public FROM lists WHERE id = $1")
         .bind(list_id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "list_not_found", "List was not found.".to_owned()))?;
     let title = request.title.as_deref().map(|value| valid_text(value, "title", 200).map(ToOwned::to_owned)).transpose()?.unwrap_or(existing.0);
     let card_limit = request.card_limit.unwrap_or(existing.1);
+    let is_public = request.is_public.unwrap_or(existing.2);
     if !(0..=10_000).contains(&card_limit) { return Err(ApiError::bad_request("Card limit must be between 0 and 10000.")); }
+    if request.is_public.is_some() { ensure_list_full_access(database(&state)?, list_id, current.id).await?; }
     let list = sqlx::query_as::<_, ListResponse>(
-        "UPDATE lists l SET title = $1, card_limit = $2, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE l.id = $3 AND l.board_id = b.id AND m.user_id = $4 RETURNING l.id, l.title, l.grid_column, l.grid_row, l.card_limit",
+        "UPDATE lists l SET title = $1, card_limit = $2, is_public = $3, updated_at = now() FROM boards b INNER JOIN board_members m ON m.board_id = b.id WHERE l.id = $4 AND l.board_id = b.id AND m.user_id = $5 RETURNING l.id, l.title, l.grid_column, l.grid_row, l.card_limit, l.is_public",
     )
     .bind(title)
     .bind(card_limit)
+    .bind(is_public)
     .bind(list_id)
     .bind(actor_id)
     .fetch_optional(database(&state)?)
@@ -4132,17 +4151,17 @@ async fn ensure_card_access(pool: &PgPool, card_id: Uuid, user_id: Uuid) -> Resu
 }
 
 async fn ensure_card_public_read(pool: &PgPool, card_id: Uuid, user_id: Option<Uuid>) -> Result<(), ApiError> {
-    let card = sqlx::query_as::<_, (bool, String, String)>(
-        "SELECT c.is_public, c.min_view_preset, b.visibility::text FROM cards c INNER JOIN boards b ON b.id = c.board_id WHERE c.id = $1 AND b.archived_at IS NULL",
+    let card = sqlx::query_as::<_, (bool, bool, String, String)>(
+        "SELECT c.is_public, l.is_public, c.min_view_preset, b.visibility::text FROM cards c INNER JOIN lists l ON l.id = c.list_id INNER JOIN boards b ON b.id = c.board_id WHERE c.id = $1 AND b.archived_at IS NULL",
     )
     .bind(card_id)
     .fetch_optional(pool)
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
-    if card.0 && card.2 == "public" { return Ok(()); }
+    if card.0 && card.1 && card.3 == "public" { return Ok(()); }
     if let Some(actor_id) = user_id {
-        if actor_meets_card_preset(pool, card_id, actor_id, &card.1).await? { return Ok(()); }
+        if actor_meets_card_preset(pool, card_id, actor_id, &card.2).await? { return Ok(()); }
     }
     Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))
 }
@@ -4816,7 +4835,7 @@ async fn create_discord_card(State(state): State<AppState>, integration: Discord
 }
 
 async fn list_discord_board_lists(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<ListResponse>> {
-    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row, card_limit FROM lists WHERE board_id = $1 ORDER BY position, id")
+    let lists = sqlx::query_as::<_, ListResponse>("SELECT id, title, grid_column, grid_row, card_limit, is_public FROM lists WHERE board_id = $1 ORDER BY position, id")
         .bind(integration.board_id)
         .fetch_all(database(&state)?)
         .await
@@ -6589,7 +6608,7 @@ async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(
 
 async fn list_archived_cards(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>) -> ApiResult<Vec<ArchivedCardResponse>> {
     let cards = sqlx::query_as::<_, ArchivedCardRow>(
-        "SELECT c.id, c.list_id, c.title, c.description, c.priority, c.completed_at::text AS completed_at, c.archived_at::text AS archived_at FROM cards c INNER JOIN boards b ON b.id = c.board_id WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND ((b.visibility = 'public' AND c.is_public) OR ($2::uuid IS NOT NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS (SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END)))) ORDER BY c.archived_at DESC",
+        "SELECT c.id, c.list_id, c.title, c.description, c.priority, c.completed_at::text AS completed_at, c.archived_at::text AS archived_at FROM cards c INNER JOIN lists l ON l.id = c.list_id INNER JOIN boards b ON b.id = c.board_id WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND ($2::uuid IS NOT NULL OR l.is_public) AND ((b.visibility = 'public' AND c.is_public) OR ($2::uuid IS NOT NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS (SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END)))) ORDER BY c.archived_at DESC",
     )
     .bind(board_id)
     .bind(current.0.map(|user| user.id))
