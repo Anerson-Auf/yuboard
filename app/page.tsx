@@ -2212,7 +2212,15 @@ export default function Home() {
   function beginPointerCardDrag(event: ReactPointerEvent<HTMLElement>, card: Card, sourceListId: EntityId) {
     if (event.button !== 0 || boardViewMode !== 'standard' || isPublicViewer) return;
     if (event.target instanceof Element && event.target.closest('button, a, input, textarea, select')) return;
-    if (isBulkMode) { didDragRef.current = true; bulkPointerSelectRef.current = true; setBulkCardIds((current) => current.includes(String(card.id)) ? current : [...current, String(card.id)]); event.currentTarget.setPointerCapture?.(event.pointerId); return; }
+    if (isBulkMode) {
+      didDragRef.current = true;
+      bulkPointerSelectRef.current = true;
+      // A second LMB press on an already selected card is a toggle, while
+      // dragging over other cards still only adds them to the selection.
+      toggleBulkCard(card.id);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      return;
+    }
     const bounds = event.currentTarget.getBoundingClientRect();
     pointerCardDragRef.current = { card, sourceListId, startX: event.clientX, startY: event.clientY, width: bounds.width, height: bounds.height, active: false };
     pointerCardDropRef.current = null;
