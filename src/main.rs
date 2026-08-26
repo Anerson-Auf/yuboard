@@ -1168,12 +1168,28 @@ struct DiscordIntegrationResponse {
     token: Option<String>,
 }
 
-#[derive(Clone, Serialize, FromRow)]
+#[derive(Clone, Serialize)]
 struct ArchivedCardResponse {
     id: Uuid,
     list_id: Uuid,
     title: String,
     description: String,
+    priority: i16,
+    completed_at: Option<String>,
+    archived_at: String,
+    labels: Vec<LabelResponse>,
+    roles: Vec<ProfileRoleResponse>,
+    assignees: Vec<MemberResponse>,
+}
+
+#[derive(FromRow)]
+struct ArchivedCardRow {
+    id: Uuid,
+    list_id: Uuid,
+    title: String,
+    description: String,
+    priority: i16,
+    completed_at: Option<String>,
     archived_at: String,
 }
 
@@ -6572,15 +6588,38 @@ async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(
 }
 
 async fn list_archived_cards(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>) -> ApiResult<Vec<ArchivedCardResponse>> {
-    let cards = sqlx::query_as::<_, ArchivedCardResponse>(
-        "SELECT c.id, c.list_id, c.title, c.description, c.archived_at::text AS archived_at FROM cards c INNER JOIN boards b ON b.id = c.board_id WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND ((b.visibility = 'public' AND c.is_public) OR ($2::uuid IS NOT NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS (SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END)))) ORDER BY c.archived_at DESC",
+    let cards = sqlx::query_as::<_, ArchivedCardRow>(
+        "SELECT c.id, c.list_id, c.title, c.description, c.priority, c.completed_at::text AS completed_at, c.archived_at::text AS archived_at FROM cards c INNER JOIN boards b ON b.id = c.board_id WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND ((b.visibility = 'public' AND c.is_public) OR ($2::uuid IS NOT NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS (SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END)))) ORDER BY c.archived_at DESC",
     )
     .bind(board_id)
     .bind(current.0.map(|user| user.id))
     .fetch_all(database(&state)?)
     .await
     .map_err(ApiError::internal)?;
-    Ok(Json(cards))
+    let card_ids: Vec<Uuid> = cards.iter().map(|card| card.id).collect();
+    let card_labels = sqlx::query_as::<_, CardLabelRow>("SELECT cl.card_id, l.id, l.name, l.color, l.icon_shape, l.icon_color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = ANY($1) ORDER BY l.name")
+        .bind(&card_ids).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
+    let card_roles = sqlx::query_as::<_, CardProfileRoleRow>("SELECT cpr.card_id, pr.id, pr.name, pr.color, pr.icon_shape, pr.icon_color FROM card_profile_roles cpr INNER JOIN profile_roles pr ON pr.id = cpr.role_id WHERE cpr.card_id = ANY($1) ORDER BY pr.name")
+        .bind(&card_ids).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
+    let mut card_assignees = sqlx::query_as::<_, CardAssigneeRow>("SELECT ca.card_id, u.id, u.display_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS avatar_url FROM card_assignees ca INNER JOIN users u ON u.id = ca.user_id WHERE ca.card_id = ANY($1) ORDER BY u.display_name")
+        .bind(&card_ids).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
+    if current.0.is_none() {
+        for assignee in &mut card_assignees {
+            if assignee.avatar_url.is_some() { assignee.avatar_url = Some(format!("/v1/public/boards/{board_id}/avatars/{}", assignee.id)); }
+        }
+    }
+    Ok(Json(cards.into_iter().map(|card| ArchivedCardResponse {
+        id: card.id,
+        list_id: card.list_id,
+        title: card.title,
+        description: card.description,
+        priority: card.priority,
+        completed_at: card.completed_at,
+        archived_at: card.archived_at,
+        labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone(), icon_shape: label.icon_shape.clone(), icon_color: label.icon_color.clone() }).collect(),
+        roles: card_roles.iter().filter(|role| role.card_id == card.id).map(|role| ProfileRoleResponse { id: role.id, name: role.name.clone(), color: role.color.clone(), icon_shape: role.icon_shape.clone(), icon_color: role.icon_color.clone() }).collect(),
+        assignees: card_assignees.iter().filter(|member| member.card_id == card.id).map(|member| MemberResponse { id: member.id, display_name: member.display_name.clone(), avatar_url: member.avatar_url.clone() }).collect(),
+    }).collect()))
 }
 
 async fn move_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<MoveCardRequest>) -> ApiResult<CardResponse> {

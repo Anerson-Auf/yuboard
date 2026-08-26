@@ -75,7 +75,7 @@ type FreeformLiveSocketEvent =
   | ({ type: 'cursor' } & FreeformLiveCursor)
   | ({ type: 'ping' } & FreeformPing);
 type FreeformContextMenu = { x: number; y: number; position: FreeformPosition };
-type ArchivedCard = { id: string; list_id: string; title: string; description: string; archived_at: string };
+type ArchivedCard = { id: string; list_id: string; title: string; description: string; priority: number; completed_at: string | null; archived_at: string; labels: Label[]; roles: ProfileRole[]; assignees: ApiMember[] };
 type TeamMember = { id: string; username: string; preset: 'owner' | 'viewer' | 'contributor' | 'editor' | 'full_access'; avatar_url?: string | null };
 const roleLabels: Record<TeamMember['preset'], string> = { owner: 'Владелец', viewer: 'Наблюдатель', contributor: 'Участник', editor: 'Редактор', full_access: 'Полный доступ' };
 const roleDescriptions: Record<TeamMember['preset'], string> = { owner: 'Все права навсегда, включая доступы и удаление.', viewer: 'Только просмотр доски и карточек.', contributor: 'Просмотр, создание и редактирование карточек.', editor: 'Работа с карточками, колонками и метками.', full_access: 'Все действия в проекте, включая команду и настройки.' };
@@ -2735,7 +2735,7 @@ export default function Home() {
   }
   function openArchivedCard(card: ArchivedCard) {
     setArchiveOpen(false);
-    openCard({ id: card.id, title: card.title, description: card.description, archived: true, labels: [], roles: [], members: [] });
+    openCard({ id: card.id, title: card.title, description: card.description, priority: card.priority, completedAt: card.completed_at ?? undefined, archived: true, labels: card.labels, roles: card.roles, members: card.assignees.map(memberFromApi) });
   }
   function loadBoardActivity(page = 1, userId = boardActivityUserId) {
     if (!boardId) return;
