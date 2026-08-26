@@ -15,36 +15,39 @@ function git(args) {
   }
 }
 
-function areaFor(subject) {
-  const value = subject.toLowerCase();
-  if (value.includes('discord')) return 'интеграция Discord';
-  if (value.includes('github')) return 'интеграция GitHub';
-  if (value.includes('freeform')) return 'свободная доска';
-  if (value.includes('diagram')) return 'схемы карточек';
-  if (value.includes('comment') || value.includes('discussion') || value.includes('thread')) return 'обсуждения';
-  if (value.includes('checklist')) return 'чек-листы';
-  if (value.includes('label') || value.includes('role')) return 'метки и роли';
-  if (value.includes('notification') || value.includes('mention')) return 'уведомления';
-  if (value.includes('attachment') || value.includes('media') || value.includes('cover') || value.includes('background')) return 'медиа и оформление';
-  if (value.includes('drag') || value.includes('drop') || value.includes('panning')) return 'перетаскивание и навигация';
-  if (value.includes('column') || value.includes('board')) return 'доски и колонки';
-  if (value.includes('card')) return 'карточки';
-  if (value.includes('workspace') || value.includes('home')) return 'пространство работы';
-  if (value.includes('audio') || value.includes('voice')) return 'голосовые сообщения';
-  if (value.includes('theme') || value.includes('style') || value.includes('ui')) return 'интерфейс';
-  if (value.includes('migration') || value.includes('deploy') || value.includes('repository')) return 'техническая инфраструктура';
-  return 'проект';
-}
+const knownReleaseNotes = new Map([
+  ['d1dc2da', 'Журнал версий больше не изменяется при сборке и не блокирует следующий deploy.'],
+  ['808173c', 'Панель реакций не выходит за границы обсуждения; в карточке показана её текущая колонка.'],
+  ['32797d4', 'Стикеры отображаются прямо внутри текста сообщения — в черновике и после отправки.'],
+  ['01284d5', 'Добавлен постоянный журнал версий: можно открыть историю коммитов и листать её страницы.'],
+  ['392c980', 'Выбранные стикеры остаются в черновике до явной отправки сообщения.'],
+  ['7455a72', 'В чат добавлен встроенный набор стикеров с прозрачным отображением.'],
+  ['cebf930', 'Участники могут самостоятельно присоединяться к карточке.'],
+  ['830e7cc', 'Добавлены стикеры доски и реакции на сообщения в обсуждениях.'],
+]);
 
 function categoryFor(subject) {
-  const value = subject.toLowerCase();
-  if (value.startsWith('revert')) return ['Отмена изменения', 'Возвращено безопасное состояние раздела'];
-  if (/\b(fix|resolve|preserve|restore|prevent|clear|protect|enforce|restrict|hide|suppress|remove|stabilize)\b/.test(value)) return ['Исправление', 'Исправлена работа раздела'];
-  if (/\b(style|compact|improve|refresh|update|normalize|reposition|increase|double|tone|lighten|refine|expand|simplify|iconify|fit|stretch|vary|disperse|enlarge|animate)\b/.test(value)) return ['Улучшение интерфейса', 'Улучшен интерфейс раздела'];
-  if (/\b(chore|stage)\b/.test(value)) return ['Техническое обслуживание', 'Выполнено техническое обслуживание раздела'];
-  if (/\b(test)\b/.test(value)) return ['Проверка', 'Добавлены или обновлены проверки раздела'];
-  if (value === 'init') return ['Инициализация', 'Создана начальная версия проекта'];
-  return ['Новая возможность', 'Расширены возможности раздела'];
+  const prefix = /^(\w+)(?:\([^)]*\))?:\s*/i.exec(subject)?.[1]?.toLowerCase();
+  if (prefix === 'fix') return 'Исправление';
+  if (prefix === 'feat') return 'Новая возможность';
+  if (prefix === 'style') return 'Интерфейс';
+  if (prefix === 'refactor') return 'Внутреннее улучшение';
+  if (prefix === 'docs') return 'Документация';
+  if (prefix === 'test') return 'Проверки';
+  if (prefix === 'chore') return 'Техническое изменение';
+  if (/^revert/i.test(subject)) return 'Отмена изменения';
+  return 'Изменение';
+}
+
+function releaseNoteFor(shortHash, subject) {
+  const known = knownReleaseNotes.get(shortHash);
+  if (known) return known;
+
+  // Для новых коммитов текст после Conventional-префикса — готовая к показу release-note.
+  // Мы не подменяем его абстрактным «разделом проекта»: так пользователю видно, что именно изменилось.
+  const note = subject.replace(/^\w+(?:\([^)]*\))?:\s*/i, '').trim() || subject.trim();
+  const sentence = note.charAt(0).toLocaleUpperCase('ru-RU') + note.slice(1);
+  return sentence.endsWith('.') ? sentence : `${sentence}.`;
 }
 
 function toEntry(header, lines) {
@@ -59,9 +62,9 @@ function toEntry(header, lines) {
     deletions += Number(match[2]) || 0;
     files.push(match[3]);
   }
-  const [category, summaryLead] = categoryFor(subject);
-  const area = areaFor(subject);
-  return { shortHash, date, author: author || 'Не указан', title: `${category}: ${area}`, summary: `${summaryLead} «${area}».`, files: [...new Set(files)].slice(0, 40), additions, deletions };
+  const category = categoryFor(subject);
+  const summary = releaseNoteFor(shortHash, subject);
+  return { shortHash, date, author: author || 'Не указан', title: `${category}: ${summary}`, summary, files: [...new Set(files)].slice(0, 40), additions, deletions };
 }
 
 const raw = git(['log', '--reverse', '--date=short', '--format=%x1d%H%x1f%h%x1f%ad%x1f%an%x1f%s', '--numstat']);
