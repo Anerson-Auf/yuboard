@@ -690,6 +690,9 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
       const next = `${current.slice(0, caret)}${sticker.body}${current.slice(caret)}`;
       const nextCaret = caret + sticker.body.length;
       updateValue(next, nextCaret);
+      // A sticker is an explicit, infrequent action: commit it immediately so
+      // React keeps the visual token through the picker-closing re-render.
+      flushValue();
       // Sticker tokens need an immediate DOM projection; the parent draft is
       // deliberately delayed to keep a large board smooth while typing.
       if (composer) {
