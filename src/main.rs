@@ -2146,7 +2146,7 @@ async fn download_user_avatar(State(state): State<AppState>, _current: CurrentUs
 
 async fn download_comment_avatar(State(state): State<AppState>, current: Viewer, Path(comment_id): Path<Uuid>) -> Result<Response, ApiError> {
     let avatar_url = sqlx::query_scalar::<_, String>(
-        "SELECT c.external_author_avatar_url FROM comments c INNER JOIN cards card ON card.id = c.card_id INNER JOIN boards b ON b.id = card.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.external_author_avatar_url IS NOT NULL AND card.archived_at IS NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (card.is_public OR $2 IS NOT NULL)))",
+        "SELECT c.external_author_avatar_url FROM comments c INNER JOIN cards card ON card.id = c.card_id INNER JOIN boards b ON b.id = card.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.external_author_avatar_url IS NOT NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (card.is_public OR $2 IS NOT NULL)))",
     )
     .bind(comment_id)
     .bind(current.0.map(|user| user.id))
@@ -4001,7 +4001,7 @@ async fn ensure_card_access(pool: &PgPool, card_id: Uuid, user_id: Uuid) -> Resu
 
 async fn ensure_card_public_read(pool: &PgPool, card_id: Uuid, user_id: Option<Uuid>) -> Result<(), ApiError> {
     let card = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT c.id FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
+        "SELECT c.id FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.id = $1 AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
     )
     .bind(card_id)
     .bind(user_id)
@@ -5254,7 +5254,7 @@ async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, 
 
 async fn download_attachment(State(state): State<AppState>, current: Viewer, Path(attachment_id): Path<Uuid>) -> Result<Response, ApiError> {
     let attachment = sqlx::query_as::<_, AttachmentDownloadRecord>(
-        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id, c.discord_integration_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
+        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id, c.discord_integration_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
     )
     .bind(attachment_id)
     .bind(current.0.map(|user| user.id))
@@ -5628,7 +5628,7 @@ async fn upload_card_background(State(state): State<AppState>, current: CurrentU
 }
 
 async fn download_card_background(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> Result<Response, ApiError> {
-    let background = sqlx::query_as::<_, (String, String)>("SELECT cb.object_key, cb.media_type FROM card_backgrounds cb INNER JOIN cards c ON c.id = cb.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE cb.card_id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))")
+    let background = sqlx::query_as::<_, (String, String)>("SELECT cb.object_key, cb.media_type FROM card_backgrounds cb INNER JOIN cards c ON c.id = cb.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE cb.card_id = $1 AND (m.user_id IS NOT NULL OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))")
         .bind(card_id).bind(current.0.map(|user| user.id)).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "background_not_found", "Card background was not found.".to_owned()))?;
     let bytes = tokio::fs::read(state.upload_dir.join(background.0)).await.map_err(|error| {
@@ -5652,7 +5652,7 @@ async fn download_public_board_background(State(state): State<AppState>, Path(bo
 }
 
 async fn download_public_board_avatar(State(state): State<AppState>, Path((board_id, user_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
-    let is_visible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM boards b WHERE b.id = $1 AND b.archived_at IS NULL AND b.visibility = 'public' AND (EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2) OR EXISTS(SELECT 1 FROM card_assignees ca INNER JOIN cards c ON c.id = ca.card_id WHERE c.board_id = b.id AND c.archived_at IS NULL AND ca.user_id = $2) OR EXISTS(SELECT 1 FROM comments cm INNER JOIN cards c ON c.id = cm.card_id WHERE c.board_id = b.id AND cm.author_id = $2)))")
+    let is_visible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM boards b WHERE b.id = $1 AND b.archived_at IS NULL AND b.visibility = 'public' AND (EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2) OR EXISTS(SELECT 1 FROM card_assignees ca INNER JOIN cards c ON c.id = ca.card_id WHERE c.board_id = b.id AND ca.user_id = $2) OR EXISTS(SELECT 1 FROM comments cm INNER JOIN cards c ON c.id = cm.card_id WHERE c.board_id = b.id AND cm.author_id = $2)))")
         .bind(board_id).bind(user_id).fetch_one(database(&state)?).await.map_err(ApiError::internal)?;
     if !is_visible { return Err(ApiError(StatusCode::NOT_FOUND, "avatar_not_found", "Avatar was not found.".to_owned())); }
     avatar_response(&state, user_id).await
@@ -6297,12 +6297,12 @@ async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(
     Ok(Json(card))
 }
 
-async fn list_archived_cards(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<ArchivedCardResponse>> {
+async fn list_archived_cards(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>) -> ApiResult<Vec<ArchivedCardResponse>> {
     let cards = sqlx::query_as::<_, ArchivedCardResponse>(
-        "SELECT c.id, c.list_id, c.title, c.description, c.archived_at::text AS archived_at FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access'))) ORDER BY c.archived_at DESC",
+        "SELECT c.id, c.list_id, c.title, c.description, c.archived_at::text AS archived_at FROM cards c INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL))) ORDER BY c.archived_at DESC",
     )
     .bind(board_id)
-    .bind(current.id)
+    .bind(current.0.map(|user| user.id))
     .fetch_all(database(&state)?)
     .await
     .map_err(ApiError::internal)?;

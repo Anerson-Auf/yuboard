@@ -31,7 +31,7 @@ type Milestone = { id: string; name: string; description: string; color: string;
 type BoardSticker = { id: string; name: string; media_type: string; url: string };
 type DraftSticker = { id: string; name: string; body: string; emoji?: string; url?: string };
 type CommentReaction = { emoji: string; count: number; reacted: boolean };
-type Card = { id: EntityId; title: string; description?: string; priority?: number; frozen?: boolean; lastActivityAt?: string; startAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; hasUnvotedPolls?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
+type Card = { id: EntityId; title: string; description?: string; priority?: number; frozen?: boolean; archived?: boolean; lastActivityAt?: string; startAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; hasUnvotedPolls?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
 type Column = { id: EntityId; title: string; cardLimit: number; cards: Card[] };
 type View = 'home' | 'board';
 type PersistenceStatus = 'connecting' | 'connected';
@@ -1079,6 +1079,7 @@ export default function Home() {
   const selectedParkingCard = selectedParkingCardId ? parkingCards.find((card) => card.id === selectedParkingCardId) ?? null : null;
   const isSelectedParkingCard = Boolean(selectedParkingCard && selected && String(selected.id) === selectedParkingCard.id);
   const isPublicViewer = authState === 'public' || !canEditBoard;
+  const isSelectedReadOnly = isPublicViewer || Boolean(selected?.archived);
   const currentTeamPreset = account ? teamMembers.find((member) => member.id === account.user.id)?.preset : undefined;
   const canManageFullAccess = Boolean(account?.user.is_system_owner || currentTeamPreset === 'owner');
   const hasSelectedCardBackground = Boolean(selected?.backgroundImageUrl && !unavailableCardBackgroundUrls.has(assetUrl(selected.backgroundImageUrl)));
@@ -1415,12 +1416,12 @@ export default function Home() {
           setSelected((current) => current?.id === selectedCardId ? { ...current, ...mergedCardMeta } : current);
           setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, ...mergedCardMeta } : card) })));
         }
-        if (detail.unread_mention_source_ids.length && account && !isPublicViewer) {
+        if (detail.unread_mention_source_ids.length && account && !isPublicViewer && !selected?.archived) {
           setSelected((current) => current?.id === selectedCardId ? { ...current, hasUnreadMentions: false } : current);
           setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, hasUnreadMentions: false } : card) })));
           void fetch(`${API_URL}/v1/cards/${selectedCardId}/mentions/read`, { method: 'POST' });
         }
-        if (account && !isPublicViewer) {
+        if (account && !isPublicViewer && !selected?.archived) {
           // Main comments are read when the card itself is opened. Thread
           // replies stay unread until their own window is opened.
           void fetch(`${API_URL}/v1/cards/${selectedCardId}/comments/read`, { method: 'POST' });
@@ -1430,7 +1431,7 @@ export default function Home() {
       .catch(() => { if (!cancelled) showToast('Не удалось загрузить детали карточки'); })
       .finally(() => { if (!cancelled) setDetailsLoading(false); });
     return () => { cancelled = true; };
-  }, [selectedCardId, persistence, cardDetailRevision, account, isPublicViewer]);
+  }, [selectedCardId, persistence, cardDetailRevision, account, isPublicViewer, selected?.archived]);
 
   // Board realtime refreshes replace the card detail payload. Keep an open
   // thread in step with that payload, so external comments never reorder the
@@ -1643,7 +1644,7 @@ export default function Home() {
   }, [cardContextMenu, columnContextMenu, freeformContextMenu]);
 
   useEffect(() => {
-    if (!selected || !cardTitleDraft.trim() || (selected.title === cardTitleDraft.trim() && (selected.description ?? '') === cardDescriptionDraft)) return;
+    if (!selected || selected.archived || !cardTitleDraft.trim() || (selected.title === cardTitleDraft.trim() && (selected.description ?? '') === cardDescriptionDraft)) return;
     const timer = window.setTimeout(() => {
       const updated = { title: cardTitleDraft.trim(), description: cardDescriptionDraft };
       persistCardDraft(selected, updated);
@@ -1801,7 +1802,7 @@ export default function Home() {
   }
   function renderCardMilestoneControl() {
     if (!selected) return null;
-    if (isPublicViewer) return selected.milestone ? <span className="quick-action card-milestone-indicator" title={selected.milestone.name} aria-label={`Milestone: ${selected.milestone.name}`}><BoardToolbarIcon type="milestones" /></span> : null;
+    if (isSelectedReadOnly) return selected.milestone ? <span className="quick-action card-milestone-indicator" title={selected.milestone.name} aria-label={`Milestone: ${selected.milestone.name}`}><BoardToolbarIcon type="milestones" /></span> : null;
     return <div className="card-milestone-control"><button type="button" className={`quick-action ${isCardMilestoneOpen ? 'active' : ''}`} onClick={() => setCardMilestoneOpen((current) => !current)} title={selected.milestone ? `Milestone: ${selected.milestone.name}` : 'Назначить milestone'} aria-label={selected.milestone ? `Milestone: ${selected.milestone.name}` : 'Назначить milestone'}><BoardToolbarIcon type="milestones" /></button>{isCardMilestoneOpen && <div className="property-popover card-milestone-popover"><div className="popover-heading"><b>Milestone</b><button type="button" onClick={() => setCardMilestoneOpen(false)} aria-label="Закрыть">×</button></div><button type="button" className={!selected.milestone ? 'selected' : ''} onClick={() => replaceSelectedMilestone(null)}>Без milestone {!selected.milestone && <b>✓</b>}</button>{milestones.map((milestone) => <button key={milestone.id} type="button" className={selected.milestone?.id === milestone.id ? 'selected' : ''} onClick={() => replaceSelectedMilestone(milestone)}><i style={{ backgroundColor: milestone.color }} />{milestone.name}{selected.milestone?.id === milestone.id && <b>✓</b>}</button>)}</div>}</div>;
   }
   function renderChecklists() {
@@ -1847,9 +1848,10 @@ export default function Home() {
       setSelected((current) => current?.id === selected.id ? { ...current, description } : current);
       showToast('Версия описания восстановлена');
     };
-    return <><CardCollaborationPanel cardId={selected.id} canEdit={!isPublicViewer} candidates={candidates} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onDescriptionRestore={restoreDescription} showRelationCreator={false} hideEmptyRelations /><CardPollsPanel cardId={selected.id} canEdit={!isPublicViewer} showCreate={false} hideWhenEmpty /></>;
+    return <><CardCollaborationPanel cardId={selected.id} canEdit={!isSelectedReadOnly} candidates={candidates} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onDescriptionRestore={restoreDescription} showRelationCreator={false} hideEmptyRelations /><CardPollsPanel cardId={selected.id} canEdit={!isSelectedReadOnly} showCreate={false} hideWhenEmpty /></>;
   }
   function persistCardDraft(card: Card, updated: { title: string; description: string }) {
+    if (card.archived) return;
     setCardSaveStatus('saving');
     setSelected((current) => current?.id === card.id ? { ...current, ...updated } : current);
     if (isParkingCardId(card.id)) {
@@ -1866,7 +1868,7 @@ export default function Home() {
   function closeSelectedCard() {
     const card = selected;
     const title = cardTitleDraft.trim();
-    if (card && title && (card.title !== title || (card.description ?? '') !== cardDescriptionDraft)) {
+    if (card && !card.archived && title && (card.title !== title || (card.description ?? '') !== cardDescriptionDraft)) {
       persistCardDraft(card, { title, description: cardDescriptionDraft });
     }
     setSelected(null);
@@ -2647,6 +2649,10 @@ export default function Home() {
       .catch(() => showToast('Не удалось загрузить архив'))
       .finally(() => setArchiveLoading(false));
   }
+  function openArchivedCard(card: ArchivedCard) {
+    setArchiveOpen(false);
+    openCard({ id: card.id, title: card.title, description: card.description, archived: true, labels: [], roles: [], members: [] });
+  }
   function loadBoardActivity(page = 1, userId = boardActivityUserId) {
     if (!boardId) return;
     setBoardActivityLoading(true);
@@ -2672,7 +2678,7 @@ export default function Home() {
     openCard(card);
   }
   function restoreArchivedCard(card: ArchivedCard) {
-    if (persistence !== 'connected') return;
+    if (persistence !== 'connected' || isPublicViewer) return;
     void fetch(`${API_URL}/v1/cards/${card.id}/restore`, { method: 'POST' })
       .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось восстановить задачу'); return response.json() as Promise<{ id: string; list_id: string; title: string; description: string }>; })
       .then((restored) => {
@@ -2912,7 +2918,7 @@ export default function Home() {
     }
   }
   function replaceSelectedLabels(labels: Label[]) {
-    if (!selected) return;
+    if (!selected || selected.archived) return;
     updateSelectedCard({ labels });
     if (persistence === 'connected' && typeof selected.id === 'string' && !isParkingCardId(selected.id)) {
       void fetch(`${API_URL}/v1/cards/${selected.id}/labels`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label_ids: labels.map((label) => label.id) }) })
@@ -2987,7 +2993,7 @@ export default function Home() {
       .finally(() => setSavingBoardLabel(false));
   }
   function replaceSelectedMembers(members: Member[]) {
-    if (!selected) return;
+    if (!selected || selected.archived) return;
     updateSelectedCard({ members });
     if (persistence === 'connected' && typeof selected.id === 'string' && !isParkingCardId(selected.id)) {
       void fetch(`${API_URL}/v1/cards/${selected.id}/assignees`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_ids: members.filter((member) => typeof member.id === 'string').map((member) => member.id) }) })
@@ -3002,7 +3008,7 @@ export default function Home() {
     replaceSelectedMembers(exists ? selected.members.filter((current) => current.id !== member.id) : [...selected.members, member]);
   }
   function toggleOwnAssignment() {
-    if (!selected || !account || !canEditBoard || isUpdatingOwnAssignment) return;
+    if (!selected || selected.archived || !account || !canEditBoard || isUpdatingOwnAssignment) return;
     const isAssigned = selected.members.some((member) => String(member.id) === account.user.id);
     const previousMembers = selected.members;
     const me = workspaceMembers.find((member) => String(member.id) === account.user.id) ?? currentMember;
@@ -3195,7 +3201,7 @@ export default function Home() {
   function createChecklist(event: FormEvent) {
     event.preventDefault();
     const title = checklistNameDraft.trim();
-    if (!selected || !title || isSavingChecklist) return;
+    if (!selected || selected.archived || !title || isSavingChecklist) return;
     if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) {
       applyChecklists([...checklists, { id: `local-checklist-${Date.now()}`, title, items: [] }]);
       setChecklistNameDraft('');
@@ -3211,7 +3217,7 @@ export default function Home() {
   function addChecklistItem(event: FormEvent, checklistId: string) {
     event.preventDefault();
     const title = (checklistItemDrafts[checklistId] ?? '').trim();
-    if (!title || isSavingChecklist) return;
+    if (selected?.archived || !title || isSavingChecklist) return;
     if (persistence !== 'connected' || isParkingCardId(selected?.id) || checklistId.startsWith('local-')) {
       applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: [...checklist.items, { id: `local-check-${Date.now()}`, title, is_completed: false, description: '', attachments: [] }] } : checklist));
       setChecklistItemDrafts((current) => ({ ...current, [checklistId]: '' }));
@@ -3225,6 +3231,7 @@ export default function Home() {
       .finally(() => setSavingChecklist(false));
   }
   function deleteChecklist(checklist: Checklist) {
+    if (selected?.archived) return;
     applyChecklists(checklists.filter((item) => item.id !== checklist.id));
     if (persistence === 'connected' && !isParkingCardId(selected?.id) && !checklist.id.startsWith('local-')) {
       void fetch(`${API_URL}/v1/checklists/${checklist.id}`, { method: 'DELETE' })
@@ -3233,6 +3240,7 @@ export default function Home() {
     }
   }
   function toggleChecklistItem(checklistId: string, item: ChecklistItem) {
+    if (selected?.archived) return;
     const next = !item.is_completed;
     applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: checklist.items.map((value) => value.id === item.id ? { ...value, is_completed: next } : value) } : checklist));
     if (persistence === 'connected' && !isParkingCardId(selected?.id) && typeof item.id === 'string') {
@@ -3242,6 +3250,7 @@ export default function Home() {
     }
   }
   function removeChecklistItem(checklistId: string, item: ChecklistItem) {
+    if (selected?.archived) return;
     applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: checklist.items.filter((value) => value.id !== item.id) } : checklist));
     if (persistence === 'connected' && !isParkingCardId(selected?.id) && typeof item.id === 'string') {
       void fetch(`${API_URL}/v1/checklist-items/${item.id}`, { method: 'DELETE' })
@@ -3252,7 +3261,7 @@ export default function Home() {
   function addComment(event?: FormEvent) {
     event?.preventDefault();
     const body = commentDraft.trim();
-    if (!selected || !body || isSendingComment) return;
+    if (!selected || selected.archived || !body || isSendingComment) return;
     if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) {
       const comment: Comment = { id: `local-comment-${Date.now()}`, body, author_id: account?.user.id, author_name: 'Вы', parent_comment_id: null, created_at: new Date().toISOString(), reactions: [] };
       setComments((current) => [comment, ...current]);
@@ -3538,12 +3547,12 @@ export default function Home() {
           <header><b>@{comment.author_name}</b><time>{commentTime(comment)}{comment.edited_at && ' · изменено'}</time></header>
           <div className="comment-text"><MarkdownDescription value={comment.body} highlightMentions={unreadMentionSourceIds.includes(String(comment.id))} />{comment.is_unread && <i className="comment-unread-dot comment-unread-dot-message" aria-label="Новое непрочитанное сообщение" />}</div>
           <div className="comment-reactions">
-            {(comment.reactions ?? []).map((reaction) => <button type="button" key={reaction.emoji} className={reaction.reacted ? 'reacted' : ''} onClick={() => toggleCommentReaction(comment, reaction.emoji)} disabled={isPublicViewer || !canEditBoard} title={reaction.emoji}>{reactionContent(reaction.emoji)}<small>{reaction.count}</small></button>)}
-            {!isPublicViewer && canEditBoard && renderReactionPicker(comment)}
+            {(comment.reactions ?? []).map((reaction) => <button type="button" key={reaction.emoji} className={reaction.reacted ? 'reacted' : ''} onClick={() => toggleCommentReaction(comment, reaction.emoji)} disabled={isSelectedReadOnly || !canEditBoard} title={reaction.emoji}>{reactionContent(reaction.emoji)}<small>{reaction.count}</small></button>)}
+            {!isSelectedReadOnly && canEditBoard && renderReactionPicker(comment)}
           </div>
           <div className="comment-actions">
             {canOpenThread && <button type="button" className={`comment-thread-action ${comment.has_unread_thread ? 'has-unread' : ''}`} onClick={() => openCommentThread(comment)}><CardMetaIcon type="comments" /><span>Обсудить{threadCount ? ` · ${threadCount}` : ''}</span>{comment.has_unread_thread && <i className="comment-unread-dot" aria-label="Новые сообщения в треде" />}</button>}
-            {comment.author_id === account?.user.id && <><button type="button" onClick={() => beginCommentEdit(comment)}>Изменить</button><button type="button" onClick={() => removeComment(comment)}>Удалить</button></>}
+            {!isSelectedReadOnly && comment.author_id === account?.user.id && <><button type="button" onClick={() => beginCommentEdit(comment)}>Изменить</button><button type="button" onClick={() => removeComment(comment)}>Удалить</button></>}
           </div>
         </>}
       </div>
@@ -3573,7 +3582,7 @@ export default function Home() {
     setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === cardId ? patch(card) : card) })));
   }
   async function uploadMediaFiles(files: File[], target?: 'description' | 'comment' | 'thread'): Promise<Attachment[]> {
-    if (!selected || !files.length || isUploadingAttachment) return [];
+    if (!selected || selected.archived || !files.length || isUploadingAttachment) return [];
     if (isParkingCardId(selected.id)) {
       const accepted = files.filter((file) => isSupportedMedia(file) && file.size <= 4 * 1024 * 1024);
       if (accepted.length !== files.length) showToast('В локальной парковке можно хранить медиа до 4 МиБ на файл');
@@ -3639,6 +3648,7 @@ export default function Home() {
     void uploadMediaFiles(files, target);
   }
   function deleteAttachment(attachment: Attachment) {
+    if (selected?.archived) return;
     const wasCover = selected?.coverAttachmentId === attachment.id;
     setAttachments((current) => current.filter((item) => item.id !== attachment.id));
     if (wasCover) updateSelectedCard({ coverAttachmentId: undefined, coverUrl: undefined, coverMediaType: undefined });
@@ -3652,7 +3662,7 @@ export default function Home() {
       .catch(() => showToast('Не удалось удалить вложение'));
   }
   function updateCardCover(attachment: Attachment | null, mode = coverModeDraft) {
-    if (!selected || (attachment && !/^(image|video)\//.test(attachment.media_type))) return;
+    if (!selected || selected.archived || (attachment && !/^(image|video)\//.test(attachment.media_type))) return;
     const cardId = String(selected.id);
     const requestId = (cardCoverRevisionRef.current[cardId] ?? 0) + 1;
     cardCoverRevisionRef.current[cardId] = requestId;
@@ -3666,7 +3676,7 @@ export default function Home() {
       .catch(() => { if (pendingCardCoverRef.current[cardId]?.requestId === requestId) delete pendingCardCoverRef.current[cardId]; setCardDetailRevision((current) => current + 1); showToast('Не удалось сохранить обложку'); });
   }
   function clearCardBackground() {
-    if (!selected) return;
+    if (!selected || selected.archived) return;
     updateSelectedCard({ backgroundImageUrl: undefined });
     setSidebarPanel(null);
     if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
@@ -3678,6 +3688,7 @@ export default function Home() {
     applyChecklists(checklists.map((checklist) => checklist.id === checklistId ? { ...checklist, items: checklist.items.map((item) => item.id === itemId ? { ...item, ...patch } : item) } : checklist));
   }
   function saveChecklistItemDescription(checklistId: string, item: ChecklistItem) {
+    if (selected?.archived) return;
     const description = checklistItemDescriptionDrafts[String(item.id)] ?? item.description;
     if (description === item.description) return;
     updateChecklistItem(checklistId, item.id, { description });
@@ -3688,7 +3699,7 @@ export default function Home() {
       .catch(() => showToast('Описание пункта не сохранено'));
   }
   async function uploadChecklistItemAttachments(checklistId: string, item: ChecklistItem, files: File[]) {
-    if (!files.length || isUploadingChecklistItemAttachment) return;
+    if (selected?.archived || !files.length || isUploadingChecklistItemAttachment) return;
     if (persistence !== 'connected' || typeof item.id !== 'string') { showToast('Для вложений нужно подключение к серверу'); return; }
     const accepted = files.filter(isSupportedMedia);
     if (accepted.length !== files.length) showToast('Можно добавить только JPEG, PNG, GIF, WebP, MP4, WebM или MOV');
@@ -3707,6 +3718,7 @@ export default function Home() {
     finally { setUploadingChecklistItemAttachment(false); }
   }
   function deleteChecklistItemAttachment(checklistId: string, item: ChecklistItem, attachment: Attachment) {
+    if (selected?.archived) return;
     updateChecklistItem(checklistId, item.id, { attachments: item.attachments.filter((value) => value.id !== attachment.id) });
     void fetch(`${API_URL}/v1/attachments/${attachment.id}`, { method: 'DELETE' })
       .then((response) => { if (!response.ok) throw new Error('attachment delete failed'); })
@@ -3715,7 +3727,7 @@ export default function Home() {
   function uploadCardBackground(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !selected || isUploadingCardBackground) return;
+    if (!file || !selected || selected.archived || isUploadingCardBackground) return;
     if (isParkingCardId(selected.id)) {
       if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 4 * 1024 * 1024) { showToast('В локальной парковке фон — JPEG, PNG, GIF или WebP до 4 МиБ'); return; }
       const reader = new FileReader();
@@ -3785,11 +3797,12 @@ export default function Home() {
       .catch(() => showToast('Не удалось сохранить роли карточки'));
   }
   function toggleSelectedProfileRole(role: ProfileRole) {
-    if (!selected) return;
+    if (!selected || selected.archived) return;
     replaceSelectedProfileRoles(selected.roles.some((item) => item.id === role.id) ? selected.roles.filter((item) => item.id !== role.id) : [...selected.roles, role]);
   }
   function toggleCardCompletion(card: Card, event?: ReactMouseEvent<HTMLButtonElement>) {
     event?.stopPropagation();
+    if (card.archived) return;
     if (card.frozen && !isParkingCardId(card.id)) { showToast('Карточка заморожена: сначала её нужно разморозить'); return; }
     const completedAt = card.completedAt ? undefined : new Date().toISOString();
     if (isParkingCardId(card.id)) {
@@ -3838,7 +3851,7 @@ export default function Home() {
     }
   }
   function setSelectedCardPublicVisibility(isPublic: boolean) {
-    if (!selected || !canManageBoardAdministration) return;
+    if (!selected || selected.archived || !canManageBoardAdministration) return;
     const previous = selected.isPublic ?? true;
     updateSelectedCard({ isPublic });
     if (persistence !== 'connected' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
@@ -3847,7 +3860,7 @@ export default function Home() {
       .catch(() => { updateSelectedCard({ isPublic: previous }); showToast('Не удалось изменить видимость карточки'); });
   }
   function setSelectedCardPriority(priority: number) {
-    if (!selected || priority < 0 || priority > 5) return;
+    if (!selected || selected.archived || priority < 0 || priority > 5) return;
     if (selected.frozen && !isSelectedParkingCard) { showToast('Карточка заморожена: сначала её нужно разморозить'); return; }
     const previous = selected.priority ?? 0;
     if (priority === previous) return;
@@ -3892,7 +3905,7 @@ export default function Home() {
   }
   function renderDeadlinePeriodFields() {
     if (sidebarPanel !== 'due' || !selected || typeof selected.id !== 'string' || isSelectedParkingCard) return null;
-    return <CardScheduleFields inDeadline cardId={selected.id} startAt={selected.startAt} dueAt={selected.dueAt} canEdit={!isPublicViewer} onChange={(patch) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, ...patch } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, ...patch } : current); }} />;
+    return <CardScheduleFields inDeadline cardId={selected.id} startAt={selected.startAt} dueAt={selected.dueAt} canEdit={!isSelectedReadOnly} onChange={(patch) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, ...patch } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, ...patch } : current); }} />;
   }
   function renderParkingCard(parkingCard: ParkingCard) {
     const card = parkingCardToCard(parkingCard);
@@ -4332,7 +4345,7 @@ export default function Home() {
       </section>
       {freeformContextMenu && !isPublicViewer && <div className="freeform-context-menu" style={{ left: freeformContextMenu.x, top: freeformContextMenu.y }} role="menu"><b>Свободная доска</b><button type="button" onClick={() => { addColumn(freeformContextMenu.position); setFreeformContextMenu(null); }}>＋ Создать колонку здесь</button><button type="button" onClick={() => { publishFreeformCursor(freeformContextMenu.position, true); setFreeformContextMenu(null); showToast('Метка показана участникам на 5 секунд'); }}>⌁ Дать метку · 5 сек</button><button type="button" onClick={() => { setFreeformErasing(false); setFreeformDrawingMode(true); setFreeformContextMenu(null); showToast('Рисование включено'); }}>✎ Рисовать</button></div>}
       {boardViewMode === 'freeform' && !isPublicViewer && <div className="freeform-drawing-toolbar"><button type="button" className={isFreeformDrawing ? 'active' : ''} onClick={() => { setFreeformErasing(false); setFreeformDrawingMode((current) => !current); }}>✎ {isFreeformDrawing ? 'Рисование' : 'Рисовать'}</button><button type="button" className={isFreeformErasing ? 'active' : ''} onClick={() => { setFreeformDrawingMode(false); setFreeformErasing((current) => !current); }}>⌫ Ластик</button><span className="freeform-zoom">{Math.round(freeformZoom * 100)}%</span><button type="button" onClick={() => setFreeformZoom(1)}>100%</button>{(isFreeformDrawing || isFreeformErasing) && <><input type="color" value={freeformInkColor} onChange={(event) => setFreeformInkColor(event.target.value)} aria-label="Цвет кисти" /><select value={freeformInkWidth} onChange={(event) => setFreeformInkWidth(Number(event.target.value))} aria-label="Толщина кисти"><option value="2">Тонкая</option><option value="4">Средняя</option><option value="7">Толстая</option></select></>}<button type="button" onClick={clearOwnFreeformInk}>Стереть мои линии</button></div>}
-    {isArchiveOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setArchiveOpen(false)}><section className="archive-modal" role="dialog" aria-modal="true" aria-label="Архив задач" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setArchiveOpen(false)} aria-label="Закрыть архив">×</button><p className="eyebrow">АРХИВ ПРОЕКТА</p><h2>Архивированные задачи</h2><p className="archive-copy">Восстановленная задача вернётся в свою последнюю колонку.</p>{isArchiveLoading ? <p className="detail-loading">Загружаем архив…</p> : archivedCards.length ? <div className="archive-list">{archivedCards.map((card) => <article key={card.id}><div><b>{card.title}</b>{card.description && <small>{card.description}</small>}<time>{new Date(card.archived_at).toLocaleString('ru-RU')}</time></div><button onClick={() => restoreArchivedCard(card)}>Восстановить</button></article>)}</div> : <p className="empty-comments">В архиве пока нет задач.</p>}</section></div>}
+    {isArchiveOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setArchiveOpen(false)}><section className="archive-modal" role="dialog" aria-modal="true" aria-label="Архив задач" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setArchiveOpen(false)} aria-label="Закрыть архив">×</button><p className="eyebrow">АРХИВ ПРОЕКТА</p><h2>Архивированные задачи</h2><p className="archive-copy">{isPublicViewer ? 'Откройте карточку, чтобы посмотреть её содержимое и обсуждение.' : 'Откройте карточку для просмотра или восстановите её в последнюю колонку.'}</p>{isArchiveLoading ? <p className="detail-loading">Загружаем архив…</p> : archivedCards.length ? <div className="archive-list">{archivedCards.map((card) => <article className="archive-card-entry" key={card.id} role="button" tabIndex={0} onClick={() => openArchivedCard(card)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openArchivedCard(card); } }}><div><b>{card.title}</b>{card.description && <small>{card.description}</small>}<time>{new Date(card.archived_at).toLocaleString('ru-RU')}</time></div>{!isPublicViewer && <button onClick={(event) => { event.stopPropagation(); restoreArchivedCard(card); }}>Восстановить</button>}</article>)}</div> : <p className="empty-comments">В архиве пока нет задач.</p>}</section></div>}
     {isBoardActivityOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setBoardActivityOpen(false)}><section className="archive-modal project-activity-modal" role="dialog" aria-modal="true" aria-label="Активность проекта" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setBoardActivityOpen(false)} aria-label="Закрыть активность">×</button><p className="eyebrow">АКТИВНОСТЬ ПРОЕКТА</p><h2>Что происходит в команде</h2><div className="project-activity-toolbar"><label>Участник<select value={boardActivityUserId} onChange={(event) => { const userId = event.target.value; setBoardActivityUserId(userId); loadBoardActivity(1, userId); }}><option value="">Все участники</option>{workspaceMembers.map((member) => <option key={member.id} value={member.id}>@{member.name}</option>)}</select></label>{boardActivity && <span>{boardActivity.total} событий</span>}</div>{isBoardActivityLoading && !boardActivity ? <p className="detail-loading">Загружаем активность…</p> : boardActivity?.items.length ? <><div className={`project-activity-list ${isBoardActivityLoading ? 'loading' : ''}`}>{boardActivity.items.map((item) => <button type="button" key={item.id} onClick={() => openBoardActivityCard(item)}><Avatar member={{ id: item.actor_id ?? `activity-${item.id}`, initials: item.actor_name.slice(0, 2).toUpperCase() || '—', color: 'mint', name: item.actor_name, avatarUrl: item.actor_avatar_url ?? undefined }} /><span><b>@{item.actor_name}</b><strong>{boardActivityLabel(item)}{item.count > 1 && <em>×{item.count}</em>}</strong><small>В карточке «{item.card_title}»</small></span><time>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</time></button>)}</div>{boardActivity.total > boardActivity.per_page && <nav className="project-activity-pagination" aria-label="Страницы активности"><button type="button" disabled={boardActivity.page <= 1 || isBoardActivityLoading} onClick={() => loadBoardActivity(boardActivity.page - 1)}>← Новее</button><span>{boardActivity.page} / {Math.ceil(boardActivity.total / boardActivity.per_page)}</span><button type="button" disabled={boardActivity.page >= Math.ceil(boardActivity.total / boardActivity.per_page) || isBoardActivityLoading} onClick={() => loadBoardActivity(boardActivity.page + 1)}>Старее →</button></nav>}</> : <p className="empty-comments">В этой выборке пока нет событий.</p>}</section></div>}
       {isTeamOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setTeamOpen(false)}><section className="archive-modal team-modal" role="dialog" aria-modal="true" aria-label="Команда проекта" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setTeamOpen(false)} aria-label="Закрыть команду">×</button><p className="eyebrow">ПРОЕКТ</p><h2>Команда и доступы</h2><p className="archive-copy">Участник получает доступ только к этому проекту. Выберите готовую роль — сервер применяет права на каждом запросе.</p><div className="role-guide">{(['viewer', 'contributor', 'editor', 'full_access'] as TeamMember['preset'][]).map((role) => <div key={role}><b>{roleLabels[role]}</b><span>{roleDescriptions[role]}</span></div>)}</div>{isTeamLoading ? <p className="detail-loading">Загружаем участников…</p> : <><form className="member-picker" onSubmit={addWorkspaceMember}><label><span>Добавить участника</span><input autoFocus value={accountSearch} onChange={(event) => { setAccountSearch(event.target.value); setSelectedAccountId(''); }} placeholder="Найти по @нику" /></label><div className="member-picker-results">{availableAccounts.filter((item) => item.username.toLowerCase().includes(accountSearch.trim().replace(/^@/, '').toLowerCase())).slice(0, 6).map((item) => <button type="button" className={selectedAccountId === item.id ? 'selected' : ''} key={item.id} onClick={() => setSelectedAccountId(item.id)}><Avatar member={memberFromApi(item)} /><span>@{item.username}</span><small>{selectedAccountId === item.id ? 'Выбран' : 'Выбрать'}</small></button>)}{!availableAccounts.filter((item) => item.username.toLowerCase().includes(accountSearch.trim().replace(/^@/, '').toLowerCase())).length && <p className="empty-comments">Подходящих активных аккаунтов нет.</p>}</div><button className="create-button" disabled={!selectedAccountId || isSavingMember}>{isSavingMember ? 'Добавляем…' : 'Добавить в проект'}</button></form><div className="team-list">{teamMembers.map((member) => {
         const isProtectedFullAccess = member.preset === 'full_access' && !canManageFullAccess;
@@ -4374,11 +4387,12 @@ export default function Home() {
     </div>}
 
     {selected && <div className="modal-backdrop" role="presentation" onMouseDown={closeSelectedCard}>
-      <section className={`task-modal ${selected.frozen && !isSelectedParkingCard ? 'frozen-card-modal' : ''}`} role="dialog" aria-modal="true" aria-label="Детали задачи" onMouseDown={(event) => event.stopPropagation()}>
+      <section className={`task-modal ${selected.frozen && !isSelectedParkingCard ? 'frozen-card-modal' : ''} ${selected.archived ? 'archived-card-modal' : ''}`} role="dialog" aria-modal="true" aria-label="Детали задачи" onMouseDown={(event) => event.stopPropagation()}>
         <button className="modal-close" onClick={closeSelectedCard} aria-label="Закрыть">×</button>
         <div className="task-layout">
           <div className="task-content">
             {selected.frozen && !isSelectedParkingCard && <div className="frozen-card-notice">❄ Карточка заморожена. Сначала разморозьте её, чтобы что-либо изменить.</div>}
+            {selected.archived && <div className="archived-card-notice">▣ Карточка находится в архиве и доступна только для чтения.</div>}
             <div className={`card-detail-top ${hasSelectedCardBackground ? 'has-card-background' : ''}`} style={hasSelectedCardBackground ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
               <div className="card-property-area">
               <div className="card-quick-actions"><span className="card-quick-actions-left">{renderCardMilestoneControl()}<button className={`quick-action ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(false); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }} title="Метки" aria-label="Настроить метки"><BoardToolbarIcon type="labels" /></button><button className={`quick-action ${sidebarPanel === 'background' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'background' ? null : 'background')} title="Фон карточки" aria-label="Настроить фон карточки">▧</button>{canManageBoardAdministration && <button className={`quick-action ${sidebarPanel === 'public-visibility' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'public-visibility' ? null : 'public-visibility')} title="Доступ" aria-label="Настроить доступ к карточке">◉</button>}</span><span className="card-quick-actions-right">{authState === 'signed-in' && <button type="button" className={`quick-action card-watch-toggle ${isWatchingCard ? 'active' : ''}`} onClick={toggleCardWatch} title={isWatchingCard ? 'Отключить уведомления об этой карточке' : 'Подписаться на изменения карточки'} aria-label={isWatchingCard ? 'Отключить уведомления об этой карточке' : 'Подписаться на изменения карточки'}>{isWatchingCard ? '◉' : '◌'}</button>}<button type="button" className="quick-action" onClick={() => openFocusMode(selected)} title="Режим фокуса" aria-label="Показать только эту карточку и её связи">◉</button><button className={`quick-action ${sidebarPanel === 'due' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'due' ? null : 'due')} title={selected.dueAt ? `Дедлайн: ${formatDue(selected.dueAt)}` : 'Дедлайн'} aria-label="Настроить дедлайн">◷</button><button className="quick-action" onClick={openDiagram} title="Схема" aria-label="Открыть схему">⌁</button></span></div>
@@ -4389,11 +4403,11 @@ export default function Home() {
                 {sidebarPanel === 'public-visibility' && canManageBoardAdministration && <div className="card-public-visibility"><div className="popover-heading"><b>Видимость карточки</b><button type="button" onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><label><input type="checkbox" checked={selected.isPublic ?? true} onChange={(event) => setSelectedCardPublicVisibility(event.target.checked)} /> Видна гостям</label><p>Снимите галочку, чтобы карточка и её вложения были доступны только после входа в аккаунт.</p></div>}
                 {sidebarPanel === 'roles' && <><div className="popover-heading"><b>Роли карточки</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="label-options">{profileRoles.map((role) => <button key={role.id} className={`label-option ${selected.roles.some((current) => current.id === role.id) ? 'selected' : ''}`} style={{ borderColor: role.color, backgroundColor: `${role.color}22` }} onClick={() => toggleSelectedProfileRole(role)}><ShapeIcon shape={role.icon_shape} color={role.icon_color ?? role.color} /><span>{role.name}</span>{selected.roles.some((current) => current.id === role.id) && <b>✓</b>}</button>)}</div>{!profileRoles.length && <p className="empty-comments">System owner ещё не создал роли.</p>}</>}
               </div>}
-              {isSelectedParkingCard ? <p className="card-column-caption parking-card-caption">Локальная карточка · хранится только в этом браузере</p> : selectedColumnTitle && <p className="card-column-caption">В колонке · {selectedColumnTitle}</p>}<div className="detail-title-row"><button className={`detail-card-complete ${selected.completedAt ? 'done' : ''}`} aria-label={selected.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(selected.completedAt)} onClick={(event) => toggleCardCompletion(selected, event)}>{selected.completedAt && '✓'}</button><input className="card-title-input" value={cardTitleDraft} onChange={(event) => setCardTitleDraft(event.target.value)} aria-label="Название задачи" /></div>
-              <div className="card-priority-review-row"><section className="card-priority-editor" aria-label="Приоритет задачи"><span>Приоритет</span><div><button type="button" className={(selected.priority ?? 0) === 0 ? 'selected' : ''} onClick={() => setSelectedCardPriority(0)}>Нет</button>{[1, 2, 3, 4, 5].map((level) => <button type="button" className={(selected.priority ?? 0) === level ? 'selected' : ''} onClick={() => setSelectedCardPriority(level)} key={level}><PrioritySignal key={`${priorityMotionKey}-${level}`} priority={level} wave={priorityMotionKey > 0 && (selected.priority ?? 0) === level} /></button>)}</div></section>{typeof selected.id === 'string' && !isSelectedParkingCard && <CardReviewPanel compact cardId={selected.id} canEdit={!isPublicViewer && canEditBoard} members={workspaceMembers.map((member) => ({ id: String(member.id), username: member.name, avatar_url: member.avatarUrl }))} />}</div>
+              {isSelectedParkingCard ? <p className="card-column-caption parking-card-caption">Локальная карточка · хранится только в этом браузере</p> : selectedColumnTitle && <p className="card-column-caption">В колонке · {selectedColumnTitle}</p>}<div className="detail-title-row"><button className={`detail-card-complete ${selected.completedAt ? 'done' : ''}`} aria-label={selected.completedAt ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(selected.completedAt)} disabled={isSelectedReadOnly} onClick={(event) => toggleCardCompletion(selected, event)}>{selected.completedAt && '✓'}</button><input className="card-title-input" value={cardTitleDraft} readOnly={isSelectedReadOnly} onChange={(event) => setCardTitleDraft(event.target.value)} aria-label="Название задачи" /></div>
+              <div className="card-priority-review-row"><section className="card-priority-editor" aria-label="Приоритет задачи"><span>Приоритет</span><div><button type="button" className={(selected.priority ?? 0) === 0 ? 'selected' : ''} disabled={isSelectedReadOnly} onClick={() => setSelectedCardPriority(0)}>Нет</button>{[1, 2, 3, 4, 5].map((level) => <button type="button" className={(selected.priority ?? 0) === level ? 'selected' : ''} disabled={isSelectedReadOnly} onClick={() => setSelectedCardPriority(level)} key={level}><PrioritySignal key={`${priorityMotionKey}-${level}`} priority={level} wave={priorityMotionKey > 0 && (selected.priority ?? 0) === level} /></button>)}</div></section>{typeof selected.id === 'string' && !isSelectedParkingCard && <CardReviewPanel compact cardId={selected.id} canEdit={!isSelectedReadOnly && canEditBoard} members={workspaceMembers.map((member) => ({ id: String(member.id), username: member.name, avatar_url: member.avatarUrl }))} />}</div>
               <div className="card-members-labels-row"><div className="card-members-row"><span>Исполнители</span>{account && canEditBoard && <button type="button" className={`card-join-button ${selected.members.some((member) => String(member.id) === account.user.id) ? 'joined' : ''}`} onClick={toggleOwnAssignment} disabled={isUpdatingOwnAssignment}>{isUpdatingOwnAssignment ? 'Сохраняем…' : selected.members.some((member) => String(member.id) === account.user.id) ? 'Отказаться' : 'Присоединиться'}</button>}<div className="card-member-control">{<VisibleAvatars members={selected.members} />}<button className={`member-plus ${sidebarPanel === 'assignees' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'assignees' ? null : 'assignees')} aria-label="Назначить исполнителя">＋</button>{sidebarPanel === 'assignees' && <div className="property-popover assignees-popover" role="dialog" aria-label="Выбор исполнителей"><div className="popover-heading"><b>Исполнители</b><button onClick={() => setSidebarPanel(null)} aria-label="Закрыть">×</button></div><div className="member-options">{workspaceMembers.map((member) => <button key={member.id} className={`member-option ${selected.members.some((current) => current.id === member.id) ? 'selected' : ''}`} onClick={() => toggleSelectedMember(member)}><Avatar member={member} /><span>{member.name}</span>{selected.members.some((current) => current.id === member.id) && <b>✓</b>}</button>)}</div><p className="empty-comments">Состав пространства меняется в разделе «Команда».</p></div>}</div></div><div className="detail-card-labels"><span>Метки</span><div className="card-labels">{selected.labels.map((label) => isPublicViewer ? <LabelChip label={label} key={label.id} /> : <LabelChip label={label} key={label.id} asButton onClick={() => toggleSelectedLabel(label)} />)}<button className={`label-plus ${sidebarPanel === 'labels' ? 'active' : ''}`} onClick={() => { setExistingLabelsOnly(true); setSidebarPanel((current) => current === 'labels' ? null : 'labels'); }} aria-label="Добавить существующую метку">＋</button></div></div><div className="detail-card-labels"><span>Роли</span><div className="card-labels">{selected.roles.map((role) => isPublicViewer ? <ProfileRoleChip role={role} key={role.id} /> : <ProfileRoleChip role={role} key={role.id} asButton onClick={() => toggleSelectedProfileRole(role)} />)}{!isPublicViewer && <button className={`label-plus ${sidebarPanel === 'roles' ? 'active' : ''}`} onClick={() => setSidebarPanel((current) => current === 'roles' ? null : 'roles')} aria-label="Добавить роль карточке">＋</button>}</div></div></div>
             </div>
-              <section className="description-section"><div className="section-heading"><h3>Описание</h3></div>{account && typeof selected.id === 'string' && !isSelectedParkingCard && <CardEditingPresence people={boardPresence} currentUserId={account.user.id} cardId={selected.id} />}{isEditingCardDescription ? <MentionTextarea autoFocus className={`card-description-input media-drop-target ${isUploadingAttachment ? 'uploading' : ''} ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} value={cardDescriptionDraft} onValueChange={setCardDescriptionDraft} onBlur={() => setEditingCardDescription(false)} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'description')} onPaste={(event) => handleMediaPaste(event, 'description')} placeholder="Добавьте описание или перетащите изображение/видео…" ariaLabel="Описание задачи" /> : <div className={`markdown-editable-description ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} role={isPublicViewer ? undefined : 'button'} tabIndex={isPublicViewer ? undefined : 0} onClick={() => { if (!isPublicViewer) setEditingCardDescription(true); }} onKeyDown={(event) => { if (!isPublicViewer && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setEditingCardDescription(true); } }}><MarkdownDescription value={cardDescriptionDraft} highlightMentions={unreadMentionSourceIds.includes(String(selected.id))} /></div>}</section>
+              <section className="description-section"><div className="section-heading"><h3>Описание</h3></div>{account && typeof selected.id === 'string' && !isSelectedParkingCard && <CardEditingPresence people={boardPresence} currentUserId={account.user.id} cardId={selected.id} />}{isEditingCardDescription && !isSelectedReadOnly ? <MentionTextarea autoFocus className={`card-description-input media-drop-target ${isUploadingAttachment ? 'uploading' : ''} ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} value={cardDescriptionDraft} onValueChange={setCardDescriptionDraft} onBlur={() => setEditingCardDescription(false)} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'description')} onPaste={(event) => handleMediaPaste(event, 'description')} placeholder="Добавьте описание или перетащите изображение/видео…" ariaLabel="Описание задачи" /> : <div className={`markdown-editable-description ${unreadMentionSourceIds.includes(String(selected.id)) ? 'mention-highlight' : ''}`} role={isSelectedReadOnly ? undefined : 'button'} tabIndex={isSelectedReadOnly ? undefined : 0} onClick={() => { if (!isSelectedReadOnly) setEditingCardDescription(true); }} onKeyDown={(event) => { if (!isSelectedReadOnly && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setEditingCardDescription(true); } }}><MarkdownDescription value={cardDescriptionDraft} highlightMentions={unreadMentionSourceIds.includes(String(selected.id))} /></div>}</section>
             {typeof selected.id === 'string' && !isSelectedParkingCard && <><CardReviewPanel cardId={selected.id} canEdit={!isPublicViewer && canEditBoard} members={workspaceMembers.map((member) => ({ id: String(member.id), username: member.name, avatar_url: member.avatarUrl }))} /><section className="card-additional-options"><button type="button" className={isCardAdditionalOptionsOpen ? 'open' : ''} onClick={() => setCardAdditionalOptionsOpen((current) => !current)} aria-expanded={isCardAdditionalOptionsOpen}>Дополнительные опции <span>⌄</span></button>{isCardAdditionalOptionsOpen && <div><CardScheduleFields cardId={selected.id} startAt={selected.startAt} dueAt={selected.dueAt} canEdit={!isPublicViewer} onChange={(patch) => { setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, ...patch } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, ...patch } : current); }} /><CardCollaborationPanel cardId={selected.id} canEdit={!isPublicViewer} candidates={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title })))} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onDescriptionRestore={(description) => { setCardDescriptionDraft(description); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, description } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, description } : current); showToast('Версия описания восстановлена'); }} showExisting={false} /><CardPollsPanel cardId={selected.id} canEdit={!isPublicViewer} showPolls={false} /></div>}</section><CardCollaborationPanel cardId={selected.id} canEdit={!isPublicViewer} candidates={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title })))} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onDescriptionRestore={(description) => { setCardDescriptionDraft(description); setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selected.id ? { ...card, description } : card) }))); setSelected((current) => current?.id === selected.id ? { ...current, description } : current); showToast('Версия описания восстановлена'); }} showRelationCreator={false} /><CardPollsPanel cardId={selected.id} canEdit={!isPublicViewer} showCreate={false} /></>}
             </div>
             {renderExistingCardRelationsAndPolls()}
@@ -4412,8 +4426,8 @@ export default function Home() {
                 <button className="create-button" disabled={!parkingRestoreListId} onClick={() => void restoreParkingCard(selectedParkingCard, parkingRestoreListId)}>Перенести на доску</button>
                 <button className="archive-button" onClick={archiveSelectedCard}>Удалить локально</button>
               </> : <>
-                {!isPublicViewer && canManageBoardAdministration && <button className={`freeze-card-action ${selected.frozen ? 'active' : ''}`} type="button" onClick={() => toggleCardFrozen(selected)} title={selected.frozen ? 'Разморозить карточку' : 'Заморозить карточку'}>{selected.frozen ? '❄ Разморозить' : '❄ Заморозить'}</button>}
-                <button className="archive-button" disabled={selected.frozen} onClick={archiveSelectedCard}>Архивировать</button>
+                {!isSelectedReadOnly && canManageBoardAdministration && <button className={`freeze-card-action ${selected.frozen ? 'active' : ''}`} type="button" onClick={() => toggleCardFrozen(selected)} title={selected.frozen ? 'Разморозить карточку' : 'Заморозить карточку'}>{selected.frozen ? '❄ Разморозить' : '❄ Заморозить'}</button>}
+                {!isSelectedReadOnly && <button className="archive-button" disabled={selected.frozen} onClick={archiveSelectedCard}>Архивировать</button>}
               </>}
               <span className={`autosave-status ${cardSaveStatus}`}>{isSelectedParkingCard ? 'Сохранено локально' : cardSaveStatus === 'saving' ? 'Изменения сохраняются' : cardSaveStatus === 'error' ? 'Не удалось сохранить' : 'Все изменения сохранены'}</span>
             </footer>
@@ -4426,7 +4440,7 @@ export default function Home() {
                 {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
                 {activity.map((item) => <div className="activity-message" key={item.id}><i>Console</i><p><b>@{item.actor_name ?? 'Deleted user'}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>)}
               </div>}
-              {!isPublicViewer && <form className="comment-composer" onSubmit={addComment}><InlineStickerComposer ref={commentComposerRef} className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" />{renderStickerComposerButton('comment')}<button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
+              {!isSelectedReadOnly && <form className="comment-composer" onSubmit={addComment}><InlineStickerComposer ref={commentComposerRef} className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" />{renderStickerComposerButton('comment')}<button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
             </section>
           </aside>
         </div>
@@ -4440,7 +4454,7 @@ export default function Home() {
           <div className="thread-divider"><span>Сообщения в треде</span></div>
           {isThreadLoading ? <p className="detail-loading">Загружаем тред…</p> : threadComments.length ? threadComments.map((comment) => <div className="thread-message comment-arrive" key={comment.id}>{renderCommentMessage(comment, '', false)}</div>) : <p className="empty-comments">Пока никто не ответил.</p>}
         </div>
-        {!isPublicViewer && <form className="comment-composer thread-composer" onSubmit={addThreadComment}>
+        {!isSelectedReadOnly && <form className="comment-composer thread-composer" onSubmit={addThreadComment}>
           <InlineStickerComposer ref={threadComposerRef} className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={threadDraft} onValueChange={setThreadDraft} onSubmitShortcut={() => addThreadComment()} members={account ? workspaceMembers : []} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'thread')} onPaste={(event) => handleMediaPaste(event, 'thread')} placeholder="Написать в тред или перетащить медиа…" ariaLabel="Сообщение в тред" />{renderStickerComposerButton('thread')}
           <button className={`voice-record-button ${voiceRecordingTarget === 'thread' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'thread' ? stopVoiceRecording() : void startVoiceRecording('thread')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'thread') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'thread' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'thread' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingThread || !threadDraft.trim()}>{isSendingThread ? 'Отправка…' : 'Отправить'}</button>
         </form>}
