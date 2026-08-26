@@ -625,3 +625,26 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-quick-actions button[title="Режим фокуса"] {
   display: none;
 }
+
+.task-card.bulk-selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 52%, transparent), 0 10px 24px rgb(0 0 0 / 28%);
+}
+
+.task-card.bulk-selected::after {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: grid;
+  width: 19px;
+  height: 19px;
+  place-items: center;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  content: '✓';
+  font-size: 12px;
+  font-weight: 900;
+}
