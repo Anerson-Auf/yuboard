@@ -1477,6 +1477,7 @@ struct BoardList {
     title: String,
     grid_column: i32,
     grid_row: i32,
+    card_limit: i32,
     cards: Vec<BoardCard>,
 }
 
@@ -2934,6 +2935,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         title: list.title,
         grid_column: list.grid_column,
         grid_row: list.grid_row,
+        card_limit: list.card_limit,
         cards: cards.iter().filter(|card| card.list_id == list.id).cloned().collect(),
     }).collect();
     let uploaded_background_url = format!("/v1/boards/{}/background/file", board.id);

@@ -3615,17 +3615,17 @@ export default function Home() {
     if (persistence !== 'connected' || typeof column.id !== 'string') { showToast(cardLimit ? `Лимит колонки: ${cardLimit}` : 'Лимит колонки снят'); return; }
     void fetch(`${API_URL}/v1/lists/${column.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ card_limit: cardLimit }) })
       .then(async (response) => {
-        if (!response.ok) throw new Error('limit update failed');
-        const saved = await response.json() as { card_limit?: number };
+        const saved = await response.json().catch(() => null) as { card_limit?: number; message?: string } | null;
+        if (!response.ok) throw new Error(saved?.message ?? 'Не удалось сохранить лимит колонки');
         const savedLimit = saved.card_limit ?? cardLimit;
         apply(savedLimit);
         setColumnLimitDraft(String(savedLimit));
         showToast(savedLimit ? `Лимит колонки: ${savedLimit}` : 'Лимит колонки снят');
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         apply(column.cardLimit);
         setColumnLimitDraft(String(column.cardLimit));
-        showToast('Не удалось сохранить лимит колонки');
+        showToast(error instanceof Error ? error.message : 'Не удалось сохранить лимит колонки');
       });
   }
   function saveColumnTitle(columnId: EntityId) {
