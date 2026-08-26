@@ -46,9 +46,9 @@ function isFlowboardTheme(value: string | null): value is FlowboardTheme {
 function getStoredTheme(): FlowboardTheme {
   try {
     const value = window.localStorage.getItem(STORAGE_KEY);
-    return isFlowboardTheme(value) ? value : 'current';
+    return isFlowboardTheme(value) ? value : 'oled';
   } catch {
-    return 'current';
+    return 'oled';
   }
 }
 
@@ -61,7 +61,7 @@ function applyTheme(theme: FlowboardTheme, isSystemDark: boolean) {
 
 export function ThemePicker({ className, onThemeChange }: ThemePickerProps) {
   const selectId = useId();
-  const [theme, setTheme] = useState<FlowboardTheme>('current');
+  const [theme, setTheme] = useState<FlowboardTheme>('oled');
   const [systemIsDark, setSystemIsDark] = useState(true);
 
   useEffect(() => {

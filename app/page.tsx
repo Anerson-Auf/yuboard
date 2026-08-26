@@ -1004,6 +1004,9 @@ export default function Home() {
   const dragScrollFrameRef = useRef<number | null>(null);
   const previousBackgroundDraftRef = useRef('');
   const previousWorkspaceBackgroundDraftRef = useRef('');
+  // Detail requests are asynchronous. Keep their older payload from
+  // overwriting an optimistic cover update made in the open card.
+  const cardCoverRevisionRef = useRef<Record<string, number>>({});
   const boardBackgroundDisplayRef = useRef<{ fit: BoardBackgroundFit; position: BoardBackgroundPosition }>({ fit: 'cover', position: 'center' });
   const dragScrollTargetRef = useRef<{ element: HTMLDivElement; direction: -1 | 1; speed: number } | null>(null);
   const boardRef = useRef<HTMLElement | null>(null);
@@ -1244,6 +1247,7 @@ export default function Home() {
   useEffect(() => {
     if (persistence !== 'connected' || typeof selectedCardId !== 'string') return;
     let cancelled = false;
+    const coverRevisionAtRequest = cardCoverRevisionRef.current[selectedCardId] ?? 0;
     void fetch(`${API_URL}/v1/cards/${selectedCardId}/details`)
       .then(async (response) => {
         if (!response.ok) throw new Error('details failed');
@@ -1259,10 +1263,13 @@ export default function Home() {
         setUnreadMentionSourceIds((current) => [...new Set([...current, ...detail.unread_mention_source_ids])]);
         const checklistItems = detail.checklists.flatMap((checklist) => checklist.items);
         const cover = detail.attachments.find((attachment) => attachment.id === detail.cover_attachment_id);
-        const cardMeta = { checklist: checklistItems.length ? `${checklistItems.filter((item) => item.is_completed).length}/${checklistItems.length}` : undefined, comments: detail.comments.length || undefined, attachments: detail.attachments.length || undefined, coverAttachmentId: detail.cover_attachment_id ?? undefined, coverMode: detail.cover_mode, coverUrl: cover?.url, coverMediaType: cover?.media_type, backgroundImageUrl: detail.background_image_url ?? undefined, hasUnreadComments: detail.comments.some((comment) => Boolean(comment.parent_comment_id) && comment.is_unread) };
-        setCoverModeDraft(detail.cover_mode);
-        setSelected((current) => current ? { ...current, ...cardMeta } : current);
-        setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, ...cardMeta } : card) })));
+        const cardMeta = { checklist: checklistItems.length ? `${checklistItems.filter((item) => item.is_completed).length}/${checklistItems.length}` : undefined, comments: detail.comments.length || undefined, attachments: detail.attachments.length || undefined, hasUnreadComments: detail.comments.some((comment) => Boolean(comment.parent_comment_id) && comment.is_unread) };
+        const coverMeta = { coverAttachmentId: detail.cover_attachment_id ?? undefined, coverMode: detail.cover_mode, coverUrl: cover?.url, coverMediaType: cover?.media_type, backgroundImageUrl: detail.background_image_url ?? undefined };
+        const hasNewerCoverChange = (cardCoverRevisionRef.current[selectedCardId] ?? 0) !== coverRevisionAtRequest;
+        const mergedCardMeta = hasNewerCoverChange ? cardMeta : { ...cardMeta, ...coverMeta };
+        if (!hasNewerCoverChange) setCoverModeDraft(detail.cover_mode);
+        setSelected((current) => current ? { ...current, ...mergedCardMeta } : current);
+        setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, ...mergedCardMeta } : card) })));
         if (detail.unread_mention_source_ids.length && account && !isPublicViewer) {
           setSelected((current) => current?.id === selectedCardId ? { ...current, hasUnreadMentions: false } : current);
           setColumns((current) => current.map((column) => ({ ...column, cards: column.cards.map((card) => card.id === selectedCardId ? { ...card, hasUnreadMentions: false } : card) })));
@@ -3208,13 +3215,15 @@ export default function Home() {
   }
   function updateCardCover(attachment: Attachment | null, mode = coverModeDraft) {
     if (!selected || (attachment && !/^(image|video)\//.test(attachment.media_type))) return;
+    const cardId = String(selected.id);
+    cardCoverRevisionRef.current[cardId] = (cardCoverRevisionRef.current[cardId] ?? 0) + 1;
     const patch = attachment ? { coverAttachmentId: attachment.id, coverUrl: attachment.url, coverMediaType: attachment.media_type, coverMode: mode } : { coverAttachmentId: undefined, coverUrl: undefined, coverMediaType: undefined, coverMode: 'full' as const };
     updateSelectedCard(patch);
     setCoverModeDraft(mode);
     if (persistence !== 'connected' || typeof selected.id !== 'string') return;
     void fetch(`${API_URL}/v1/cards/${selected.id}/cover`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attachment_id: attachment?.id ?? null, mode }) })
-      .then((response) => { if (!response.ok) throw new Error('cover save failed'); showToast(attachment ? 'Обложка установлена' : 'Обложка снята'); })
-      .catch(() => showToast('Не удалось сохранить обложку'));
+      .then((response) => { if (!response.ok) throw new Error('cover save failed'); setCardDetailRevision((current) => current + 1); showToast(attachment ? 'Обложка установлена' : 'Обложка снята'); })
+      .catch(() => { setCardDetailRevision((current) => current + 1); showToast('Не удалось сохранить обложку'); });
   }
   function clearCardBackground() {
     if (!selected) return;

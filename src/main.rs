@@ -3937,6 +3937,25 @@ async fn notify_card_watchers(pool: &PgPool, card_id: Uuid, actor_id: Option<Uui
     }
 }
 
+async fn notify_card_reviewers(pool: &PgPool, card_id: Uuid, actor_id: Uuid, reviewer_ids: &[Uuid]) {
+    for user_id in reviewer_ids.iter().copied().filter(|user_id| *user_id != actor_id) {
+        let result = sqlx::query(
+            "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail) \
+             SELECT $1, $2, $3, $4, 'Нужна ваша проверка', 'Вас назначили проверяющим' \
+             WHERE NOT EXISTS (SELECT 1 FROM card_notifications WHERE user_id = $2 AND card_id = $3 AND action = 'Нужна ваша проверка' AND read_at IS NULL)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(card_id)
+        .bind(actor_id)
+        .execute(pool)
+        .await;
+        if let Err(error) = result {
+            tracing::error!(?error, card_id = %card_id, user_id = %user_id, "reviewer notification insert failed");
+        }
+    }
+}
+
 async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Option<Uuid>) -> Result<Vec<CommentResponse>, ApiError> {
     let rows = sqlx::query_as::<_, CommentRow>(
         "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id WHERE c.card_id = $1 ORDER BY c.created_at DESC, c.id DESC",
@@ -5450,6 +5469,10 @@ async fn update_card_review(State(state): State<AppState>, current: CurrentUser,
     reviewer_ids.sort(); reviewer_ids.dedup();
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let previous_status = sqlx::query_scalar::<_, String>("SELECT status FROM card_reviews WHERE card_id = $1")
+        .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?;
+    let previous_reviewer_ids = sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM card_reviewers WHERE card_id = $1")
+        .bind(card_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     if !reviewer_ids.is_empty() {
         let found: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM board_members bm \
@@ -5470,6 +5493,13 @@ async fn update_card_review(State(state): State<AppState>, current: CurrentUser,
     transaction.commit().await.map_err(ApiError::internal)?;
     let detail = if reviewer_ids.is_empty() { request.status.clone() } else { format!("{} · проверяющих: {}", request.status, reviewer_ids.len()) };
     record_card_activity(pool, card_id, current.id, "Изменён статус проверки", &detail).await;
+    if request.status == "requested" {
+        let should_notify = previous_status.as_deref() != Some("requested");
+        let newly_assigned: Vec<Uuid> = reviewer_ids.iter().copied()
+            .filter(|reviewer_id| should_notify || !previous_reviewer_ids.contains(reviewer_id))
+            .collect();
+        notify_card_reviewers(pool, card_id, current.id, &newly_assigned).await;
+    }
     let result = load_card_review(pool, card_id).await?;
     let _ = state.events.send(());
     Ok(Json(result))
