@@ -4704,6 +4704,7 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
         comments.retain(|comment| comment.parent_comment_id.is_none());
         rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
         rewrite_discord_comment_attachment_urls(integration, card_id, &mut comments);
+        rewrite_discord_outbound_comment_bodies(&mut comments);
         return Ok(Json(comments));
     };
     let cursor_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND card_id = $2 AND parent_comment_id IS NULL)")
@@ -4719,6 +4720,7 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
     load_comment_attachments(pool, card_id, &mut comments).await?;
     rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
     rewrite_discord_comment_attachment_urls(integration, card_id, &mut comments);
+    rewrite_discord_outbound_comment_bodies(&mut comments);
     Ok(Json(comments))
 }
 
@@ -5293,6 +5295,40 @@ fn rewrite_discord_comment_attachment_urls(_integration: DiscordIntegration, car
     }
 }
 
+// `[[sticker:😀]]` is an internal composer marker: Flowboard turns it into a
+// sticker while editing, but Discord only sees literal text. The integration
+// API is an outbound boundary, so expose the native emoji there instead.
+fn discord_outbound_comment_body(body: &str) -> String {
+    const PREFIX: &str = "[[sticker:";
+    let mut rendered = String::with_capacity(body.len());
+    let mut remainder = body;
+    while let Some(start) = remainder.find(PREFIX) {
+        rendered.push_str(&remainder[..start]);
+        let candidate = &remainder[start + PREFIX.len()..];
+        let Some(end) = candidate.find("]]") else {
+            rendered.push_str(PREFIX);
+            rendered.push_str(candidate);
+            return rendered;
+        };
+        let emoji = &candidate[..end];
+        if emoji.is_empty() || emoji.contains(['\r', '\n']) || emoji.chars().count() > 16 {
+            rendered.push_str(PREFIX);
+            remainder = candidate;
+            continue;
+        }
+        rendered.push_str(emoji);
+        remainder = &candidate[end + 2..];
+    }
+    rendered.push_str(remainder);
+    rendered
+}
+
+fn rewrite_discord_outbound_comment_bodies(comments: &mut [CommentResponse]) {
+    for comment in comments {
+        comment.body = discord_outbound_comment_body(&comment.body);
+    }
+}
+
 async fn download_discord_card_attachment(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, attachment_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
     let attachment = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
         "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN comments cm ON cm.card_id = c.id WHERE a.id = $1 AND c.id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' LIMIT 1",
@@ -5789,5 +5825,12 @@ mod tests {
 
         assert_eq!(request_source_ip(&headers, peer, false), peer.ip());
         assert_eq!(request_source_ip(&headers, peer, true), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)));
+    }
+
+    #[test]
+    fn discord_outbound_comment_body_replaces_internal_default_stickers() {
+        assert_eq!(discord_outbound_comment_body("Готово [[sticker:✅]]"), "Готово ✅");
+        assert_eq!(discord_outbound_comment_body("[[sticker:🔥]] и [[sticker:💯]]"), "🔥 и 💯");
+        assert_eq!(discord_outbound_comment_body("[[sticker:\n]]"), "[[sticker:\n]]");
     }
 }
