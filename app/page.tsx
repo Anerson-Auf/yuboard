@@ -30,14 +30,14 @@ type Milestone = { id: string; name: string; description: string; color: string;
 type BoardSticker = { id: string; name: string; media_type: string; url: string };
 type DraftSticker = { id: string; name: string; body: string; emoji?: string; url?: string };
 type CommentReaction = { emoji: string; count: number; reacted: boolean };
-type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; startAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
+type Card = { id: EntityId; title: string; description?: string; priority?: number; lastActivityAt?: string; startAt?: string; dueAt?: string; coverAttachmentId?: string; coverUrl?: string; coverMediaType?: string; coverMode?: 'full' | 'top'; backgroundImageUrl?: string; completedAt?: string; isPublic?: boolean; hasUnreadMentions?: boolean; hasUnreadComments?: boolean; hasUnvotedPolls?: boolean; labels: Label[]; roles: ProfileRole[]; milestone?: Milestone | null; checklist?: string; comments?: number; attachments?: number; members: Member[] };
 type Column = { id: EntityId; title: string; cards: Card[] };
 type View = 'home' | 'board';
 type PersistenceStatus = 'connecting' | 'connected';
 type BoardBackgroundFit = 'cover' | 'contain' | 'fill';
 type BoardBackgroundPosition = 'center' | 'top' | 'bottom';
 type ApiMember = { id: string; username: string; avatar_url?: string | null };
-type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; can_admin: boolean; labels: Label[]; milestones: Milestone[]; stickers?: BoardSticker[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; start_at: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_media_type: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; has_unread_comments: boolean; labels: Label[]; roles?: ProfileRole[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
+type ApiBoard = { id: string; workspace_id: string; title: string; background_image_url: string | null; background_fit: BoardBackgroundFit; background_position: BoardBackgroundPosition; visibility: 'public' | 'private' | 'workspace'; can_edit: boolean; can_admin: boolean; labels: Label[]; milestones: Milestone[]; stickers?: BoardSticker[]; members: ApiMember[]; lists: { id: string; title: string; grid_column: number; grid_row: number; cards: { id: string; title: string; description: string; priority: number; last_activity_at: string | null; is_public: boolean; background_image_url: string | null; start_at: string | null; due_at: string | null; cover_attachment_id: string | null; cover_url: string | null; cover_media_type: string | null; cover_mode: 'full' | 'top'; completed_at: string | null; checklist_total: number; checklist_completed: number; comment_count: number; attachment_count: number; has_unread_mentions: boolean; has_unread_comments: boolean; has_unvoted_polls: boolean; labels: Label[]; roles?: ProfileRole[]; milestone?: Milestone | null; assignees: ApiMember[] }[] }[] };
 type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
@@ -118,14 +118,14 @@ function assetUrl(url: string | null | undefined) {
   return /^https?:\/\//i.test(url) ? url : `${API_URL}${url}`;
 }
 
-function CardCover({ card }: { card: Pick<Card, 'coverUrl' | 'coverMediaType' | 'coverMode'> }) {
-  if (!card.coverUrl) return null;
+function CardCover({ card }: { card: Pick<Card, 'coverUrl' | 'coverMediaType' | 'coverMode' | 'hasUnvotedPolls'> }) {
+  if (!card.coverUrl) return <CardPollAttention card={card} />;
   const isVideo = card.coverMediaType?.startsWith('video/');
-  return <div className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
+  return <><CardPollAttention card={card} /><div className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
     {isVideo
       ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onLoadedMetadata={(event) => { event.currentTarget.controls = false; }} />
       : <img src={assetUrl(card.coverUrl)} alt="" />}
-  </div>;
+  </div></>;
 }
 
 function homeGreetingForLocalTime(date = new Date()) {
@@ -438,13 +438,18 @@ function randomChipColor() {
   return `#${channel()}${channel()}${channel()}`.toUpperCase();
 }
 
-function CardMetaIcon({ type }: { type: 'comments' | 'checklist' | 'attachments' }) {
+function CardMetaIcon({ type }: { type: 'comments' | 'checklist' | 'attachments' | 'poll' }) {
   const paths = {
     comments: 'M0 3.125A2.625 2.625 0 0 1 2.625.5h10.75A2.625 2.625 0 0 1 16 3.125v8.25A2.625 2.625 0 0 1 13.375 14H4.449l-3.327 1.901A.75.75 0 0 1 0 15.25zM2.625 2C2.004 2 1.5 2.504 1.5 3.125v10.833L4.05 12.5h9.325c.621 0 1.125-.504 1.125-1.125v-8.25C14.5 2.504 13.996 2 13.375 2zM12 6.5H4V5h8zm-3 3H4V8h5z',
     checklist: 'M1 3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2zm2-.5a.5.5 0 0 0-.5.5v10a.5.5 0 0 0 .5.5h10a.5.5 0 0 0 .5-.5V3a.5.5 0 0 0-.5-.5zm9.326 2.98-5 6a.75.75 0 0 1-1.152 0l-2.5-3 1.152-.96L6.75 9.828l4.424-5.308z',
     attachments: 'M15 3.5H1V2h14zm0 5.25H1v-1.5h14zM8 14H1v-1.5h7z',
+    poll: 'M2 1h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1m.5 1.5v11h11v-11zm2.2 2.15 2.1 2.1-1.06 1.06-1.04-1.04v4.7H3.2V6.77l-1.04 1.04L1.1 6.75zm7.1 1.55h-4.2V4.7h4.2zm0 2.5h-4.2V7.2h4.2zm0 2.5h-4.2V9.7h4.2z',
   };
   return <svg className="card-meta-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" clipRule="evenodd" d={paths[type]} /></svg>;
+}
+
+function CardPollAttention({ card }: { card: Pick<Card, 'hasUnvotedPolls'> }) {
+  return card.hasUnvotedPolls ? <span className="card-poll-attention" title="Есть голосование, в котором вы ещё не голосовали" aria-label="Есть голосование, в котором вы ещё не голосовали"><CardMetaIcon type="poll" /></span> : null;
 }
 
 function StickerIcon() {
@@ -3424,7 +3429,7 @@ export default function Home() {
   }
 
   function applyBoard(data: ApiBoard) {
-    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, hasUnreadComments: card.has_unread_comments, backgroundImageUrl: card.background_image_url ?? undefined, startAt: card.start_at ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMediaType: card.cover_media_type ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, roles: card.roles ?? [], milestone: card.milestone ?? null, members: card.assignees.map(memberFromApi) })) })));
+    setColumns(data.lists.map((list) => ({ id: list.id, title: list.title, cards: list.cards.map((card) => ({ id: card.id, title: card.title, description: card.description, priority: card.priority, lastActivityAt: card.last_activity_at ?? undefined, isPublic: card.is_public, hasUnreadMentions: card.has_unread_mentions, hasUnreadComments: card.has_unread_comments, hasUnvotedPolls: card.has_unvoted_polls, backgroundImageUrl: card.background_image_url ?? undefined, startAt: card.start_at ?? undefined, dueAt: card.due_at ?? undefined, coverAttachmentId: card.cover_attachment_id ?? undefined, coverUrl: card.cover_url ?? undefined, coverMediaType: card.cover_media_type ?? undefined, coverMode: card.cover_mode, completedAt: card.completed_at ?? undefined, checklist: card.checklist_total ? `${card.checklist_completed}/${card.checklist_total}` : undefined, comments: card.comment_count || undefined, attachments: card.attachment_count || undefined, labels: card.labels, roles: card.roles ?? [], milestone: card.milestone ?? null, members: card.assignees.map(memberFromApi) })) })));
     setBoardLabels(data.labels);
     setMilestones(data.milestones ?? []);
     setBoardStickers(data.stickers ?? []);

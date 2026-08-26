@@ -1101,6 +1101,7 @@ struct BoardCardRow {
     attachment_count: i64,
     has_unread_mentions: bool,
     has_unread_comments: bool,
+    has_unvoted_polls: bool,
     milestone_id: Option<Uuid>,
     milestone_name: Option<String>,
     milestone_description: Option<String>,
@@ -1193,6 +1194,7 @@ struct BoardCard {
     attachment_count: i64,
     has_unread_mentions: bool,
     has_unread_comments: bool,
+    has_unvoted_polls: bool,
     milestone: Option<MilestoneResponse>,
     labels: Vec<LabelResponse>,
     roles: Vec<ProfileRoleResponse>,
@@ -2760,7 +2762,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
-    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.start_at::text AS start_at, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
+    let cards = sqlx::query_as::<_, BoardCardRow>("SELECT c.id, c.list_id, c.title, c.description, c.priority, (SELECT MAX(ca.created_at)::text FROM card_activity ca WHERE ca.card_id = c.id) AS last_activity_at, c.is_public, c.background_image_url, c.start_at::text AS start_at, c.due_at::text AS due_at, c.cover_attachment_id, CASE WHEN a.id IS NULL THEN NULL ELSE '/v1/attachments/' || a.id::text || '/content' END AS cover_url, a.media_type AS cover_media_type, c.cover_mode, c.completed_at::text AS completed_at, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id) AS checklist_total, (SELECT COUNT(*) FROM checklist_items ci WHERE ci.card_id = c.id AND ci.is_completed) AS checklist_completed, (SELECT COUNT(*) FROM comments cm WHERE cm.card_id = c.id) AS comment_count, (SELECT COUNT(*) FROM attachments at WHERE at.card_id = c.id AND at.checklist_item_id IS NULL) AS attachment_count, EXISTS(SELECT 1 FROM card_mentions cmn WHERE cmn.card_id = c.id AND cmn.user_id = $2 AND cmn.read_at IS NULL) AS has_unread_mentions, EXISTS(SELECT 1 FROM comments cm LEFT JOIN comment_read_states read_state ON read_state.comment_id = cm.id AND read_state.user_id = $2 LEFT JOIN users viewer ON viewer.id = $2 WHERE cm.card_id = c.id AND cm.author_id IS DISTINCT FROM $2 AND cm.created_at > COALESCE(read_state.read_at, viewer.created_at)) AS has_unread_comments, ($2::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM card_polls p WHERE p.card_id = c.id AND NOT EXISTS(SELECT 1 FROM card_poll_votes v WHERE v.poll_id = p.id AND v.user_id = $2))) AS has_unvoted_polls, ms.id AS milestone_id, ms.name AS milestone_name, ms.description AS milestone_description, ms.color AS milestone_color, ms.target_date::text AS milestone_target_date FROM cards c LEFT JOIN attachments a ON a.id = c.cover_attachment_id LEFT JOIN milestones ms ON ms.id = c.milestone_id WHERE c.board_id = $1 AND c.archived_at IS NULL AND (c.is_public OR $2 IS NOT NULL) ORDER BY c.position")
     .bind(board_id)
     .bind(actor_id)
         .fetch_all(pool)
@@ -2827,6 +2829,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         attachment_count: card.attachment_count,
         has_unread_mentions: card.has_unread_mentions,
         has_unread_comments: card.has_unread_comments,
+        has_unvoted_polls: card.has_unvoted_polls,
         milestone: card.milestone_id.map(|id| MilestoneResponse { id, name: card.milestone_name.unwrap_or_default(), description: card.milestone_description.unwrap_or_default(), color: card.milestone_color.unwrap_or_else(|| "#6ea8fe".to_owned()), target_date: card.milestone_target_date }),
         labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone(), icon_shape: label.icon_shape.clone(), icon_color: label.icon_color.clone() }).collect(),
         roles: card_roles.iter().filter(|role| role.card_id == card.id).map(|role| ProfileRoleResponse { id: role.id, name: role.name.clone(), color: role.color.clone(), icon_shape: role.icon_shape.clone(), icon_color: role.icon_color.clone() }).collect(),
