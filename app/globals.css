@@ -648,3 +648,17 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
   font-size: 12px;
   font-weight: 900;
 }
+
+/* Pickers are portalled into document.body, so their background must not rely on board theme variables. */
+.reaction-picker,
+.sticker-picker {
+  background: #303134 !important;
+  opacity: 1;
+  backdrop-filter: none;
+}
+
+.reaction-picker-grid > button,
+.sticker-picker-defaults > button,
+.sticker-picker-item > button:first-child {
+  background: #3a3b40 !important;
+}
