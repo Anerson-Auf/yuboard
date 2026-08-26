@@ -31,12 +31,45 @@ struct AppState {
     upload_dir: PathBuf,
     cookie_secure: bool,
     external_http: reqwest::Client,
+    discord_attachment_refresh: Option<DiscordAttachmentRefresh>,
     events: broadcast::Sender<()>,
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
     board_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, BoardPresence>>>>,
     freeform_live_events: broadcast::Sender<FreeformLiveEvent>,
     auth_rate_limiter: RateLimiter,
     trust_proxy: bool,
+}
+
+// Discord CDN URLs are short-lived. The Discord bridge owns the durable
+// channel/message/attachment identifiers and exchanges them for a fresh URL.
+#[derive(Clone)]
+struct DiscordAttachmentRefresh {
+    endpoint: reqwest::Url,
+    token: String,
+}
+
+#[derive(Serialize)]
+struct DiscordAttachmentRefreshRequest<'a> {
+    channel_id: &'a str,
+    message_id: &'a str,
+    attachment_id: &'a str,
+}
+
+#[derive(Deserialize)]
+struct DiscordAttachmentRefreshResponse {
+    url: String,
+    #[serde(default, rename = "proxy_url")]
+    _proxy_url: Option<String>,
+}
+
+#[derive(FromRow)]
+struct AttachmentDownloadRecord {
+    object_key: Option<String>,
+    media_type: String,
+    external_url: Option<String>,
+    discord_channel_id: Option<String>,
+    discord_message_id: Option<String>,
+    discord_attachment_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -714,6 +747,12 @@ struct DiscordAttachmentRequest {
     media_type: String,
     #[serde(default)]
     byte_size: i64,
+    #[serde(default)]
+    channel_id: Option<String>,
+    #[serde(default)]
+    message_id: Option<String>,
+    #[serde(default)]
+    attachment_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1442,6 +1481,7 @@ async fn main() {
         .redirect(reqwest::redirect::Policy::limited(3))
         .build()
         .expect("could not initialize external media client");
+    let discord_attachment_refresh = discord_attachment_refresh_from_env();
 
     let app = Router::new()
         .route("/health", get(health))
@@ -1580,7 +1620,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -1972,6 +2012,21 @@ fn is_external_attachment_url(url: &reqwest::Url) -> bool {
             | Some("trello-attachments.s3.amazonaws.com")
             | Some("attachments.trello.services")
     ))
+}
+
+fn discord_attachment_refresh_from_env() -> Option<DiscordAttachmentRefresh> {
+    let endpoint = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_URL").ok().filter(|value| !value.trim().is_empty());
+    let token = env::var("FLOWBOARD_DISCORD_MEDIA_REFRESH_TOKEN").ok().filter(|value| !value.trim().is_empty());
+    let (Some(endpoint), Some(token)) = (endpoint, token) else {
+        return None;
+    };
+    match reqwest::Url::parse(&endpoint) {
+        Ok(endpoint) if endpoint.scheme() == "https" => Some(DiscordAttachmentRefresh { endpoint, token }),
+        _ => {
+            tracing::warn!("Discord attachment refresh is disabled: FLOWBOARD_DISCORD_MEDIA_REFRESH_URL must be an HTTPS URL");
+            None
+        }
+    }
 }
 
 async fn auth_state(
@@ -4850,13 +4905,22 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
     for attachment in &request.attachments {
         let url = valid_discord_asset_url(&attachment.url)?.to_owned();
         let filename = valid_text(&attachment.filename, "attachment filename", 255)?.to_owned();
+        let discord_reference = match (&attachment.channel_id, &attachment.message_id, &attachment.attachment_id) {
+            (None, None, None) => (None, None, None),
+            (Some(channel_id), Some(message_id), Some(attachment_id)) => (
+                Some(valid_text(channel_id, "Discord channel_id", 128)?.to_owned()),
+                Some(valid_text(message_id, "Discord message_id", 128)?.to_owned()),
+                Some(valid_text(attachment_id, "Discord attachment_id", 128)?.to_owned()),
+            ),
+            _ => return Err(ApiError::bad_request("Discord attachment metadata must include channel_id, message_id, and attachment_id together.")),
+        };
         if !matches!(attachment.media_type.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "video/mp4" | "video/webm" | "video/quicktime") {
             return Err(ApiError::bad_request("Discord attachments must be JPEG, PNG, GIF, WebP, MP4, WebM, or MOV."));
         }
         if !(0..=50 * 1024 * 1024).contains(&attachment.byte_size) { return Err(ApiError::bad_request("Discord attachment size must be between 0 and 50 MiB.")); }
         let attachment_id = Uuid::new_v4();
         parts.push(discord_media_markdown(&filename, &attachment.media_type, &format!("/v1/attachments/{attachment_id}/content")));
-        attachment_rows.push((attachment_id, url, filename, attachment.media_type.clone(), attachment.byte_size));
+        attachment_rows.push((attachment_id, url, filename, attachment.media_type.clone(), attachment.byte_size, discord_reference.0, discord_reference.1, discord_reference.2));
     }
     let body = valid_text(&parts.join("\n"), "body", 10_000)?.to_owned();
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
@@ -4864,9 +4928,9 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
     sqlx::query("INSERT INTO comments (id, card_id, author_id, body, external_author_name, external_author_avatar_url, discord_integration_id, discord_message_id) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)")
         .bind(comment_id).bind(card_id).bind(&body).bind(&author_name).bind(&author_avatar_url).bind(integration.id).bind(&message_id)
         .execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    for (attachment_id, url, filename, media_type, byte_size) in attachment_rows {
-        sqlx::query("INSERT INTO attachments (id, card_id, uploaded_by, object_key, original_name, media_type, byte_size, external_url) VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6)")
-            .bind(attachment_id).bind(card_id).bind(filename).bind(media_type).bind(byte_size).bind(url)
+    for (attachment_id, url, filename, media_type, byte_size, channel_id, message_id, discord_attachment_id) in attachment_rows {
+        sqlx::query("INSERT INTO attachments (id, card_id, uploaded_by, object_key, original_name, media_type, byte_size, external_url, discord_channel_id, discord_message_id, discord_attachment_id) VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, $8, $9)")
+            .bind(attachment_id).bind(card_id).bind(filename).bind(media_type).bind(byte_size).bind(url).bind(channel_id).bind(message_id).bind(discord_attachment_id)
             .execute(&mut *transaction).await.map_err(ApiError::internal)?;
     }
     transaction.commit().await.map_err(ApiError::internal)?;
@@ -5006,8 +5070,8 @@ async fn delete_attachment(State(state): State<AppState>, current: CurrentUser, 
 }
 
 async fn download_attachment(State(state): State<AppState>, current: Viewer, Path(attachment_id): Path<Uuid>) -> Result<Response, ApiError> {
-    let attachment = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
-        "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
+    let attachment = sqlx::query_as::<_, AttachmentDownloadRecord>(
+        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2 WHERE a.id = $1 AND c.archived_at IS NULL AND (m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR (b.visibility = 'public' AND (c.is_public OR $2 IS NOT NULL)))",
     )
     .bind(attachment_id)
     .bind(current.0.map(|user| user.id))
@@ -5015,10 +5079,10 @@ async fn download_attachment(State(state): State<AppState>, current: Viewer, Pat
     .await
     .map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment was not found.".to_owned()))?;
-    if let Some(url) = attachment.2 {
-        return proxy_external_attachment(&state.external_http, &url, &attachment.1).await;
+    if let Some(url) = &attachment.external_url {
+        return proxy_external_attachment_with_refresh(&state, attachment_id, &attachment, url).await;
     }
-    let object_key = attachment.0.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()))?;
+    let object_key = attachment.object_key.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()))?;
     let bytes = tokio::fs::read(state.upload_dir.join(object_key)).await.map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned())
@@ -5027,7 +5091,7 @@ async fn download_attachment(State(state): State<AppState>, current: Viewer, Pat
             ApiError::storage()
         }
     })?;
-    let content_type = HeaderValue::from_str(&attachment.1).map_err(|_| ApiError::storage())?;
+    let content_type = HeaderValue::from_str(&attachment.media_type).map_err(|_| ApiError::storage())?;
     Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
 }
 
@@ -5099,6 +5163,63 @@ async fn proxy_external_attachment(client: &reqwest::Client, url: &str, media_ty
         })
     });
     Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=300"))], Body::from_stream(stream)).into_response())
+}
+
+async fn proxy_external_attachment_with_refresh(
+    state: &AppState,
+    attachment_id: Uuid,
+    attachment: &AttachmentDownloadRecord,
+    url: &str,
+) -> Result<Response, ApiError> {
+    match proxy_external_attachment(&state.external_http, url, &attachment.media_type).await {
+        Ok(response) => Ok(response),
+        Err(error) if error.1 == "attachment_not_found" => {
+            let Some(refresh) = &state.discord_attachment_refresh else { return Err(error); };
+            let (Some(channel_id), Some(message_id), Some(discord_attachment_id)) = (
+                attachment.discord_channel_id.as_deref(),
+                attachment.discord_message_id.as_deref(),
+                attachment.discord_attachment_id.as_deref(),
+            ) else { return Err(error); };
+            let refreshed_url = refresh_discord_attachment_url(&state.external_http, refresh, channel_id, message_id, discord_attachment_id).await?;
+            sqlx::query("UPDATE attachments SET external_url = $1 WHERE id = $2 AND external_url = $3")
+                .bind(&refreshed_url).bind(attachment_id).bind(url)
+                .execute(database(state)?).await.map_err(ApiError::internal)?;
+            proxy_external_attachment(&state.external_http, &refreshed_url, &attachment.media_type).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn refresh_discord_attachment_url(
+    client: &reqwest::Client,
+    refresh: &DiscordAttachmentRefresh,
+    channel_id: &str,
+    message_id: &str,
+    attachment_id: &str,
+) -> Result<String, ApiError> {
+    let payload = serde_json::to_vec(&DiscordAttachmentRefreshRequest { channel_id, message_id, attachment_id })
+        .map_err(|_| ApiError::storage())?;
+    let response = client.post(refresh.endpoint.clone())
+        .bearer_auth(&refresh.token)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(payload)
+        .send().await.map_err(|error| {
+            tracing::warn!(?error, "Discord attachment refresh request failed");
+            ApiError(StatusCode::BAD_GATEWAY, "attachment_unavailable", "External attachment is temporarily unavailable.".to_owned())
+        })?;
+    if !response.status().is_success() {
+        tracing::warn!(status = %response.status(), "Discord attachment refresh was rejected");
+        return Err(ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "External attachment was not found.".to_owned()));
+    }
+    let bytes = response.bytes().await.map_err(|error| {
+        tracing::warn!(?error, "Discord attachment refresh response could not be read");
+        ApiError(StatusCode::BAD_GATEWAY, "attachment_unavailable", "External attachment is temporarily unavailable.".to_owned())
+    })?;
+    let refreshed: DiscordAttachmentRefreshResponse = serde_json::from_slice(&bytes).map_err(|error| {
+        tracing::warn!(?error, "Discord attachment refresh response is invalid");
+        ApiError(StatusCode::BAD_GATEWAY, "attachment_unavailable", "External attachment is temporarily unavailable.".to_owned())
+    })?;
+    valid_discord_asset_url(&refreshed.url).map(ToOwned::to_owned)
 }
 
 async fn create_card(State(state): State<AppState>, current: CurrentUser, Path(list_id): Path<Uuid>, Json(request): Json<CreateCardRequest>) -> ApiResult<CardResponse> {
@@ -5396,21 +5517,21 @@ fn rewrite_discord_outbound_comment_bodies(comments: &mut [CommentResponse]) {
 }
 
 async fn download_discord_card_attachment(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, attachment_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
-    let attachment = sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
-        "SELECT a.object_key, a.media_type, a.external_url FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN comments cm ON cm.card_id = c.id WHERE a.id = $1 AND c.id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' LIMIT 1",
+    let attachment = sqlx::query_as::<_, AttachmentDownloadRecord>(
+        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN comments cm ON cm.card_id = c.id WHERE a.id = $1 AND c.id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' LIMIT 1",
     )
     .bind(attachment_id).bind(card_id).bind(integration.board_id)
     .fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Comment attachment was not found on this Discord integration board.".to_owned()))?;
-    if let Some(url) = attachment.2 {
-        return proxy_external_attachment(&state.external_http, &url, &attachment.1).await;
+    if let Some(url) = &attachment.external_url {
+        return proxy_external_attachment_with_refresh(&state, attachment_id, &attachment, url).await;
     }
-    let object_key = attachment.0.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()))?;
+    let object_key = attachment.object_key.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found on this Discord integration board.".to_owned()))?;
     let bytes = tokio::fs::read(state.upload_dir.join(object_key)).await.map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()) }
         else { tracing::error!(?error, "Discord attachment read failed"); ApiError::storage() }
     })?;
-    let content_type = HeaderValue::from_str(&attachment.1).map_err(|_| ApiError::storage())?;
+    let content_type = HeaderValue::from_str(&attachment.media_type).map_err(|_| ApiError::storage())?;
     Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
 }
 

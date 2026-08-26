@@ -246,6 +246,8 @@ When a user inserts or drops JPEG, PNG, GIF, WebP, MP4, WebM, or MOV into a Flow
 
 `message_id` makes the operation idempotent. Discord avatars and media must use Discord CDN HTTPS URLs. Supported attachments are JPEG, PNG, GIF, WebP, MP4, WebM, and MOV, up to 50 MiB each.
 
+For every Discord attachment, also send the durable Discord source IDs: `channel_id`, `message_id`, and `attachment_id`. They are strings, not JavaScript numbers. They let Flowboard restore a fresh signed CDN URL later without storing a duplicate of the file. The three fields are optional together for backwards compatibility, but never send only part of the trio.
+
 ```http
 POST /v1/integrations/discord/cards/{card-id}/comments
 
@@ -259,11 +261,37 @@ POST /v1/integrations/discord/cards/{card-id}/comments
       "url": "https://cdn.discordapp.com/attachments/…/bug.mp4",
       "filename": "bug.mp4",
       "media_type": "video/mp4",
-      "byte_size": 1234567
+      "byte_size": 1234567,
+      "channel_id": "123456789012345678",
+      "message_id": "234567890123456789",
+      "attachment_id": "345678901234567890"
     }
   ]
 }
 ```
+
+### Refresh expired Discord media without storing files
+
+Discord CDN links can expire. Configure Flowboard with these server-only variables:
+
+```dotenv
+FLOWBOARD_DISCORD_MEDIA_REFRESH_URL=https://yufu.su/api/flowboard/attachments/refresh
+FLOWBOARD_DISCORD_MEDIA_REFRESH_TOKEN=the-shared-bridge-secret
+```
+
+When a stored Discord URL returns `403` or `404`, Flowboard makes **one** authenticated `POST` to that bridge URL with:
+
+```json
+{
+  "channel_id": "123456789012345678",
+  "message_id": "234567890123456789",
+  "attachment_id": "345678901234567890"
+}
+```
+
+The bridge must verify `Authorization: Bearer …`, read the original Discord message through the Discord API, and return `{ "url": "https://cdn.discordapp.com/...", "proxy_url": "..." }`. Flowboard validates and uses the canonical Discord `url`, saves only that refreshed URL, then retries the media request once. It never downloads the media into `uploads/`.
+
+Attachments imported before these three source IDs existed cannot be refreshed automatically: ask the bot to replay the original message once, or reattach the file.
 
 The comment keeps the Discord display name and avatar without creating a Flowboard account. If a Flowboard account is deleted, its historical comments still render as `Deleted user`; Discord comments are separate external identities.
 
