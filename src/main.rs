@@ -840,6 +840,15 @@ struct UpdateCardCompletionRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateCardWaitingRequest {
+    #[serde(default)]
+    user_id: Option<Uuid>,
+    #[serde(default)]
+    role_id: Option<Uuid>,
+    note: String,
+}
+
+#[derive(Deserialize)]
 struct UpdateCardPriorityRequest {
     priority: i16,
 }
@@ -1262,6 +1271,17 @@ struct CardAssigneeRow {
     avatar_url: Option<String>,
 }
 
+#[derive(Clone, Serialize, FromRow)]
+struct CardWaitingResponse {
+    card_id: Uuid,
+    user_id: Option<Uuid>,
+    user_name: Option<String>,
+    role_id: Option<Uuid>,
+    role_name: Option<String>,
+    role_color: Option<String>,
+    note: String,
+}
+
 #[derive(Clone, Serialize)]
 struct BoardCard {
     id: Uuid,
@@ -1291,6 +1311,7 @@ struct BoardCard {
     has_unread_comments: bool,
     has_unvoted_polls: bool,
     milestone: Option<MilestoneResponse>,
+    waiting: Option<CardWaitingResponse>,
     labels: Vec<LabelResponse>,
     roles: Vec<ProfileRoleResponse>,
     assignees: Vec<MemberResponse>,
@@ -1632,6 +1653,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/background", put(update_card_background))
         .route("/v1/cards/{card_id}/background/file", get(download_card_background).post(upload_card_background))
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
+        .route("/v1/cards/{card_id}/waiting", put(update_card_waiting).delete(clear_card_waiting))
         .route("/v1/cards/{card_id}/review", get(get_card_review).put(update_card_review))
         .route("/v1/cards/{card_id}/relations", get(list_card_relations).post(create_card_relation))
         .route("/v1/cards/{card_id}/relations/{relation_id}", patch(update_card_relation).delete(delete_card_relation))
@@ -2984,6 +3006,11 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         .fetch_all(pool)
         .await
         .map_err(ApiError::internal)?;
+    let card_waiting = sqlx::query_as::<_, CardWaitingResponse>("SELECT cw.card_id, cw.user_id, u.display_name AS user_name, cw.role_id, pr.name AS role_name, pr.color AS role_color, cw.note FROM card_waiting_for cw LEFT JOIN users u ON u.id = cw.user_id LEFT JOIN profile_roles pr ON pr.id = cw.role_id WHERE cw.card_id = ANY($1)")
+        .bind(&card_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::internal)?;
     if actor_id.is_none() {
         for assignee in &mut card_assignees {
             if assignee.avatar_url.is_some() { assignee.avatar_url = Some(format!("/v1/public/boards/{}/avatars/{}", board.id, assignee.id)); }
@@ -3035,6 +3062,7 @@ async fn get_board(State(state): State<AppState>, current: Viewer, Path(board_id
         has_unread_comments: card.has_unread_comments,
         has_unvoted_polls: card.has_unvoted_polls,
         milestone: card.milestone_id.map(|id| MilestoneResponse { id, name: card.milestone_name.unwrap_or_default(), description: card.milestone_description.unwrap_or_default(), color: card.milestone_color.unwrap_or_else(|| "#6ea8fe".to_owned()), target_date: card.milestone_target_date }),
+        waiting: card_waiting.iter().find(|waiting| waiting.card_id == card.id).cloned(),
         labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone(), icon_shape: label.icon_shape.clone(), icon_color: label.icon_color.clone() }).collect(),
         roles: card_roles.iter().filter(|role| role.card_id == card.id).map(|role| ProfileRoleResponse { id: role.id, name: role.name.clone(), color: role.color.clone(), icon_shape: role.icon_shape.clone(), icon_color: role.icon_color.clone() }).collect(),
         assignees: card_assignees.iter().filter(|member| member.card_id == card.id).map(|member| MemberResponse { id: member.id, display_name: member.display_name.clone(), avatar_url: member.avatar_url.clone() }).collect(),
@@ -6192,6 +6220,88 @@ async fn update_card_completion(State(state): State<AppState>, current: CurrentU
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn notify_card_waiting_targets(pool: &PgPool, card_id: Uuid, actor_id: Uuid, user_id: Option<Uuid>, role_id: Option<Uuid>, detail: &str) {
+    let recipients = if let Some(user_id) = user_id {
+        vec![user_id]
+    } else if let Some(role_id) = role_id {
+        match sqlx::query_scalar::<_, Uuid>(
+            "SELECT DISTINCT upr.user_id FROM user_profile_roles upr INNER JOIN cards c ON c.id = $1 INNER JOIN board_members bm ON bm.board_id = c.board_id AND bm.user_id = upr.user_id INNER JOIN users u ON u.id = upr.user_id WHERE upr.role_id = $2 AND u.disabled_at IS NULL",
+        )
+        .bind(card_id)
+        .bind(role_id)
+        .fetch_all(pool)
+        .await {
+            Ok(recipients) => recipients,
+            Err(error) => { tracing::error!(?error, card_id = %card_id, "waiting recipient lookup failed"); return; }
+        }
+    } else { vec![] };
+    for user_id in recipients.into_iter().filter(|user_id| *user_id != actor_id) {
+        let result = sqlx::query(
+            "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail) \
+             SELECT $1, $2, $3, $4, 'Ожидают вашего действия', $5 \
+             WHERE NOT EXISTS (SELECT 1 FROM card_notifications WHERE user_id = $2 AND card_id = $3 AND action = 'Ожидают вашего действия' AND read_at IS NULL)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(card_id)
+        .bind(actor_id)
+        .bind(detail)
+        .execute(pool)
+        .await;
+        if let Err(error) = result { tracing::error!(?error, card_id = %card_id, user_id = %user_id, "waiting notification insert failed"); }
+    }
+}
+
+async fn update_card_waiting(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardWaitingRequest>) -> Result<StatusCode, ApiError> {
+    if request.user_id.is_some() == request.role_id.is_some() {
+        return Err(ApiError::bad_request("Choose exactly one waiting user or role."));
+    }
+    let note = request.note.trim();
+    if note.is_empty() || note.chars().count() > 240 {
+        return Err(ApiError::bad_request("Waiting note must contain from 1 to 240 characters."));
+    }
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let board_id = sqlx::query_scalar::<_, Uuid>("SELECT board_id FROM cards WHERE id = $1 AND archived_at IS NULL")
+        .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
+    if let Some(user_id) = request.user_id {
+        let belongs: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM board_members WHERE board_id = $1 AND user_id = $2)")
+            .bind(board_id).bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+        if !belongs { return Err(ApiError::bad_request("Waiting user must belong to this board.")); }
+    }
+    if let Some(role_id) = request.role_id {
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profile_roles WHERE id = $1)")
+            .bind(role_id).fetch_one(pool).await.map_err(ApiError::internal)?;
+        if !exists { return Err(ApiError::bad_request("Waiting role was not found.")); }
+    }
+    sqlx::query("INSERT INTO card_waiting_for (card_id, user_id, role_id, note, created_by, updated_at) VALUES ($1, $2, $3, $4, $5, now()) ON CONFLICT (card_id) DO UPDATE SET user_id = EXCLUDED.user_id, role_id = EXCLUDED.role_id, note = EXCLUDED.note, created_by = EXCLUDED.created_by, updated_at = now()")
+        .bind(card_id).bind(request.user_id).bind(request.role_id).bind(note).bind(current.id)
+        .execute(pool).await.map_err(ApiError::internal)?;
+    let target = if let Some(user_id) = request.user_id {
+        sqlx::query_scalar::<_, String>("SELECT display_name FROM users WHERE id = $1").bind(user_id).fetch_one(pool).await.map_err(ApiError::internal)?
+    } else {
+        sqlx::query_scalar::<_, String>("SELECT name FROM profile_roles WHERE id = $1").bind(request.role_id.unwrap()).fetch_one(pool).await.map_err(ApiError::internal)?
+    };
+    let detail = format!("Ждём {target}: {note}");
+    record_card_activity(pool, card_id, current.id, "Ожидается действие", &detail).await;
+    notify_card_waiting_targets(pool, card_id, current.id, request.user_id, request.role_id, &detail).await;
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn clear_card_waiting(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let result = sqlx::query("DELETE FROM card_waiting_for WHERE card_id = $1")
+        .bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
+    if result.rows_affected() > 0 {
+        record_card_activity(pool, card_id, current.id, "Ожидание снято", "").await;
+        let _ = state.events.send(());
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn update_card_public_visibility(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardPublicVisibilityRequest>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_card_full_access(pool, card_id, current.id).await?;
@@ -6495,4 +6605,5 @@ mod tests {
         assert_eq!(discord_outbound_comment_body("[[sticker:🔥]] и [[sticker:💯]]"), "🔥 и 💯");
         assert_eq!(discord_outbound_comment_body("[[sticker:\n]]"), "[[sticker:\n]]");
     }
+
 }

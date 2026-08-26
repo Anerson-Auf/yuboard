@@ -689,4 +689,34 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .archive-list .archive-card-entry:hover, .archive-list .archive-card-entry:focus-visible { border-color: color-mix(in srgb, var(--primary) 55%, var(--line)); background: color-mix(in srgb, var(--primary) 7%, var(--surface-raised)); outline: 0; transform: translateY(-1px); }
 .task-card:not(:has(.card-priority-corner)) .card-frozen-badge { right: 10px; }
 .task-card:has(.card-poll-attention) .card-frozen-badge { top: 38px; }
-.column-limit-exceeded { color: #f1c866 !important; }
+.column-limit-exceeded { color: #ff8585 !important; }
+
+/* A cover should stay vivid: only its text/footer area receives contrast. */
+.card-cover::after { background: linear-gradient(180deg, transparent 8%, rgb(13 18 23 / 8%) 38%, rgb(13 18 23 / 74%) 100%); }
+.column:has(.column-limit-exceeded) { border-color: color-mix(in srgb, #ef5d5d 68%, var(--line)); box-shadow: 0 0 0 1px rgb(239 93 93 / 12%), 0 12px 30px rgb(112 20 24 / 12%); }
+.column:has(.column-limit-exceeded) .column-head > div > span { color: #ff8585; }
+
+.card-waiting-indicator { display: inline-flex; width: 17px; height: 17px; align-items: center; justify-content: center; color: #f4cb62; filter: drop-shadow(0 1px 3px rgb(0 0 0 / 32%)); }
+.card-waiting-indicator svg { width: 15px; height: 15px; }
+.quick-action .card-waiting-indicator { width: 17px; height: 17px; }
+.quick-action.waiting-active { color: #f4cb62; }
+.card-waiting-panel { display: grid; gap: 10px; min-width: 290px; }
+.card-waiting-panel label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.card-waiting-panel select, .card-waiting-panel textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--text); font: inherit; }
+.card-waiting-panel select { min-height: 32px; padding: 0 8px; }
+.card-waiting-panel textarea { min-height: 72px; padding: 8px; resize: vertical; }
+.card-waiting-actions { display: flex; justify-content: flex-end; gap: 7px; }
+
+.task-card.remote-title .card-title-row, .task-card.remote-status .card-complete, .task-card.remote-comments .card-meta, .task-card.remote-labels .card-labels, .task-card.remote-members .card-avatars, .task-card.remote-waiting .card-waiting-indicator { animation: remote-field-flash 1.2s ease-out both; }
+@keyframes remote-field-flash { 0% { filter: brightness(1); box-shadow: 0 0 0 0 rgb(126 177 255 / 0); } 22% { filter: brightness(1.18); box-shadow: 0 0 0 5px rgb(126 177 255 / 20%); } 100% { filter: brightness(1); box-shadow: 0 0 0 0 rgb(126 177 255 / 0); } }
+
+.changelog-modal { width: min(680px, calc(100vw - 32px)); }
+.changelog-period { display: flex; gap: 12px; margin: 15px 0; }
+.changelog-period label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.changelog-period input, .changelog-card-list select { border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); color: var(--text); font: inherit; }
+.changelog-card-list { display: grid; max-height: min(46vh, 420px); overflow: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.changelog-card-list > label { display: grid; grid-template-columns: auto minmax(0, 1fr) 126px; align-items: center; gap: 10px; padding: 10px 3px; border-bottom: 1px solid color-mix(in srgb, var(--line) 76%, transparent); cursor: pointer; }
+.changelog-card-list > label:last-child { border-bottom: 0; }
+.changelog-card-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changelog-card-list small { display: block; margin-top: 2px; color: var(--faint); }
+.changelog-card-list select { height: 30px; padding: 0 5px; }
