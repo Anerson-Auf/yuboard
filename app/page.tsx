@@ -1407,6 +1407,7 @@ export default function Home() {
   const [diagramNoteReplyDrafts, setDiagramNoteReplyDrafts] = useState<Record<string, string>>({});
   const [editingDiagramTextIndex, setEditingDiagramTextIndex] = useState<number | null>(null);
   const [editingDiagramTextDraft, setEditingDiagramTextDraft] = useState('');
+  const editingDiagramTextObjectId = editingDiagramTextIndex === null ? undefined : diagramElements[editingDiagramTextIndex]?.id;
   const [isDiagramSaving, setDiagramSaving] = useState(false);
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dragOverListId, setDragOverListId] = useState<EntityId | null>(null);
@@ -2094,6 +2095,19 @@ export default function Home() {
     images.forEach((image) => image.addEventListener('load', refresh, { once: true }));
     return () => images.forEach((image) => image.removeEventListener('load', refresh));
   }, [diagramElements, isDiagramOpen]);
+
+  useEffect(() => {
+    const objectId = editingDiagramTextObjectId;
+    if (!objectId) return;
+    // Typing may include a long pause. Keep the transient edit lock alive
+    // instead of letting another editor take the object after a few seconds.
+    publishDiagramObjectLock(objectId, true);
+    const heartbeat = window.setInterval(() => publishDiagramObjectLock(objectId, true), 900);
+    return () => {
+      window.clearInterval(heartbeat);
+      publishDiagramObjectLock(objectId, false);
+    };
+  }, [editingDiagramTextObjectId]);
 
   useEffect(() => {
     if (!isDiagramOpen || authState !== 'signed-in' || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) {
@@ -4065,18 +4079,24 @@ export default function Home() {
   }
   function updateSelectedDiagramTextStyle(patch: Partial<Pick<DiagramText | DiagramCallout, 'color' | 'fontSize' | 'fontFamily' | 'fontWeight'>>) {
     if (selectedDiagramElement === null) return;
-    if (diagramElements[selectedDiagramElement]?.locked || diagramLockedByOther(diagramElements[selectedDiagramElement])) return;
+    const element = diagramElements[selectedDiagramElement];
+    if (element?.locked || diagramLockedByOther(element)) return;
+    publishDiagramObjectLock(element?.id, true);
     setDiagramElements((current) => current.map((element, index) => index === selectedDiagramElement && (element.type === 'text' || element.type === 'callout') ? { ...element, ...patch } : element));
   }
   function setDiagramLayerProperty(index: number, patch: Pick<DiagramObject, 'hidden'> | Pick<DiagramObject, 'locked'>) {
     if (isSelectedReadOnly) return;
-    if (diagramLockedByOther(diagramElements[index])) return;
+    const element = diagramElements[index];
+    if (diagramLockedByOther(element)) return;
+    publishDiagramObjectLock(element?.id, true);
     rememberDiagramState();
     setDiagramElements((current) => current.map((element, position) => position === index ? { ...element, ...patch } : element));
   }
   function moveDiagramLayer(index: number, direction: -1 | 1) {
     if (isSelectedReadOnly) return;
-    if (diagramLockedByOther(diagramElements[index])) return;
+    const element = diagramElements[index];
+    if (diagramLockedByOther(element)) return;
+    publishDiagramObjectLock(element?.id, true);
     const target = index + direction;
     if (target < 0 || target >= diagramElements.length) return;
     rememberDiagramState();
@@ -4099,6 +4119,7 @@ export default function Home() {
     if (selectedDiagramElement === null || isSelectedReadOnly) return;
     const element = diagramElements[selectedDiagramElement];
     if (!element || element.locked || diagramLockedByOther(element)) return;
+    publishDiagramObjectLock(element.id, true);
     setDiagramElements((current) => current.map((item, index) => index === selectedDiagramElement ? { ...item, ...patch } as DiagramElement : item));
   }
   function setDiagramTextStyle(patch: Partial<Pick<DiagramText | DiagramCallout, 'color' | 'fontSize' | 'fontFamily' | 'fontWeight'>>) {

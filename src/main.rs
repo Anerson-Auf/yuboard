@@ -4947,8 +4947,11 @@ async fn record_diagram_object_lock(state: &AppState, card_id: Uuid, current: Cu
             return DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: lock.user_id, username: lock.username.clone(), active: true, expires_in_ms: lock.expires_at.saturating_duration_since(now).as_millis() as u64 });
         }
     }
-    card_locks.insert(object_id.clone(), DiagramObjectLock { user_id: current.id, username: account.username.clone(), expires_at: now + Duration::from_secs(3) });
-    DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: current.id, username: account.username.clone(), active: true, expires_in_ms: 3_000 })
+    // A lock is deliberately short-lived, but must still survive a thoughtful
+    // pause while somebody edits a text label. The browser renews it while an
+    // interaction is active and releases it immediately on pointer-up/blur.
+    card_locks.insert(object_id.clone(), DiagramObjectLock { user_id: current.id, username: account.username.clone(), expires_at: now + Duration::from_secs(6) });
+    DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: current.id, username: account.username.clone(), active: true, expires_in_ms: 6_000 })
 }
 
 /// Rejects only modifications to objects another editor has actively locked.
@@ -5154,7 +5157,10 @@ async fn run_card_diagram_websocket(state: AppState, card_id: Uuid, current: Cur
                     DiagramSocketRequest::Merge(request) => match apply_card_diagram_merge(&state, current, card_id, request).await {
                         Ok((_, Some(event))) => { let _ = state.diagram_events.send(DiagramLiveEvent::Merge(event)); let _ = state.events.send(()); }
                         Ok((_, None)) => {}
-                        Err(_) => break,
+                        // A stale or locked local operation must not take the
+                        // whole real-time channel down: the client can keep
+                        // receiving the collaborator's subsequent edits.
+                        Err(_) => {}
                     },
                     DiagramSocketRequest::Live(DiagramLiveSocketRequest::Cursor { x, y }) => match record_diagram_cursor(&state, card_id, current, &account, x, y).await {
                         Ok(event) => { let _ = state.diagram_events.send(event); }
