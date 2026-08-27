@@ -45,9 +45,9 @@ type DragState = { cardId: EntityId; sourceListId: EntityId };
 type DragDropTarget = { listId: EntityId; beforeCardId: EntityId | null };
 type ChecklistItem = { id: EntityId; title: string; is_completed: boolean; description: string; attachments: Attachment[] };
 type Checklist = { id: string; title: string; items: ChecklistItem[] };
-type Comment = { id: EntityId; body: string; author_id?: string | null; author_name: string; author_avatar_url?: string | null; parent_comment_id?: string | null; created_at?: string; edited_at?: string | null; is_unread?: boolean; has_unread_thread?: boolean; reactions?: CommentReaction[] };
+type Comment = { id: EntityId; body: string; author_id?: string | null; author_name: string; author_avatar_url?: string | null; author_role_color?: string | null; parent_comment_id?: string | null; created_at?: string; edited_at?: string | null; is_unread?: boolean; has_unread_thread?: boolean; reactions?: CommentReaction[] };
 type Attachment = { id: string; original_name: string; media_type: string; byte_size: number; url: string };
-type Activity = { id: string; action: string; detail: string; actor_name: string | null; created_at: string };
+type Activity = { id: string; action: string; detail: string; actor_id?: string | null; actor_name: string | null; actor_avatar_url?: string | null; actor_role_color?: string | null; created_at: string };
 type BoardActivityItem = { id: string; card_id: string; card_title: string; action: string; detail: string; actor_id: string | null; actor_name: string; actor_avatar_url: string | null; created_at: string; count: number };
 type BoardActivityPage = { items: BoardActivityItem[]; page: number; per_page: number; total: number };
 type CardDetail = { checklists: Checklist[]; comments: Comment[]; attachments: Attachment[]; activity: Activity[]; cover_attachment_id: string | null; cover_mode: 'full' | 'top'; background_image_url: string | null; unread_mention_source_ids: string[]; watching: boolean };
@@ -924,6 +924,7 @@ export default function Home() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
+  const [conversationTab, setConversationTab] = useState<'comments' | 'activity'>('comments');
   const [isUploadingAttachment, setUploadingAttachment] = useState(false);
   const [isUpdatingOwnAssignment, setUpdatingOwnAssignment] = useState(false);
   const [coverModeDraft, setCoverModeDraft] = useState<'full' | 'top'>('full');
@@ -2763,6 +2764,7 @@ export default function Home() {
     setCommentEditDraft('');
     setAttachments([]);
     setActivity([]);
+    setConversationTab('comments');
     setUnreadMentionSourceIds([]);
     setWatchingCard(false);
     setDetailsLoading(persistence === 'connected' && typeof card.id === 'string');
@@ -3882,7 +3884,7 @@ export default function Home() {
           <MentionTextarea autoFocus value={commentEditDraft} onValueChange={setCommentEditDraft} members={account ? workspaceMembers : []} maxLength={10000} ariaLabel="Изменить комментарий" />
           <div><button type="submit">Сохранить</button><button type="button" onClick={() => setEditingCommentId(null)}>Отмена</button></div>
         </form> : <>
-          <header><b>@{comment.author_name}</b><time>{commentTime(comment)}{comment.edited_at && ' · изменено'}</time></header>
+          <header><b className="conversation-author" style={comment.author_role_color ? { color: comment.author_role_color } : undefined}>@{comment.author_name}</b><time>{commentTime(comment)}{comment.edited_at && ' · изменено'}</time></header>
           <div className="comment-text"><MarkdownDescription value={comment.body} highlightMentions={unreadMentionSourceIds.includes(String(comment.id))} />{comment.is_unread && <i className="comment-unread-dot comment-unread-dot-message" aria-label="Новое непрочитанное сообщение" />}</div>
           <div className="comment-reactions">
             {(comment.reactions ?? []).map((reaction) => <button type="button" key={reaction.emoji} className={reaction.reacted ? 'reacted' : ''} onClick={() => toggleCommentReaction(comment, reaction.emoji)} disabled={isSelectedReadOnly || !canEditBoard} title={reaction.emoji}>{reactionContent(reaction.emoji)}<small>{reaction.count}</small></button>)}
@@ -4825,13 +4827,23 @@ export default function Home() {
           </div>
           <aside className="task-sidebar" aria-label="Комментарии и активность">
             <section className="conversation-panel" aria-label="Комментарии и активность">
-              <div className="conversation-heading"><div><p className="sidebar-caption">ОБСУЖДЕНИЕ</p><h3>Комментарии и активность</h3></div><span>{comments.length}</span></div>
+              <div className="conversation-tabs" role="tablist" aria-label="Разделы карточки">
+                <button type="button" role="tab" aria-selected={conversationTab === 'comments'} className={conversationTab === 'comments' ? 'active' : ''} onClick={() => setConversationTab('comments')}>Обсуждение <span>{comments.filter((comment) => !comment.parent_comment_id).length}</span></button>
+                <button type="button" role="tab" aria-selected={conversationTab === 'activity'} className={conversationTab === 'activity' ? 'active' : ''} onClick={() => setConversationTab('activity')}>Активность <span>{activity.length}</span></button>
+              </div>
               {isDetailsLoading ? <p className="detail-loading">Загружаем сообщения…</p> : <div className="conversation-scroll">
-                {comments.filter((comment) => !comment.parent_comment_id).map((comment) => <div className="comment-thread comment-arrive" key={comment.id}>{renderCommentMessage(comment)}</div>)}
-                {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
-                {activity.map((item) => <div className="activity-message" key={item.id}><i>Console</i><p><b>@{item.actor_name ?? 'Deleted user'}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>)}
+                {conversationTab === 'comments' ? <>
+                  {comments.filter((comment) => !comment.parent_comment_id).map((comment) => <div className="comment-thread comment-arrive" key={comment.id}>{renderCommentMessage(comment)}</div>)}
+                  {!comments.length && <p className="empty-comments">Пока нет сообщений. Начните обсуждение.</p>}
+                </> : <>
+                  {activity.map((item) => {
+                    const actorName = item.actor_name ?? 'Deleted user';
+                    return <div className="activity-message" key={item.id}><Avatar member={{ id: item.actor_id ?? `activity-${item.id}`, initials: actorName.slice(0, 2).toUpperCase() || '—', color: 'mint', name: actorName, avatarUrl: item.actor_avatar_url }} /><p><b className="conversation-author" style={item.actor_role_color ? { color: item.actor_role_color } : undefined}>@{actorName}</b> {activityLabel(item.action)}{item.detail && <> · {item.detail}</>}<small>{new Date(item.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></p></div>;
+                  })}
+                  {!activity.length && <p className="empty-comments">Пока нет событий.</p>}
+                </>}
               </div>}
-              {!isSelectedReadOnly && <form className="comment-composer" onSubmit={addComment}><InlineStickerComposer ref={commentComposerRef} className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" />{renderStickerComposerButton('comment')}<button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
+              {conversationTab === 'comments' && !isSelectedReadOnly && <form className="comment-composer" onSubmit={addComment}><InlineStickerComposer ref={commentComposerRef} className={`media-drop-target ${isUploadingAttachment ? 'uploading' : ''}`} value={commentDraft} onValueChange={setCommentDraft} onSubmitShortcut={() => addComment()} members={account ? workspaceMembers : []} commands={[{ command: 'mod', label: 'Вызов модерации' }, { command: 'close', label: 'Закрыть тред' }]} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => handleMediaDrop(event, 'comment')} onPaste={(event) => handleMediaPaste(event, 'comment')} placeholder="Написать комментарий или перетащить медиа…" ariaLabel="Написать комментарий" />{renderStickerComposerButton('comment')}<button className={`voice-record-button ${voiceRecordingTarget === 'comment' ? 'recording' : ''}`} type="button" onClick={() => voiceRecordingTarget === 'comment' ? stopVoiceRecording() : void startVoiceRecording('comment')} disabled={Boolean(voiceRecordingTarget && voiceRecordingTarget !== 'comment') || isUploadingAttachment} aria-label={voiceRecordingTarget === 'comment' ? 'Остановить запись голосового сообщения' : 'Записать голосовое сообщение'} title={voiceRecordingTarget === 'comment' ? 'Остановить и отправить' : 'Записать голосовое'}><svg className="voice-record-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5A2.5 2.5 0 0 0 5.5 4v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5M4 7.25v.5a4 4 0 0 0 8 0v-.5h1.5v.5a5.5 5.5 0 0 1-4.75 5.45v1.3h2.5V16h-6.5v-1.5h2.5v-1.3A5.5 5.5 0 0 1 2.5 7.75v-.5z" /></svg></button><button className="add-card" type="submit" disabled={isSendingComment || !commentDraft.trim()}>{isSendingComment ? 'Отправка…' : 'Отправить'}</button></form>}
             </section>
           </aside>
         </div>

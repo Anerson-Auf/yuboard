@@ -1420,6 +1420,7 @@ struct CommentResponse {
     author_id: Option<Uuid>,
     author_name: String,
     author_avatar_url: Option<String>,
+    author_role_color: Option<String>,
     parent_comment_id: Option<Uuid>,
     created_at: String,
     edited_at: Option<String>,
@@ -1451,6 +1452,7 @@ struct CommentRow {
     author_id: Option<Uuid>,
     author_name: String,
     author_avatar_url: Option<String>,
+    author_role_color: Option<String>,
     parent_comment_id: Option<Uuid>,
     created_at: String,
     edited_at: Option<String>,
@@ -1476,7 +1478,10 @@ struct CardActivityResponse {
     id: Uuid,
     action: String,
     detail: String,
+    actor_id: Option<Uuid>,
     actor_name: Option<String>,
+    actor_avatar_url: Option<String>,
+    actor_role_color: Option<String>,
     created_at: String,
 }
 
@@ -4319,7 +4324,7 @@ async fn notify_card_reviewers(pool: &PgPool, card_id: Uuid, actor_id: Uuid, rev
 
 async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Option<Uuid>) -> Result<Vec<CommentResponse>, ApiError> {
     let rows = sqlx::query_as::<_, CommentRow>(
-        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id WHERE c.card_id = $1 ORDER BY c.created_at DESC, c.id DESC",
+        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, (SELECT pr.color FROM user_profile_roles upr INNER JOIN profile_roles pr ON pr.id = upr.role_id WHERE upr.user_id = c.author_id ORDER BY pr.name, pr.id LIMIT 1) AS author_role_color, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id WHERE c.card_id = $1 ORDER BY c.created_at DESC, c.id DESC",
     )
     .bind(card_id)
     .fetch_all(pool)
@@ -4332,7 +4337,7 @@ async fn load_card_comments(pool: &PgPool, card_id: Uuid, current_user_id: Optio
 
 async fn comment_responses(pool: &PgPool, rows: Vec<CommentRow>, current_user_id: Option<Uuid>) -> Result<Vec<CommentResponse>, ApiError> {
     let mut comments: Vec<CommentResponse> = rows.into_iter().map(|row| CommentResponse {
-        id: row.id, body: row.body, author_id: row.author_id, author_name: row.author_name, author_avatar_url: row.author_avatar_url, parent_comment_id: row.parent_comment_id,
+        id: row.id, body: row.body, author_id: row.author_id, author_name: row.author_name, author_avatar_url: row.author_avatar_url, author_role_color: row.author_role_color, parent_comment_id: row.parent_comment_id,
         created_at: row.created_at, edited_at: row.edited_at, is_unread: false, has_unread_thread: false, reactions: vec![], attachments: vec![],
     }).collect();
     if comments.is_empty() { return Ok(comments); }
@@ -4580,13 +4585,20 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
             comment.body = comment.body.replace(external_url, &local_url);
         }
     }
-    let activity = sqlx::query_as::<_, CardActivityResponse>(
-        "SELECT a.id, a.action, a.detail, COALESCE(u.username, 'Deleted user') AS actor_name, a.created_at::text AS created_at FROM card_activity a LEFT JOIN users u ON u.id = a.actor_id WHERE a.card_id = $1 ORDER BY a.created_at DESC LIMIT 100",
+    let mut activity = sqlx::query_as::<_, CardActivityResponse>(
+        "SELECT a.id, a.action, a.detail, a.actor_id, COALESCE(u.username, 'Deleted user') AS actor_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS actor_avatar_url, (SELECT pr.color FROM user_profile_roles upr INNER JOIN profile_roles pr ON pr.id = upr.role_id WHERE upr.user_id = a.actor_id ORDER BY pr.name, pr.id LIMIT 1) AS actor_role_color, a.created_at::text AS created_at FROM card_activity a LEFT JOIN users u ON u.id = a.actor_id WHERE a.card_id = $1 ORDER BY a.created_at DESC LIMIT 100",
     )
     .bind(card_id)
     .fetch_all(pool)
     .await
     .map_err(ApiError::internal)?;
+    if let Some(board_id) = public_board_id {
+        for item in &mut activity {
+            if let Some(actor_id) = item.actor_id {
+                item.actor_avatar_url = Some(format!("/v1/public/boards/{board_id}/avatars/{actor_id}"));
+            }
+        }
+    }
     let unread_mention_source_ids = if let Some(actor_id) = actor_id {
         sqlx::query_scalar::<_, Uuid>("SELECT source_id FROM card_mentions WHERE card_id = $1 AND user_id = $2 AND read_at IS NULL")
             .bind(card_id).bind(actor_id).fetch_all(pool).await.map_err(ApiError::internal)?
@@ -5242,7 +5254,7 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
     if !cursor_exists { return Err(ApiError::bad_request("The comment cursor does not belong to this card.")); }
     let limit = i64::from(query.limit.unwrap_or(100).clamp(1, 200));
     let rows = sqlx::query_as::<_, CommentRow>(
-        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id CROSS JOIN (SELECT created_at, id FROM comments WHERE id = $2 AND card_id = $1) anchor WHERE c.card_id = $1 AND c.parent_comment_id IS NULL AND (c.created_at, c.id) > (anchor.created_at, anchor.id) ORDER BY c.created_at ASC, c.id ASC LIMIT $3",
+        "SELECT c.id, c.body, c.author_id, COALESCE(u.username, c.external_author_name, 'Deleted user') AS author_name, COALESCE(CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END, c.external_author_avatar_url) AS author_avatar_url, (SELECT pr.color FROM user_profile_roles upr INNER JOIN profile_roles pr ON pr.id = upr.role_id WHERE upr.user_id = c.author_id ORDER BY pr.name, pr.id LIMIT 1) AS author_role_color, c.parent_comment_id, c.created_at::text AS created_at, c.edited_at::text AS edited_at FROM comments c LEFT JOIN users u ON u.id = c.author_id CROSS JOIN (SELECT created_at, id FROM comments WHERE id = $2 AND card_id = $1) anchor WHERE c.card_id = $1 AND c.parent_comment_id IS NULL AND (c.created_at, c.id) > (anchor.created_at, anchor.id) ORDER BY c.created_at ASC, c.id ASC LIMIT $3",
     )
     .bind(card_id).bind(after).bind(limit)
     .fetch_all(pool).await.map_err(ApiError::internal)?;
