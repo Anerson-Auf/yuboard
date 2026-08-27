@@ -485,7 +485,7 @@ function ProfileRoleChip({ role, compact = false, asButton = false, onClick }: {
 
 function CardPreviewChips({ card, onLabelClick }: { card: Pick<Card, 'labels' | 'roles'>; onLabelClick?: ReactMouseEventHandler<HTMLButtonElement> }) {
   if (!card.labels.length && !card.roles.length) return null;
-  return <div className="card-top">{card.labels.length > 0 && <div className="card-labels">{card.labels.map((label) => <LabelChip label={label} key={label.id} asButton={Boolean(onLabelClick)} onClick={onLabelClick} />)}</div>}{card.roles.length > 0 && <div className="card-roles">{card.roles.map((role) => <ProfileRoleChip role={role} key={role.id} compact />)}</div>}</div>;
+  return <div className="card-preview-tags">{card.labels.length > 0 && <div className="card-labels">{card.labels.map((label) => <LabelChip label={label} key={label.id} asButton={Boolean(onLabelClick)} onClick={onLabelClick} />)}</div>}{card.roles.length > 0 && <div className="card-roles">{card.roles.map((role) => <ProfileRoleChip role={role} key={role.id} compact />)}</div>}</div>;
 }
 
 function ShapePicker({ value, onChange, label }: { value: RoleShape; onChange: (shape: RoleShape) => void; label: string }) {

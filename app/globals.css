@@ -780,7 +780,8 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 /* Public card previews keep project labels and responsibility roles distinct:
    labels lead the card, while roles always form their own line underneath. */
-.task-card .card-top { display: grid; align-items: start; justify-content: stretch; gap: 5px; }.task-card .card-labels, .task-card .card-roles { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 5px; }.task-card .card-roles { padding-top: 1px; }
+.task-card .card-preview-tags { display: grid; align-items: start; gap: 5px; margin-bottom: 11px; }.task-card .card-preview-tags .card-labels, .task-card .card-preview-tags .card-roles { display: flex; min-width: 0; flex-wrap: wrap; align-items: flex-start; gap: 5px; line-height: 1; }.task-card .card-preview-tags .card-roles { min-height: 0; padding: 0; }.task-card .card-preview-tags .profile-role-chip { align-self: flex-start; min-height: 0; padding-top: 1px !important; padding-bottom: 1px !important; line-height: 1; }
+.app-shell.board-ui-scale-compact .card-preview-tags { margin-bottom: 7px; }.app-shell.board-ui-scale-roomy .card-preview-tags { margin-bottom: 13px; }
 
 /* Avatar opens a quick account menu, matching the Work menu. Full profile
    editing is deliberately one explicit click away. */
