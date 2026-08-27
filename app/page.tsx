@@ -1850,7 +1850,19 @@ export default function Home() {
       context.lineJoin = 'round';
       context.beginPath();
       context.moveTo(first.x, first.y);
-      rest.forEach((point) => context.lineTo(point.x, point.y));
+      // Pointer samples form a polyline. Interpolating through their midpoints
+      // keeps a fast hand-drawn circle round instead of turning it into a
+      // visibly angular polygon.
+      if (rest.length === 1) context.lineTo(rest[0].x, rest[0].y);
+      else if (rest.length > 1) {
+        for (let index = 0; index < rest.length - 1; index += 1) {
+          const current = rest[index];
+          const next = rest[index + 1];
+          context.quadraticCurveTo(current.x, current.y, (current.x + next.x) / 2, (current.y + next.y) / 2);
+        }
+        const last = rest.at(-1)!;
+        context.lineTo(last.x, last.y);
+      }
       context.stroke();
       context.restore();
     });
@@ -3713,6 +3725,11 @@ export default function Home() {
   function diagramPoint(event: ReactPointerEvent<HTMLCanvasElement>): DiagramPoint | null {
     return diagramPointFromClient(event.clientX, event.clientY);
   }
+  function diagramCoalescedPoints(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const samples = event.nativeEvent.getCoalescedEvents?.() ?? [event.nativeEvent];
+    const points = samples.map((sample) => diagramPointFromClient(sample.clientX, sample.clientY)).filter((point): point is DiagramPoint => point !== null);
+    return points.length ? points : (diagramPoint(event) ? [diagramPoint(event)!] : []);
+  }
   function rememberDiagramState() {
     setDiagramHistory((current) => [...current.slice(-49), { strokes: diagramStrokes, elements: diagramElements }]);
   }
@@ -3971,10 +3988,11 @@ export default function Home() {
       return;
     }
     if (diagramTool === 'draw') {
-      setDiagramStrokes((current) => current.map((stroke, index) => index === current.length - 1 ? { ...stroke, points: [...stroke.points, point] } : stroke));
+      const samples = diagramCoalescedPoints(event);
+      setDiagramStrokes((current) => current.map((stroke, index) => index === current.length - 1 ? { ...stroke, points: [...stroke.points, ...samples] } : stroke));
       return;
     }
-    if (diagramTool === 'erase') { eraseDiagramStrokeAt(point); return; }
+    if (diagramTool === 'erase') { diagramCoalescedPoints(event).forEach((sample) => eraseDiagramStrokeAt(sample)); return; }
     const start = diagramStartRef.current;
     if (start) setDiagramPreview(diagramElementFromDrag(diagramTool, start, point));
   }
