@@ -1064,6 +1064,7 @@ export default function Home() {
   const [authError, setAuthError] = useState('');
   const [isAuthorizing, setAuthorizing] = useState(false);
   const [isProfileOpen, setProfileOpen] = useState(false);
+  const [isProfileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profilePanel, setProfilePanel] = useState<'overview' | 'username' | 'password'>('overview');
   const [profileName, setProfileName] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -1175,6 +1176,7 @@ export default function Home() {
   const cardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const boardStickerFileRef = useRef<HTMLInputElement | null>(null);
   const workspaceToolsRef = useRef<HTMLDivElement | null>(null);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const stickerComposerButtonRefs = useRef<{ comment: HTMLButtonElement | null; thread: HTMLButtonElement | null }>({ comment: null, thread: null });
   const commentComposerRef = useRef<InlineStickerComposerHandle | null>(null);
   const threadComposerRef = useRef<InlineStickerComposerHandle | null>(null);
@@ -1190,6 +1192,14 @@ export default function Home() {
     window.addEventListener('pointerdown', close);
     return () => window.removeEventListener('pointerdown', close);
   }, [isWorkspaceToolsOpen]);
+  useEffect(() => {
+    if (!isProfileMenuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!profileMenuRef.current?.contains(event.target as Node)) setProfileMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [isProfileMenuOpen]);
   const selectedCardId = selected?.id;
 
   const pinnedCardsStorageKey = account && boardId ? `flowboard.pinned-cards.${account.user.id}.${boardId}` : null;
@@ -4595,7 +4605,7 @@ export default function Home() {
         {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
         {account && <ThemePicker className="top-theme-picker" />}
         {account && <div className="top-workspace-tools" ref={workspaceToolsRef}><button className="top-utility-button" type="button" onClick={() => setWorkspaceToolsOpen((current) => !current)} aria-label="Открыть разделы работы" aria-expanded={isWorkspaceToolsOpen}>▦ <span>Работа</span></button>{isWorkspaceToolsOpen && <div className="top-workspace-tools-popover" role="dialog" aria-label="Разделы работы"><button type="button" onClick={() => { setWorkspaceToolsOpen(false); setMyTasksOpen(true); }}>✓ <span><b>Мои задачи</b><small>Назначения, проверки и ожидания</small></span></button>{view === 'board' && <button type="button" onClick={() => { setWorkspaceToolsOpen(false); setSavedViewsOpen(true); }}>▱ <span><b>Сохранённые виды</b><small>Фильтры и порядок этой доски</small></span></button>}<button type="button" onClick={() => { setWorkspaceToolsOpen(false); setNotificationsOpen(false); setInboxOpen(true); }}>▤ <span><b>Входящие</b><small>Все уведомления</small></span></button><button type="button" onClick={() => { setWorkspaceToolsOpen(false); openSessions(); }}>◷ <span><b>Сессии</b><small>Устройства и безопасность</small></span></button>{account.user.is_system_owner && <button type="button" onClick={() => { setWorkspaceToolsOpen(false); openAdmin(); }}>⚙ <span><b>Администрирование</b><small>Аккаунты и пространства</small></span></button>}</div>}</div>}
-        {!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
+        {!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <div className="top-profile-menu" ref={profileMenuRef}><button className="profile-trigger" onClick={() => setProfileMenuOpen((current) => !current)} aria-label="Открыть личное меню" aria-expanded={isProfileMenuOpen}><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>{isProfileMenuOpen && <div className="top-profile-menu-popover" role="dialog" aria-label="Личное меню"><header><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /><span><b>@{account.user.username}</b><small>Личные настройки</small></span></header><button type="button" onClick={() => { setProfileMenuOpen(false); setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }}>◉ <span><b>Профиль</b><small>Ник, пароль, аватар и роли</small></span></button><button type="button" onClick={() => { setProfileMenuOpen(false); openSessions(); }}>◷ <span><b>Сессии</b><small>Устройства и безопасность</small></span></button>{account.user.is_system_owner && <button type="button" onClick={() => { setProfileMenuOpen(false); openAdmin(); }}>⚙ <span><b>Администрирование</b><small>Аккаунты и пространства</small></span></button>}<button className="profile-menu-signout" type="button" onClick={() => { setProfileMenuOpen(false); signOut(); }}>↪ <span><b>Выйти из аккаунта</b><small>Завершить текущую сессию</small></span></button></div>}</div>}</div>
     </header>
     <input ref={workspaceBackgroundFileRef} className="workspace-background-file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadWorkspaceBackground} />
 
