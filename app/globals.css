@@ -759,7 +759,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 /* The filter panel is a working surface: leave enough horizontal room for
    names, labels and sorting choices instead of packing them into tiny cells. */
-.filter-popover { width: min(1840px, calc(100vw - 28px)); padding: 13px; }.filter-popover .filter-mode-grid { gap: 6px; }.filter-popover .filter-mode-grid > button { min-height: 39px; padding-right: 10px; padding-left: 10px; }.filter-popover .filter-sort-options { gap: 6px; }.filter-popover .filter-sort-options > button { min-height: 37px; padding-right: 8px; padding-left: 8px; font-size: 11px; }.filter-popover .label-filter-options { gap: 6px; }.filter-popover .label-filter-options > button { min-height: 37px; padding-right: 8px; padding-left: 8px; }.filter-popover .label-filter-options .board-label-chip { max-width: calc(100% - 20px); }
+.filter-popover { width: min(920px, calc(100vw - 28px)); padding: 13px; }.filter-popover .filter-mode-grid { gap: 6px; }.filter-popover .filter-mode-grid > button { min-height: 39px; padding-right: 10px; padding-left: 10px; }.filter-popover .filter-sort-options { gap: 6px; }.filter-popover .filter-sort-options > button { min-height: 37px; padding-right: 8px; padding-left: 8px; font-size: 11px; }.filter-popover .label-filter-options { gap: 6px; }.filter-popover .label-filter-options > button { min-height: 37px; padding-right: 8px; padding-left: 8px; }.filter-popover .label-filter-options .board-label-chip { max-width: calc(100% - 20px); }
 
 /* The full-size cover sits behind the external card title. Difference blending
    gives it a readable inverse tone on both a bright and a dark image. */
