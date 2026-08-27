@@ -33,6 +33,7 @@ struct AppState {
     cookie_secure: bool,
     external_http: reqwest::Client,
     discord_attachment_refresh: Option<DiscordAttachmentRefresh>,
+    comment_push: Option<FlowboardCommentPush>,
     events: broadcast::Sender<()>,
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
     board_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, BoardPresence>>>>,
@@ -47,6 +48,14 @@ struct AppState {
 struct DiscordAttachmentRefresh {
     endpoint: reqwest::Url,
     signing_secret: String,
+}
+
+// A separate, narrow credential is used only for immediate Flowboard → Discord
+// comment delivery. It must never be the board integration token.
+#[derive(Clone)]
+struct FlowboardCommentPush {
+    endpoint: reqwest::Url,
+    token: String,
 }
 
 #[derive(Serialize)]
@@ -1590,6 +1599,7 @@ async fn main() {
         .build()
         .expect("could not initialize external media client");
     let discord_attachment_refresh = discord_attachment_refresh_from_env();
+    let comment_push = comment_push_from_env();
 
     let app = Router::new()
         .route("/health", get(health))
@@ -1732,7 +1742,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -2137,6 +2147,25 @@ fn discord_attachment_refresh_from_env() -> Option<DiscordAttachmentRefresh> {
         Ok(endpoint) if endpoint.scheme() == "https" => Some(DiscordAttachmentRefresh { endpoint, signing_secret }),
         _ => {
             tracing::warn!("Discord attachment refresh is disabled: use an HTTPS URL and a signing secret of at least 32 characters");
+            None
+        }
+    }
+}
+
+fn comment_push_from_env() -> Option<FlowboardCommentPush> {
+    let token = env::var("FLOWBOARD_COMMENT_PUSH_TOKEN").ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| value.len() >= 24);
+    let Some(token) = token else {
+        tracing::warn!("Discord comment push is disabled: configure FLOWBOARD_COMMENT_PUSH_TOKEN");
+        return None;
+    };
+    let endpoint = env::var("FLOWBOARD_COMMENT_PUSH_URL")
+        .unwrap_or_else(|_| "https://yufu.su/api/flowboard/comments/push".to_owned());
+    match reqwest::Url::parse(endpoint.trim()) {
+        Ok(endpoint) if endpoint.scheme() == "https" => Some(FlowboardCommentPush { endpoint, token }),
+        _ => {
+            tracing::warn!("Discord comment push is disabled: FLOWBOARD_COMMENT_PUSH_URL must be an HTTPS URL");
             None
         }
     }
@@ -4792,8 +4821,66 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     let comment = load_card_comments(pool, card_id, Some(actor_id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     record_card_activity(pool, card_id, actor_id, if comment.parent_comment_id.is_some() { "Добавлено сообщение в тред" } else { "Добавлен комментарий" }, "").await;
+    // A Flowboard discussion thread is private to the card UI. Only a fresh,
+    // local root comment is mirrored to the Discord thread; Discord imports
+    // enter through `create_discord_comment` and never reach this path.
+    if comment.parent_comment_id.is_none() {
+        push_local_comment_to_discord(&state, card_id, &comment);
+    }
     let _ = state.events.send(());
     Ok(Json(comment))
+}
+
+fn push_local_comment_to_discord(state: &AppState, card_id: Uuid, comment: &CommentResponse) {
+    let Some(push) = state.comment_push.clone() else { return; };
+    let attachments = comment.attachments.iter().map(|attachment| json!({
+        "id": attachment.id.to_string(),
+        "original_name": attachment.original_name,
+        "media_type": attachment.media_type,
+        "byte_size": attachment.byte_size,
+        "download_url": attachment.download_url,
+    })).collect::<Vec<_>>();
+    let payload = json!({
+        "card_id": card_id.to_string(),
+        "comment": {
+            "id": comment.id.to_string(),
+            "body": comment.body,
+            "author_name": comment.author_name,
+            "author_avatar_url": comment.author_avatar_url,
+            "attachments": attachments,
+        },
+    });
+    let client = state.external_http.clone();
+    tokio::spawn(async move {
+        // The receiver is idempotent by comment.id. Retry only transient
+        // transport/server failures; bad credentials and malformed requests
+        // must be surfaced in logs instead of being retried forever.
+        for attempt in 0..3 {
+            match client.post(push.endpoint.clone())
+                .bearer_auth(&push.token)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(payload.to_string())
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => return,
+                Ok(response) if response.status().is_client_error() => {
+                    tracing::error!(status = %response.status(), card_id = %card_id, "Discord comment push was rejected");
+                    return;
+                }
+                Ok(response) => {
+                    tracing::warn!(status = %response.status(), card_id = %card_id, attempt, "Discord comment push failed; retrying");
+                }
+                Err(error) => {
+                    tracing::warn!(?error, card_id = %card_id, attempt, "Discord comment push request failed; retrying");
+                }
+            }
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_secs(5 * (attempt + 1))).await;
+            }
+        }
+        tracing::error!(card_id = %card_id, "Discord comment push failed after retries");
+    });
 }
 
 async fn get_comment_thread(State(state): State<AppState>, current: Viewer, Path(comment_id): Path<Uuid>) -> ApiResult<CommentThreadResponse> {
