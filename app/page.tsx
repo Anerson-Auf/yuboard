@@ -61,6 +61,7 @@ type CardSort = 'manual' | 'priority' | 'activity';
 type BoardViewMode = 'standard' | 'freeform' | 'dependencies';
 type BoardContentMode = 'columns' | 'members' | 'schedule';
 type BoardUiScale = 'compact' | 'normal' | 'roomy';
+type UndoAction = { undo: () => void };
 type BoardLocalPreferences = {
   version: 1;
   boardUiScale: BoardUiScale;
@@ -901,6 +902,8 @@ export default function Home() {
   const [unavailableCardBackgroundUrls, setUnavailableCardBackgroundUrls] = useState<Set<string>>(() => new Set());
   const [isCardAdditionalOptionsOpen, setCardAdditionalOptionsOpen] = useState(false);
   const [toast, setToast] = useState('');
+  const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
   const [query, setQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [labelFilterIds, setLabelFilterIds] = useState<string[]>([]);
@@ -1933,7 +1936,32 @@ export default function Home() {
       .catch(() => { boardBackgroundDisplayRef.current = previous; setBoardBackgroundFit(previous.fit); setBoardBackgroundPosition(previous.position); showToast('Не удалось сохранить отображение фона'); });
   }, [backgroundDraft, boardBackgroundFit, boardBackgroundPosition, boardBackgroundUrl, boardId]);
 
-  function showToast(message: string) { setToast(message); window.setTimeout(() => setToast(''), 2600); }
+  function clearToastTimer() {
+    if (toastTimeoutRef.current !== null) {
+      window.clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = null;
+    }
+  }
+  function showToast(message: string) {
+    clearToastTimer();
+    setUndoAction(null);
+    setToast(message);
+    toastTimeoutRef.current = window.setTimeout(() => { setToast(''); toastTimeoutRef.current = null; }, 2600);
+  }
+  function showUndoToast(message: string, undo: () => void) {
+    clearToastTimer();
+    setToast(message);
+    setUndoAction({ undo });
+    toastTimeoutRef.current = window.setTimeout(() => { setToast(''); setUndoAction(null); toastTimeoutRef.current = null; }, 6200);
+  }
+  function runUndo() {
+    const action = undoAction;
+    if (!action) return;
+    clearToastTimer();
+    setToast('');
+    setUndoAction(null);
+    action.undo();
+  }
   function openChangelog() {
     const completed = columns.flatMap((column) => column.cards).filter((card) => {
       if (!card.completedAt) return false;
@@ -2679,24 +2707,50 @@ export default function Home() {
         .catch(() => showToast('Задача добавлена локально; сервер недоступен'));
     }
   }
+  function relocateCardLocally(cardId: EntityId, targetListId: EntityId, beforeCardId?: EntityId) {
+    setColumns((current) => {
+      let movingCard: Card | undefined;
+      const withoutCard = current.map((column) => {
+        const card = column.cards.find((item) => item.id === cardId);
+        if (!card) return column;
+        movingCard = card;
+        return { ...column, cards: column.cards.filter((item) => item.id !== cardId) };
+      });
+      if (!movingCard) return current;
+      return withoutCard.map((column) => {
+        if (column.id !== targetListId) return column;
+        const requestedIndex = beforeCardId === undefined ? column.cards.length : column.cards.findIndex((item) => item.id === beforeCardId);
+        const insertionIndex = requestedIndex < 0 ? column.cards.length : requestedIndex;
+        const cards = [...column.cards];
+        cards.splice(insertionIndex, 0, movingCard!);
+        return { ...column, cards };
+      });
+    });
+  }
+  function restoreCardMove(cardId: EntityId, sourceListId: EntityId, beforeCardId?: EntityId) {
+    relocateCardLocally(cardId, sourceListId, beforeCardId);
+    clearFreeformCardPosition(cardId);
+    if (persistence === 'connected' && typeof cardId === 'string' && typeof sourceListId === 'string') {
+      void fetch(`${API_URL}/v1/cards/${cardId}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target_list_id: sourceListId, before_card_id: typeof beforeCardId === 'string' ? beforeCardId : null }) })
+        .then((response) => { if (!response.ok) throw new Error('move undo failed'); showToast('Перенос отменён'); })
+        .catch(() => showToast('Не удалось отменить перенос: обновите доску'));
+      return;
+    }
+    showToast('Перенос отменён');
+  }
   function moveCard(cardId: EntityId, sourceListId: EntityId, targetListId: EntityId, beforeCardId?: EntityId) {
     const card = columns.find((column) => column.id === sourceListId)?.cards.find((item) => item.id === cardId);
     if (!card) return;
     if (card.frozen) { clearDragState(); showToast('Карточка заморожена: сначала её нужно разморозить'); return; }
+    const sourceCards = columns.find((column) => column.id === sourceListId)?.cards ?? [];
+    const sourceIndex = sourceCards.findIndex((item) => item.id === cardId);
+    const restoreBeforeCardId = sourceIndex >= 0 ? sourceCards[sourceIndex + 1]?.id : undefined;
     const targetColumn = columns.find((column) => column.id === targetListId);
     const exceedsLimit = Boolean(targetListId !== sourceListId && targetColumn?.cardLimit && targetColumn.cards.length >= Math.max(0, targetColumn.cardLimit - 1));
-    setColumns((current) => {
-      const withoutCard = current.map((column) => column.id === sourceListId ? { ...column, cards: column.cards.filter((item) => item.id !== cardId) } : column);
-      return withoutCard.map((column) => {
-        if (column.id !== targetListId) return column;
-        const insertionIndex = beforeCardId === undefined ? column.cards.length : Math.max(0, column.cards.findIndex((item) => item.id === beforeCardId));
-        const cards = [...column.cards];
-        cards.splice(insertionIndex, 0, card);
-        return { ...column, cards };
-      });
-    });
+    relocateCardLocally(cardId, targetListId, beforeCardId);
     clearFreeformCardPosition(cardId);
-    clearDragState(); showToast(exceedsLimit ? `Лимит «${targetColumn?.title}» достигнут — «${card.title}» перемещена` : `«${card.title}» перемещена`);
+    clearDragState();
+    showUndoToast(exceedsLimit ? `Лимит «${targetColumn?.title}» достигнут — «${card.title}» перемещена` : `«${card.title}» перемещена`, () => restoreCardMove(cardId, sourceListId, restoreBeforeCardId));
     if (persistence === 'connected' && typeof cardId === 'string' && typeof targetListId === 'string') {
       void fetch(`${API_URL}/v1/cards/${cardId}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target_list_id: targetListId, before_card_id: typeof beforeCardId === 'string' ? beforeCardId : null }) })
         .then((response) => { if (!response.ok) throw new Error('move failed'); })
@@ -4173,6 +4227,7 @@ export default function Home() {
     if (isParkingCardId(card.id)) {
       updateParkingCard(String(card.id), (current) => ({ ...current, completedAt: completedAt ?? null }));
       setSelected((current) => current?.id === card.id ? { ...current, completedAt } : current);
+      showUndoToast(completedAt ? 'Задача отмечена выполненной' : 'Задача возвращена в работу', () => toggleCardCompletion({ ...card, completedAt }));
       return;
     }
     const shouldReorder = cardSort === 'manual';
@@ -4202,6 +4257,7 @@ export default function Home() {
         window.setTimeout(() => setCardMoveMotion((current) => current?.key === motionKey ? null : current), 480);
       }));
     }
+    showUndoToast(completedAt ? 'Задача отмечена выполненной' : 'Задача возвращена в работу', () => toggleCardCompletion({ ...card, completedAt }));
     if (persistence !== 'connected' || typeof card.id !== 'string') return;
     void fetch(`${API_URL}/v1/cards/${card.id}/completion`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_completed: !card.completedAt }) })
       .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось сохранить статус задачи'); })
@@ -4923,7 +4979,7 @@ export default function Home() {
     {columnContextMenu && <div className="card-context-menu" role="menu" style={{ left: columnContextMenu.x, top: columnContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setComposerOpen(columnContextMenu.column.id); setColumnContextMenu(null); }}>Добавить задачу</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); moveColumn(columnContextMenu.column.id); setColumnContextMenu(null); }}>Вынести в отдельный ряд справа</button><button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); beginColumnRename(columnContextMenu.column); setColumnContextMenu(null); }}>Переименовать</button><button className="danger-action" type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); deleteColumn(columnContextMenu.column); setColumnContextMenu(null); }}>Удалить пустую</button></div>}
     {cardDragPreview && <div ref={cardDragPreviewElementRef} className="card-drag-preview" aria-hidden="true" style={{ left: cardDragPreview.x - 28, top: cardDragPreview.y - 20, width: cardDragPreview.width, height: cardDragPreview.height } as CSSProperties}>{<CardCover card={cardDragPreview.card} />}<div className="card-main"><CardPreviewChips card={cardDragPreview.card} /><div className="card-title-row"><span className={`card-complete ${cardDragPreview.card.completedAt ? 'done' : ''}`}>{cardDragPreview.card.completedAt && '✓'}</span><h3>{cardDragPreview.card.title}</h3></div>{cardDragPreview.card.dueAt && <p className="due">◷ {formatDue(cardDragPreview.card.dueAt)}</p>}</div>{cardDragPreview.card.priority ? <span className="card-priority-corner"><PrioritySignal priority={cardDragPreview.card.priority} /></span> : null}{(cardDragPreview.card.checklist || cardDragPreview.card.comments || cardDragPreview.card.attachments || cardDragPreview.card.members.length > 0) && <footer className="card-footer"><div className="card-meta">{cardDragPreview.card.checklist && <span className={isChecklistComplete(cardDragPreview.card.checklist) ? 'checklist-complete' : ''}><CardMetaIcon type="checklist" />{cardDragPreview.card.checklist}</span>}{cardDragPreview.card.comments && <span><CardMetaIcon type="comments" />{cardDragPreview.card.comments}</span>}{cardDragPreview.card.attachments && <span><CardMetaIcon type="attachments" /></span>}</div><div className="card-avatars">{<VisibleAvatars members={cardDragPreview.card.members} />}</div></footer>}</div>}
     {cardMoveMotion && <div className="card-move-ghost" aria-hidden="true" style={{ left: cardMoveMotion.from.left, top: cardMoveMotion.from.top, width: cardMoveMotion.from.width, height: cardMoveMotion.from.height, '--card-move-x': `${cardMoveMotion.to.left - cardMoveMotion.from.left}px`, '--card-move-y': `${cardMoveMotion.to.top - cardMoveMotion.from.top}px`, '--card-move-scale-x': String(cardMoveMotion.to.width / cardMoveMotion.from.width), '--card-move-scale-y': String(cardMoveMotion.to.height / cardMoveMotion.from.height) } as CSSProperties}><b>{cardMoveMotion.title}</b></div>}
-    {toast && <div className="toast">✓ {toast}</div>}
+    {toast && <div className={`toast${undoAction ? ' toast-with-undo' : ''}`} role="status"><span>✓ {toast}</span>{undoAction && <button type="button" onClick={runUndo}>Отменить</button>}</div>}
     <CommandPalette
       showTrigger={false}
       createCard={{ disabled: !canEditBoard || !columns[0], onSelect: () => { if (columns[0]) setComposerOpen(columns[0].id); } }}

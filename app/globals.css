@@ -761,6 +761,12 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
    names, labels and sorting choices instead of packing them into tiny cells. */
 .filter-popover { width: min(467px, calc(100vw - 28px)); padding: 13px; }.filter-popover .filter-mode-grid { gap: 6px; }.filter-popover .filter-mode-grid > button { min-height: 39px; padding-right: 10px; padding-left: 10px; }.filter-popover .filter-sort-options { gap: 6px; }.filter-popover .filter-sort-options > button { min-height: 37px; padding-right: 8px; padding-left: 8px; font-size: 11px; }.filter-popover .label-filter-options { gap: 6px; }.filter-popover .label-filter-options > button { min-height: 37px; padding-right: 8px; padding-left: 8px; }.filter-popover .label-filter-options .board-label-chip { max-width: calc(100% - 20px); }
 
+/* Risky changes stay reversible for a few seconds without obscuring the board. */
+.toast.toast-with-undo { display: flex; align-items: center; gap: 12px; padding-right: 9px; }
+.toast.toast-with-undo > span { min-width: 0; }
+.toast.toast-with-undo button { min-height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, white 44%, transparent); border-radius: 8px; background: rgb(255 255 255 / 12%); color: inherit; font: inherit; font-weight: 700; cursor: pointer; }
+.toast.toast-with-undo button:hover { background: rgb(255 255 255 / 22%); }
+
 /* The full-size cover sits behind the external card title. Difference blending
    gives it a readable inverse tone on both a bright and a dark image. */
 .task-card:has(.card-cover:not(.top)) .card-title-row h3 { color: #fff; mix-blend-mode: difference; text-shadow: 0 1px 10px rgb(0 0 0 / 28%); }
