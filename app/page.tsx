@@ -999,6 +999,7 @@ export default function Home() {
   const [isInboxOpen, setInboxOpen] = useState(false);
   const [isMyTasksOpen, setMyTasksOpen] = useState(false);
   const [isSavedViewsOpen, setSavedViewsOpen] = useState(false);
+  const [pinnedCardIds, setPinnedCardIds] = useState<string[]>([]);
   const [isAutomationsOpen, setAutomationsOpen] = useState(false);
   const [isNotificationsLoading, setNotificationsLoading] = useState(false);
   const [pendingNotificationCardId, setPendingNotificationCardId] = useState<string | null>(null);
@@ -1186,6 +1187,16 @@ export default function Home() {
     return () => window.removeEventListener('pointerdown', close);
   }, [isWorkspaceToolsOpen]);
   const selectedCardId = selected?.id;
+
+  const pinnedCardsStorageKey = account && boardId ? `flowboard.pinned-cards.${account.user.id}.${boardId}` : null;
+
+  useEffect(() => {
+    if (!pinnedCardsStorageKey) { setPinnedCardIds([]); return; }
+    try {
+      const parsed = JSON.parse(localStorage.getItem(pinnedCardsStorageKey) ?? '[]');
+      setPinnedCardIds(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string').slice(0, 12) : []);
+    } catch { setPinnedCardIds([]); }
+  }, [pinnedCardsStorageKey]);
 
   useEffect(() => { columnsRef.current = columns; }, [columns]);
   const selectedParkingCard = selectedParkingCardId ? parkingCards.find((card) => card.id === selectedParkingCardId) ?? null : null;
@@ -2855,6 +2866,15 @@ export default function Home() {
     if (!card) { showToast('Эта карточка сейчас в архиве'); return; }
     setBoardActivityOpen(false);
     openCard(card);
+  }
+  function togglePinnedCard(cardId: EntityId) {
+    if (!pinnedCardsStorageKey) return;
+    const id = String(cardId);
+    setPinnedCardIds((current) => {
+      const next = current.includes(id) ? current.filter((value) => value !== id) : [id, ...current].slice(0, 12);
+      localStorage.setItem(pinnedCardsStorageKey, JSON.stringify(next));
+      return next;
+    });
   }
   function restoreArchivedCard(card: ArchivedCard) {
     if (persistence !== 'connected' || isPublicViewer) return;
@@ -4608,7 +4628,7 @@ export default function Home() {
         </div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
       {isBulkMode && <aside className="bulk-actions bulk-actions-compact" aria-label="Массовые действия"><header><b>Выбрано: {bulkCardIds.length}</b><span>ЛКМ ведите по карточкам · ПКМ добавляет</span><button type="button" className="bulk-close" onClick={() => { setBulkMode(false); setBulkCardIds([]); }}>×</button></header><footer><button type="button" onClick={() => void applyBulkAction('complete')} disabled={!bulkCardIds.length || isApplyingBulkAction}>✓ Выполнить</button><label>Приоритет<select defaultValue="" onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) void applyBulkAction('priority', value); event.currentTarget.value = ''; }} disabled={!bulkCardIds.length || isApplyingBulkAction}><option value="" disabled>Выбрать</option>{[0, 1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value || 'Снять'}</option>)}</select></label><label>Перенести<select value={bulkTargetListId} onChange={(event) => setBulkTargetListId(event.target.value)} disabled={isApplyingBulkAction}><option value="">Выбрать колонку</option>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select></label><button type="button" onClick={() => void applyBulkAction('move')} disabled={!bulkCardIds.length || !bulkTargetListId || isApplyingBulkAction}>→ Перенести</button><button type="button" className="danger-action" onClick={() => void applyBulkAction('archive')} disabled={!bulkCardIds.length || isApplyingBulkAction}>Архив</button></footer></aside>}
-      {account && boardId && <PinnedCardsShelf storageKey={`flowboard.pinned-cards.${account.user.id}.${boardId}`} cards={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title, completed: Boolean(card.completedAt) })))} onOpen={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} />}
+      {account && boardId && <PinnedCardsShelf ids={pinnedCardIds} cards={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title, completed: Boolean(card.completedAt) })))} onOpen={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onUnpin={togglePinnedCard} />}
       {boardContentMode === 'schedule' && <div className="board-schedule"><ScheduleView cards={columns.flatMap((column) => column.cards.map((card) => ({ id: card.id, title: card.title, listTitle: column.title, startAt: card.startAt, dueAt: card.dueAt, completedAt: card.completedAt })))} onDateChange={saveCalendarDueDate} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === String(cardId)); if (card) openCard(card); }} /></div>}
       <section className={`board ${isBoardPanning ? 'board-panning' : ''} ${boardViewMode === 'freeform' ? 'board-freeform' : ''} ${boardContentMode === 'schedule' ? 'board-schedule-hidden' : ''}`} ref={boardRef} aria-label="Канбан-доска" onPointerDown={startBoardPan} onPointerMove={(event) => { moveBoardPan(event); updateFreeformCursor(event); }} onPointerUp={stopBoardPan} onPointerCancel={stopBoardPan} onLostPointerCapture={stopBoardPan} onScroll={() => { if (boardViewMode === 'freeform') refreshFreeformViewport(); }}>
         {persistence === 'connecting' ? <div className="board-loading" role="status"><span className="loading-dot" />Загружаем вашу доску</div> : boardContentMode === 'members' ? renderMemberBoard() : boardViewMode === 'dependencies' ? <DependencyGraph boardId={boardId} nodes={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title, completed: Boolean(card.completedAt), priority: card.priority })))} canEdit={!isPublicViewer} onOpenCard={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} /> : <div ref={freeformCanvasRef} className={boardViewMode === 'freeform' ? 'freeform-canvas' : 'board-columns'} style={boardViewMode === 'freeform' ? { width: freeformCanvasSize.width * freeformZoom, height: freeformCanvasSize.height * freeformZoom } : undefined} onContextMenu={(event) => { if (boardViewMode !== 'freeform' || isPublicViewer || (event.target instanceof Element && event.target.closest('.column, .freeform-detached-card'))) return; const point = getFreeformPoint(event.clientX, event.clientY); if (!point) return; event.preventDefault(); setFreeformContextMenu({ x: Math.min(event.clientX, window.innerWidth - 230), y: Math.min(event.clientY, window.innerHeight - 170), position: point }); }} onDragOver={(event) => { if (boardViewMode === 'freeform' && dragging && !(event.target instanceof Element && event.target.closest('.column, .freeform-detached-card'))) event.preventDefault(); }} onDrop={detachDraggedCard}>
@@ -4760,6 +4780,7 @@ export default function Home() {
       <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); void copyCardLink(cardContextMenu.card); setCardContextMenu(null); }}>Копировать ссылку</button>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openFocusMode(cardContextMenu.card); setCardContextMenu(null); }}>◉ Фокус на карточке</button>
       {!isPublicViewer && <>
+        <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); togglePinnedCard(cardContextMenu.card.id); setCardContextMenu(null); }}>{pinnedCardIds.includes(String(cardContextMenu.card.id)) ? '⌁ Открепить' : '⌁ Закрепить'}</button>
         <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setBulkMode(true); toggleBulkCard(cardContextMenu.card.id); setCardContextMenu(null); }}>☷ Выбрать</button>
         {!cardContextMenu.card.frozen && <>
           <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); toggleCardCompletion(cardContextMenu.card); setCardContextMenu(null); }}>{cardContextMenu.card.completedAt ? 'Вернуть в работу' : 'Отметить выполненной'}</button>
