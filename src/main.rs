@@ -424,7 +424,17 @@ struct FreeformLiveBoard {
 struct BoardPresence {
     card_id: Option<Uuid>,
     editing_description: bool,
+    location: BoardPresenceLocation,
     last_seen: Instant,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BoardPresenceLocation {
+    #[default]
+    Board,
+    Card,
+    Diagram,
 }
 
 #[derive(Clone)]
@@ -464,6 +474,8 @@ struct UpdateBoardPresenceRequest {
     card_id: Option<Uuid>,
     #[serde(default)]
     editing_description: bool,
+    #[serde(default)]
+    location: BoardPresenceLocation,
 }
 
 #[derive(Serialize)]
@@ -472,7 +484,9 @@ struct BoardPresenceEntry {
     username: String,
     avatar_url: Option<String>,
     card_id: Option<Uuid>,
+    card_title: Option<String>,
     editing_description: bool,
+    location: BoardPresenceLocation,
 }
 
 #[derive(Clone)]
@@ -3394,7 +3408,21 @@ async fn board_presence_snapshot(state: &AppState, board_id: Uuid) -> ApiResult<
     let accounts = sqlx::query_as::<_, FreeformLiveAccount>("SELECT id, username, CASE WHEN avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || id::text END AS avatar_url FROM users WHERE id = ANY($1) AND disabled_at IS NULL")
         .bind(&ids).fetch_all(database(state)?).await.map_err(ApiError::internal)?;
     let accounts = accounts.into_iter().map(|account| (account.id, account)).collect::<HashMap<_, _>>();
-    Ok(Json(active.into_iter().filter_map(|(user_id, presence)| accounts.get(&user_id).map(|account| BoardPresenceEntry { user_id, username: account.username.clone(), avatar_url: account.avatar_url.clone(), card_id: presence.card_id, editing_description: presence.editing_description })).collect()))
+    let card_ids = active.iter().filter_map(|(_, presence)| presence.card_id).collect::<Vec<_>>();
+    let card_titles = if card_ids.is_empty() { HashMap::new() } else {
+        sqlx::query_as::<_, (Uuid, String)>("SELECT id, title FROM cards WHERE id = ANY($1)")
+            .bind(&card_ids).fetch_all(database(state)?).await.map_err(ApiError::internal)?
+            .into_iter().collect::<HashMap<_, _>>()
+    };
+    Ok(Json(active.into_iter().filter_map(|(user_id, presence)| accounts.get(&user_id).map(|account| BoardPresenceEntry {
+        user_id,
+        username: account.username.clone(),
+        avatar_url: account.avatar_url.clone(),
+        card_id: presence.card_id,
+        card_title: presence.card_id.and_then(|card_id| card_titles.get(&card_id).cloned()),
+        editing_description: presence.editing_description,
+        location: presence.location,
+    })).collect()))
 }
 
 async fn get_board_presence(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>) -> ApiResult<Vec<BoardPresenceEntry>> {
@@ -3409,7 +3437,7 @@ async fn update_board_presence(State(state): State<AppState>, current: CurrentUs
             .bind(card_id).bind(board_id).fetch_one(database(&state)?).await.map_err(ApiError::internal)?;
         if !belongs_to_board { return Err(ApiError::bad_request("The active card does not belong to this board.")); }
     }
-    state.board_presence.lock().await.entry(board_id).or_default().insert(current.id, BoardPresence { card_id: request.card_id, editing_description: request.editing_description, last_seen: Instant::now() });
+    state.board_presence.lock().await.entry(board_id).or_default().insert(current.id, BoardPresence { card_id: request.card_id, editing_description: request.editing_description, location: request.location, last_seen: Instant::now() });
     board_presence_snapshot(&state, board_id).await
 }
 

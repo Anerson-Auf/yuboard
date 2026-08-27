@@ -3,27 +3,28 @@
 import { useEffect, useMemo, useState } from 'react';
 import './board-presence.css';
 
-export type Presence = { user_id: string; username: string; avatar_url: string | null; card_id: string | null; editing_description: boolean };
+export type PresenceLocation = 'board' | 'card' | 'diagram';
+export type Presence = { user_id: string; username: string; avatar_url: string | null; card_id: string | null; card_title: string | null; editing_description: boolean; location: PresenceLocation };
 
 function csrfHeaders() {
   const token = document.cookie.split('; ').find((item) => item.startsWith('flowboard_csrf='))?.slice('flowboard_csrf='.length);
   return token ? { 'Content-Type': 'application/json', 'x-flowboard-csrf': decodeURIComponent(token) } : { 'Content-Type': 'application/json' };
 }
 
-export function useBoardPresence({ boardId, currentUserId, activeCardId, editingDescription, isBoardOpen }: { boardId?: string | null; currentUserId?: string; activeCardId?: string | null; editingDescription: boolean; isBoardOpen: boolean }) {
+export function useBoardPresence({ boardId, currentUserId, activeCardId, editingDescription, location, isBoardOpen }: { boardId?: string | null; currentUserId?: string; activeCardId?: string | null; editingDescription: boolean; location: PresenceLocation; isBoardOpen: boolean }) {
   const [people, setPeople] = useState<Presence[]>([]);
   useEffect(() => {
     if (!boardId || !currentUserId || !isBoardOpen) { setPeople([]); return; }
     let active = true;
     const refresh = () => {
-      void fetch(`/v1/boards/${boardId}/presence`, { method: 'PUT', headers: csrfHeaders(), body: JSON.stringify({ card_id: activeCardId ?? null, editing_description: editingDescription }) })
+      void fetch(`/v1/boards/${boardId}/presence`, { method: 'PUT', headers: csrfHeaders(), body: JSON.stringify({ card_id: activeCardId ?? null, editing_description: editingDescription, location }) })
         .then((response) => response.ok ? response.json() as Promise<Presence[]> : [])
         .then((next) => { if (active) setPeople(next); });
     };
     refresh();
     const timer = window.setInterval(refresh, 6_000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [activeCardId, boardId, currentUserId, editingDescription, isBoardOpen]);
+  }, [activeCardId, boardId, currentUserId, editingDescription, isBoardOpen, location]);
 
   useEffect(() => {
     if (!boardId || !currentUserId || !isBoardOpen) return;
@@ -38,6 +39,14 @@ export function useBoardPresence({ boardId, currentUserId, activeCardId, editing
 
 function PresenceFaces({ people }: { people: Presence[] }) {
   return <div className="presence-avatars">{people.slice(0, 3).map((person) => person.avatar_url ? <img src={person.avatar_url} alt={`@${person.username}`} key={person.user_id} /> : <i key={person.user_id}>{person.username.slice(0, 1).toUpperCase()}</i>)}</div>;
+}
+
+function presenceLocationLabel(person: Presence) {
+  const card = person.card_title ? ` «${person.card_title}»` : '';
+  if (person.location === 'diagram') return `В схеме карточки${card}`;
+  if (person.editing_description) return `Редактирует описание карточки${card}`;
+  if (person.location === 'card' || person.card_id) return `В карточке${card}`;
+  return 'На главной странице доски';
 }
 
 export default function BoardPresence({ people, currentUserId, onPersonClick }: { people: Presence[]; currentUserId: string; onPersonClick?: (person: Presence) => void }) {
@@ -55,7 +64,7 @@ export default function BoardPresence({ people, currentUserId, onPersonClick }: 
       <div className="board-presence-heading"><b>Сейчас на доске</b><span>{count}</span></div>
       <div className="board-presence-list">{everyone.map((person) => <button key={person.user_id} type="button" onClick={() => { setOpen(false); onPersonClick?.(person); }}>
         {person.avatar_url ? <img src={person.avatar_url} alt="" /> : <i>{person.username.slice(0, 1).toUpperCase()}</i>}
-        <span><b>@{person.username}{person.user_id === currentUserId && ' · вы'}</b><small>{person.editing_description ? 'Редактирует описание' : person.card_id ? 'Открыл карточку' : 'На доске'}</small></span>
+        <span><b>@{person.username}{person.user_id === currentUserId && ' · вы'}</b><small>{presenceLocationLabel(person)}</small></span>
       </button>)}</div>
       <small className="board-presence-hint">Нажмите на участника, чтобы открыть его активность.</small>
     </div>}
