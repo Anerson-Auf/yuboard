@@ -2026,7 +2026,7 @@ export default function Home() {
         if (tool) { event.preventDefault(); setDiagramTool(tool); return; }
         if (event.key === '9' && !isSelectedReadOnly) { event.preventDefault(); diagramImageUploadRef.current?.click(); return; }
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !isTyping) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !isTyping && !isSelectedReadOnly) {
         event.preventDefault();
         undoDiagram();
       }
@@ -2037,7 +2037,7 @@ export default function Home() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [diagramHistory, isDiagramOpen, selectedDiagramElement]);
+  }, [diagramHistory, isDiagramOpen, isSelectedReadOnly, selectedDiagramElement]);
 
   useEffect(() => {
     if (!isBoardMenuOpen && !isBoardScaleOpen && !isFilterOpen && !isRecentCardsOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId && !reactionPickerCommentId && !stickerPickerTarget) return;
@@ -5392,7 +5392,7 @@ export default function Home() {
         </div>
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.4, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .4} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(1.6, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 1.6} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
         <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
-        <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly}>↶ Отменить</button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button><span className="diagram-autosave-status" aria-live="polite">{isDiagramSaving ? 'Сохраняем…' : 'Сохраняется автоматически'}</span></div>
+        <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly} title="Ctrl+Z / ⌘Z">↶ Отменить <kbd>Ctrl+Z</kbd></button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button><span className="diagram-autosave-status" aria-live="polite">{isDiagramSaving ? 'Сохраняем…' : 'Сохраняется автоматически'}</span></div>
       </section>
     </div>}
 
