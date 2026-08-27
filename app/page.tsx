@@ -60,6 +60,7 @@ type FilterMode = 'all' | 'assigned' | 'my_roles' | 'due' | 'overdue' | 'unread'
 type CardSort = 'manual' | 'priority' | 'activity';
 type BoardViewMode = 'standard' | 'freeform' | 'dependencies';
 type BoardContentMode = 'columns' | 'members' | 'schedule';
+type BoardUiScale = 'compact' | 'normal' | 'roomy';
 const boardContentToggleOptions = [{ value: 'columns', label: 'Колонки' }, { value: 'members', label: 'По людям' }, { value: 'schedule', label: 'Календарь' }] as const;
 const boardViewToggleOptions = [{ value: 'standard', label: 'Ряд' }, { value: 'freeform', label: 'Свободно', title: 'Колонки можно свободно двигать; Shift включает привязку к сетке' }, { value: 'dependencies', label: 'Зависимости', title: 'Дерево связей между карточками' }] as const;
 type MemberDragState = { card: Card; sourceMemberId: string | null };
@@ -1033,6 +1034,8 @@ export default function Home() {
   const [backgroundDraft, setBackgroundDraft] = useState('');
   const [isUploadingBoardBackground, setUploadingBoardBackground] = useState(false);
   const [isBoardMenuOpen, setBoardMenuOpen] = useState(false);
+  const [isBoardScaleOpen, setBoardScaleOpen] = useState(false);
+  const [boardUiScale, setBoardUiScale] = useState<BoardUiScale>('normal');
   const [isDiscordIntegrationOpen, setDiscordIntegrationOpen] = useState(false);
   const [discordIntegrations, setDiscordIntegrations] = useState<DiscordIntegration[]>([]);
   const [discordIntegrationName, setDiscordIntegrationName] = useState('Предложки Discord');
@@ -1189,6 +1192,7 @@ export default function Home() {
   const selectedCardId = selected?.id;
 
   const pinnedCardsStorageKey = account && boardId ? `flowboard.pinned-cards.${account.user.id}.${boardId}` : null;
+  const boardUiScaleStorageKey = boardId ? `flowboard.board-ui-scale.${account?.user.id ?? 'guest'}.${boardId}` : null;
 
   useEffect(() => {
     if (!pinnedCardsStorageKey) { setPinnedCardIds([]); return; }
@@ -1197,6 +1201,17 @@ export default function Home() {
       setPinnedCardIds(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string').slice(0, 12) : []);
     } catch { setPinnedCardIds([]); }
   }, [pinnedCardsStorageKey]);
+
+  useEffect(() => {
+    if (!boardUiScaleStorageKey) { setBoardUiScale('normal'); return; }
+    const stored = localStorage.getItem(boardUiScaleStorageKey);
+    setBoardUiScale(stored === 'compact' || stored === 'roomy' ? stored : 'normal');
+  }, [boardUiScaleStorageKey]);
+
+  function changeBoardUiScale(next: BoardUiScale) {
+    setBoardUiScale(next);
+    if (boardUiScaleStorageKey) localStorage.setItem(boardUiScaleStorageKey, next);
+  }
 
   useEffect(() => { columnsRef.current = columns; }, [columns]);
   const selectedParkingCard = selectedParkingCardId ? parkingCards.find((card) => card.id === selectedParkingCardId) ?? null : null;
@@ -1670,10 +1685,11 @@ export default function Home() {
   }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
-    if (!isBoardMenuOpen && !isFilterOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId && !reactionPickerCommentId && !stickerPickerTarget) return;
+    if (!isBoardMenuOpen && !isBoardScaleOpen && !isFilterOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId && !reactionPickerCommentId && !stickerPickerTarget) return;
     const closePopovers = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
       if (isBoardMenuOpen && !event.target.closest('.board-menu-control')) setBoardMenuOpen(false);
+      if (isBoardScaleOpen && !event.target.closest('.board-scale-control')) setBoardScaleOpen(false);
       if (isFilterOpen && !event.target.closest('.filter-control')) setFilterOpen(false);
       if (isBoardLabelsOpen && !event.target.closest('.board-labels-control')) { setBoardLabelsOpen(false); setEditingBoardLabel(null); }
       if (isMilestonesOpen && !event.target.closest('.board-milestones-control')) setMilestonesOpen(false);
@@ -1687,7 +1703,7 @@ export default function Home() {
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setBoardMenuOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setNotificationsOpen(false); setColumnMenuId(null); setSidebarPanel(null); setReactionPickerCommentId(null); setStickerPickerTarget(null);
+      setBoardMenuOpen(false); setBoardScaleOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setNotificationsOpen(false); setColumnMenuId(null); setSidebarPanel(null); setReactionPickerCommentId(null); setStickerPickerTarget(null);
     };
     // A limit field commits on blur. Closing a column menu on pointerdown
     // unmounted that field before the blur event could run, so a typed value
@@ -1695,7 +1711,7 @@ export default function Home() {
     window.addEventListener('click', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('click', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
-  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, reactionPickerCommentId, sidebarPanel, stickerPickerTarget]);
+  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isBoardScaleOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, reactionPickerCommentId, sidebarPanel, stickerPickerTarget]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -4569,7 +4585,7 @@ export default function Home() {
     return <main className="app-shell dark auth-shell"><section className="auth-card"><button className="brand auth-brand" type="button" onClick={() => setAuthMode('login')}><span className="brand-mark">✓</span><span>Flowboard</span></button><p className="eyebrow">FLOWBOARD</p><h1>{isRegistering ? inviteToken ? 'Активировать аккаунт' : 'Создать первый аккаунт' : 'С возвращением'}</h1><p className="auth-copy">{isRegistering ? inviteToken ? 'Выберите уникальный ник и пароль.' : 'Первый аккаунт станет system owner.' : 'Войдите по нику, чтобы продолжить.'}</p><form className="auth-form" onSubmit={submitAuth}><label>Ник<input value={authName} onChange={(event) => setAuthName(event.target.value)} maxLength={32} required autoComplete="username" placeholder="your_nick" /></label><label>Пароль<input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} minLength={10} maxLength={256} required autoComplete={isRegistering ? 'new-password' : 'current-password'} /></label>{authError && <p className="auth-error">{authError}</p>}<button className="create-button auth-submit" type="submit" disabled={isAuthorizing}>{isAuthorizing ? 'Подключаем…' : isRegistering ? inviteToken ? 'Активировать' : 'Создать аккаунт' : 'Войти'}</button></form></section><ReleaseHistoryWidget /></main>;
   }
 
-  return <CardPresenceContext.Provider value={{ people: boardPresence, currentUserId: account?.user.id }}><main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
+  return <CardPresenceContext.Provider value={{ people: boardPresence, currentUserId: account?.user.id }}><main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${view === 'board' ? `board-ui-scale-${boardUiScale}` : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
     <header className="topbar">
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
       <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам" aria-label="Поиск по задачам" /></label>
@@ -4602,6 +4618,7 @@ export default function Home() {
           {focusCardId && <button className="focus-mode-exit" type="button" onClick={() => { setFocusCardId(null); setFocusRelatedCardIds([]); }} title="Вернуть всю доску">◉ Фокус <span>×</span></button>}
           <SegmentedToggle className="board-segmented-toggle" label="Представление задач" options={boardContentToggleOptions} value={boardContentMode} onChange={(next) => setBoardContentMode(next as BoardContentMode)} />
           {!isPublicViewer && boardContentMode === 'columns' && <SegmentedToggle className="board-segmented-toggle" label="Режим расположения колонок" options={boardViewToggleOptions} value={boardViewMode} onChange={(next) => changeBoardViewMode(next as BoardViewMode)} />}
+          <div className="board-scale-control"><button className={`board-icon-button ${boardUiScale !== 'normal' ? 'active-filter' : ''}`} type="button" title="Масштаб доски" aria-label="Масштаб доски" aria-expanded={isBoardScaleOpen} onClick={() => setBoardScaleOpen((current) => !current)}><span aria-hidden="true">A↔</span></button>{isBoardScaleOpen && <div className="board-scale-popover" role="dialog" aria-label="Масштаб доски"><div><b>Масштаб доски</b><small>Только для вас на этой доске</small></div>{([['compact', 'A−', 'Компактнее'], ['normal', 'A', 'Обычный'], ['roomy', 'A+', 'Крупнее']] as [BoardUiScale, string, string][]).map(([value, icon, label]) => <button key={value} type="button" className={boardUiScale === value ? 'active' : ''} onClick={() => { changeBoardUiScale(value); setBoardScaleOpen(false); }}><span>{icon}</span><b>{label}</b>{boardUiScale === value && <i>✓</i>}</button>)}</div>}</div>
           <div className="filter-control">
             <button className={`board-icon-button ${filterMode !== 'all' || cardSort !== 'manual' || labelFilterIds.length ? 'active-filter' : ''}`} type="button" title="Фильтры и сортировка" aria-label="Фильтры и сортировка" aria-expanded={isFilterOpen} onClick={() => setFilterOpen((current) => !current)}><BoardToolbarIcon type="filter" /></button>
           {isFilterOpen && <div className="filter-popover" role="dialog" aria-label="Фильтры и сортировка"><div className="filter-popover-heading"><b>Фильтры</b>{(filterMode !== 'all' || cardSort !== 'manual' || labelFilterIds.length > 0) && <button type="button" onClick={() => { setFilterMode('all'); setCardSort('manual'); setLabelFilterIds([]); }}>Сбросить</button>}</div><section><p>Показывать</p><div className="filter-mode-grid">{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['my_roles', 'По моим ролям'], ['due', 'С дедлайном'], ['overdue', 'Просроченные'], ['unread', 'Непрочитанное']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => setFilterMode(mode)}>{label}{filterMode === mode && <b>✓</b>}</button>)}</div></section>{boardLabels.length > 0 && <section className="filter-popover-section"><p>Метки</p><div className="label-filter-options">{boardLabels.map((label) => <button key={label.id} type="button" className={labelFilterIds.includes(label.id) ? 'active' : ''} onClick={() => setLabelFilterIds((current) => current.includes(label.id) ? current.filter((id) => id !== label.id) : [...current, label.id])}><LabelChip label={label} />{labelFilterIds.includes(label.id) && <b>✓</b>}</button>)}</div>{labelFilterIds.length > 0 && <button type="button" className="text-action label-filter-reset" onClick={() => setLabelFilterIds([])}>Сбросить метки</button>}</section>}<section className="filter-popover-section"><p>Порядок в колонках</p><div className="filter-sort-options">{([['manual', 'Как на доске'], ['priority', 'Важные'], ['activity', 'Недавние']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => setCardSort(mode)}>{label}</button>)}</div></section></div>}
