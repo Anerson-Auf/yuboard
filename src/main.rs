@@ -4852,7 +4852,7 @@ fn push_local_comment_to_discord(state: &AppState, card_id: Uuid, comment: &Comm
         "card_id": card_id.to_string(),
         "comment": {
             "id": comment.id.to_string(),
-            "body": comment.body,
+            "body": discord_outbound_comment_body(&comment.body),
             "author_name": comment.author_name,
             "author_avatar_url": author_avatar_url,
             "attachments": attachments,
