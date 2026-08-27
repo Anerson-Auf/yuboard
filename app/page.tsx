@@ -2016,11 +2016,20 @@ export default function Home() {
     if (!isDiagramOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !target?.matches('input, textarea, select')) {
+      const isTyping = Boolean(target?.matches('input, textarea, select, [contenteditable="true"]'));
+      if (!isTyping && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const toolByKey: Record<string, DiagramTool> = {
+          '1': 'select', '2': 'draw', '3': 'erase', '4': 'rectangle', '5': 'ellipse', '6': 'arrow', '7': 'text', '8': 'callout', '0': 'select',
+        };
+        const tool = toolByKey[event.key];
+        if (tool) { event.preventDefault(); setDiagramTool(tool); return; }
+        if (event.key === '9' && !isSelectedReadOnly) { event.preventDefault(); diagramImageUploadRef.current?.click(); return; }
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !isTyping) {
         event.preventDefault();
         undoDiagram();
       }
-      if ((event.key === 'Backspace' || event.key === 'Delete') && selectedDiagramElement !== null && !target?.matches('input, textarea, select')) {
+      if ((event.key === 'Backspace' || event.key === 'Delete') && selectedDiagramElement !== null && !isTyping) {
         event.preventDefault();
         deleteSelectedDiagramElement();
       }
