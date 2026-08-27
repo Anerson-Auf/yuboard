@@ -5245,6 +5245,7 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
         // A local Flowboard thread is deliberately not mirrored back into Discord.
         comments.retain(|comment| comment.parent_comment_id.is_none());
         rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
+        remove_discord_outbound_voice_messages(&mut comments);
         rewrite_discord_comment_attachment_urls(integration, card_id, &mut comments);
         rewrite_discord_outbound_comment_bodies(&mut comments);
         return Ok(Json(comments));
@@ -5261,6 +5262,7 @@ async fn list_discord_card_comments(State(state): State<AppState>, integration: 
     let mut comments = comment_responses(pool, rows, None).await?;
     load_comment_attachments(pool, card_id, &mut comments).await?;
     rewrite_discord_comment_avatar_urls(pool, integration, card_id, &mut comments).await?;
+    remove_discord_outbound_voice_messages(&mut comments);
     rewrite_discord_comment_attachment_urls(integration, card_id, &mut comments);
     rewrite_discord_outbound_comment_bodies(&mut comments);
     Ok(Json(comments))
@@ -6007,6 +6009,42 @@ fn rewrite_discord_comment_attachment_urls(_integration: DiscordIntegration, car
             attachment.download_url = format!("/v1/integrations/discord/cards/{card_id}/attachments/{}", attachment.id);
         }
     }
+}
+
+// Voice messages are private to Flowboard. Do this at the outbound API
+// boundary so every Discord bot implementation receives neither the file nor
+// the Flowboard attachment URL, while the original comment remains intact.
+fn remove_discord_outbound_voice_messages(comments: &mut [CommentResponse]) {
+    for comment in comments {
+        let voice_attachment_ids: Vec<Uuid> = comment.attachments.iter()
+            .filter(|attachment| attachment.media_type.starts_with("audio/"))
+            .map(|attachment| attachment.id)
+            .collect();
+        if voice_attachment_ids.is_empty() { continue; }
+        comment.attachments.retain(|attachment| !attachment.media_type.starts_with("audio/"));
+        for attachment_id in voice_attachment_ids {
+            comment.body = remove_audio_attachment_markdown(&comment.body, attachment_id);
+        }
+    }
+}
+
+fn remove_audio_attachment_markdown(body: &str, attachment_id: Uuid) -> String {
+    let suffix = format!("](/v1/attachments/{attachment_id}/content)");
+    let mut rendered = String::with_capacity(body.len());
+    let mut remainder = body;
+    while let Some(end) = remainder.find(&suffix) {
+        let before = &remainder[..end];
+        if let Some(start) = before.rfind("![audio:") {
+            rendered.push_str(&before[..start]);
+            remainder = &remainder[end + suffix.len()..];
+        } else {
+            let keep = end + suffix.len();
+            rendered.push_str(&remainder[..keep]);
+            remainder = &remainder[keep..];
+        }
+    }
+    rendered.push_str(remainder);
+    rendered
 }
 
 // `[[sticker:😀]]` is an internal composer marker: Flowboard turns it into a
@@ -6877,6 +6915,18 @@ mod tests {
         assert_eq!(discord_outbound_comment_body("Готово [[sticker:✅]]"), "Готово ✅");
         assert_eq!(discord_outbound_comment_body("[[sticker:🔥]] и [[sticker:💯]]"), "🔥 и 💯");
         assert_eq!(discord_outbound_comment_body("[[sticker:\n]]"), "[[sticker:\n]]");
+    }
+
+    #[test]
+    fn discord_outbound_comments_remove_voice_markdown_only() {
+        let voice_id = Uuid::nil();
+        let voice = format!("![audio:voice.webm](/v1/attachments/{voice_id}/content)");
+        let image = "![image.png](/v1/attachments/11111111-1111-1111-1111-111111111111/content)";
+
+        assert_eq!(
+            remove_audio_attachment_markdown(&format!("До {voice} после {image}"), voice_id),
+            format!("До  после {image}"),
+        );
     }
 
 }

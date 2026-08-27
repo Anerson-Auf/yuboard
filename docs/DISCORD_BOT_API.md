@@ -244,7 +244,7 @@ When a user inserts or drops JPEG, PNG, GIF, WebP, MP4, WebM, or MOV into a Flow
 
 ## Add a player comment, screenshot, or video
 
-`message_id` makes the operation idempotent. Discord avatars and media must use Discord CDN HTTPS URLs. Supported attachments are JPEG, PNG, GIF, WebP, MP4, WebM, and MOV, up to 50 MiB each.
+`message_id` makes the operation idempotent. A repeated request for the same message updates the stored Discord attachment URL and source metadata instead of creating another comment; this is how media resync repairs expired CDN links. Discord avatars and media must use Discord CDN HTTPS URLs. Supported attachments are JPEG, PNG, GIF, WebP, MP4, WebM, and MOV, up to 50 MiB each.
 
 For every Discord attachment, also send the durable Discord source IDs: `channel_id`, `message_id`, and `attachment_id`. They are strings, not JavaScript numbers. They let Flowboard restore a fresh signed CDN URL later without storing a duplicate of the file. The three fields are optional together for backwards compatibility, but never send only part of the trio.
 

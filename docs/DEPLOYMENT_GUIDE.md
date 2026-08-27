@@ -70,6 +70,9 @@ POSTGRES_USER=flowboard
 POSTGRES_PASSWORD=replace-with-a-random-32-character-password
 FLOWBOARD_PUBLIC_ORIGIN=https://board.example.ru
 FLOWBOARD_PROXY_BIND=127.0.0.1:8081
+# Set both values to the matching Discord bridge configuration to refresh expired media.
+FLOWBOARD_DISCORD_MEDIA_REFRESH_URL=https://discord-bridge.example.ru/api/flowboard/attachments/refresh
+FLOWBOARD_DISCORD_MEDIA_REFRESH_SIGNING_SECRET=replace-with-the-shared-bridge-secret
 ```
 
 Сгенерировать безопасный пароль можно так:

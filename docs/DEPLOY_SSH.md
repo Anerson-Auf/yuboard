@@ -32,6 +32,8 @@ POSTGRES_USER=flowboard
 POSTGRES_PASSWORD=CHANGE_ME_TO_A_LONG_RANDOM_VALUE
 FLOWBOARD_PUBLIC_ORIGIN=https://board.example.ru
 FLOWBOARD_PROXY_BIND=127.0.0.1:8081
+FLOWBOARD_DISCORD_MEDIA_REFRESH_URL=https://discord-bridge.example.ru/api/flowboard/attachments/refresh
+FLOWBOARD_DISCORD_MEDIA_REFRESH_SIGNING_SECRET=replace-with-the-shared-bridge-secret
 ```
 
 Для `POSTGRES_PASSWORD` используйте минимум 24 случайных символа из букв, цифр, `.` `_` и `-`. Символы вроде `@`, `:`, `/`, `?` нельзя использовать: пароль включается в URL подключения к PostgreSQL.

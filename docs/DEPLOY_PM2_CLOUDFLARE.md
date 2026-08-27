@@ -95,6 +95,8 @@ FLOWBOARD_COOKIE_SECURE=true
 FLOWBOARD_API_ORIGIN=https://board.example.com
 FLOWBOARD_TRUST_PROXY=true
 NEXT_PUBLIC_FLOWBOARD_API_URL=
+FLOWBOARD_DISCORD_MEDIA_REFRESH_URL=https://discord-bridge.example.ru/api/flowboard/attachments/refresh
+FLOWBOARD_DISCORD_MEDIA_REFRESH_SIGNING_SECRET=replace-with-the-shared-bridge-secret
 ```
 
 Удалите из файла неиспользуемые local-development S3 переменные. После сохранения:
