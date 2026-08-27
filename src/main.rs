@@ -56,6 +56,7 @@ struct DiscordAttachmentRefresh {
 struct FlowboardCommentPush {
     endpoint: reqwest::Url,
     token: String,
+    public_base_url: Option<reqwest::Url>,
 }
 
 #[derive(Serialize)]
@@ -2162,8 +2163,13 @@ fn comment_push_from_env() -> Option<FlowboardCommentPush> {
     };
     let endpoint = env::var("FLOWBOARD_COMMENT_PUSH_URL")
         .unwrap_or_else(|_| "https://yufu.su/api/flowboard/comments/push".to_owned());
+    let public_base_url = env::var("FLOWBOARD_PUBLIC_URL")
+        .or_else(|_| env::var("FLOWBOARD_API_ORIGIN"))
+        .ok()
+        .and_then(|value| reqwest::Url::parse(value.trim()).ok())
+        .filter(|url| matches!(url.scheme(), "http" | "https"));
     match reqwest::Url::parse(endpoint.trim()) {
-        Ok(endpoint) if endpoint.scheme() == "https" => Some(FlowboardCommentPush { endpoint, token }),
+        Ok(endpoint) if endpoint.scheme() == "https" => Some(FlowboardCommentPush { endpoint, token, public_base_url }),
         _ => {
             tracing::warn!("Discord comment push is disabled: FLOWBOARD_COMMENT_PUSH_URL must be an HTTPS URL");
             None
@@ -4840,13 +4846,15 @@ fn push_local_comment_to_discord(state: &AppState, card_id: Uuid, comment: &Comm
         "byte_size": attachment.byte_size,
         "download_url": attachment.download_url,
     })).collect::<Vec<_>>();
+    let author_avatar_url = comment.author_avatar_url.as_deref()
+        .and_then(|url| absolute_flowboard_url(push.public_base_url.as_ref(), url));
     let payload = json!({
         "card_id": card_id.to_string(),
         "comment": {
             "id": comment.id.to_string(),
             "body": comment.body,
             "author_name": comment.author_name,
-            "author_avatar_url": comment.author_avatar_url,
+            "author_avatar_url": author_avatar_url,
             "attachments": attachments,
         },
     });
@@ -4881,6 +4889,14 @@ fn push_local_comment_to_discord(state: &AppState, card_id: Uuid, comment: &Comm
         }
         tracing::error!(card_id = %card_id, "Discord comment push failed after retries");
     });
+}
+
+fn absolute_flowboard_url(base_url: Option<&reqwest::Url>, value: &str) -> Option<String> {
+    if let Ok(url) = reqwest::Url::parse(value) {
+        return matches!(url.scheme(), "http" | "https").then(|| url.into());
+    }
+    base_url.and_then(|base_url| base_url.join(value.trim_start_matches('/')).ok())
+        .map(|url| url.into())
 }
 
 async fn get_comment_thread(State(state): State<AppState>, current: Viewer, Path(comment_id): Path<Uuid>) -> ApiResult<CommentThreadResponse> {
@@ -6823,6 +6839,19 @@ mod tests {
 
         assert_eq!(request_source_ip(&headers, peer, false), peer.ip());
         assert_eq!(request_source_ip(&headers, peer, true), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)));
+    }
+
+    #[test]
+    fn comment_push_avatar_urls_become_public_absolute_urls() {
+        let base = reqwest::Url::parse("https://flowboard.zei.su").unwrap();
+        assert_eq!(
+            absolute_flowboard_url(Some(&base), "/v1/avatars/00000000-0000-0000-0000-000000000000"),
+            Some("https://flowboard.zei.su/v1/avatars/00000000-0000-0000-0000-000000000000".to_owned()),
+        );
+        assert_eq!(
+            absolute_flowboard_url(Some(&base), "https://cdn.example.test/avatar.webp"),
+            Some("https://cdn.example.test/avatar.webp".to_owned()),
+        );
     }
 
     #[test]
