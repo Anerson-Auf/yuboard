@@ -1706,6 +1706,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/description-versions", get(list_card_description_versions))
         .route("/v1/cards/{card_id}/description-versions/{version_id}/restore", post(restore_card_description_version))
         .route("/v1/cards/{card_id}/polls", get(list_card_polls).post(create_card_poll))
+        .route("/v1/cards/{card_id}/polls/{poll_id}", axum::routing::delete(delete_card_poll))
         .route("/v1/cards/{card_id}/public-visibility", patch(update_card_public_visibility))
         .route("/v1/cards/{card_id}/access-thresholds", patch(update_card_access_thresholds))
         .route("/v1/polls/{poll_id}/vote", post(vote_card_poll))
@@ -6422,6 +6423,17 @@ async fn create_card_poll(State(state): State<AppState>, current: CurrentUser, P
     let poll = load_card_polls(pool, card_id, current.id).await?.into_iter().find(|poll| poll.id == poll_id).ok_or_else(|| ApiError::internal(sqlx::Error::RowNotFound))?;
     let _ = state.events.send(());
     Ok(Json(poll))
+}
+
+async fn delete_card_poll(State(state): State<AppState>, current: CurrentUser, Path((card_id, poll_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let question = sqlx::query_scalar::<_, String>("DELETE FROM card_polls WHERE id = $1 AND card_id = $2 RETURNING question")
+        .bind(poll_id).bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "poll_not_found", "Card poll was not found.".to_owned()))?;
+    record_card_activity(pool, card_id, current.id, "Удалено голосование", &question).await;
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn vote_card_poll(State(state): State<AppState>, current: CurrentUser, Path(poll_id): Path<Uuid>, Json(request): Json<VoteCardPollRequest>) -> ApiResult<CardPollResponse> {
