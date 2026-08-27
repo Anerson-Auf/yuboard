@@ -38,6 +38,7 @@ struct AppState {
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
     board_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, BoardPresence>>>>,
     diagram_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, DiagramCursorPresence>>>>,
+    diagram_events: broadcast::Sender<DiagramMergeEvent>,
     freeform_live_events: broadcast::Sender<FreeformLiveEvent>,
     auth_rate_limiter: RateLimiter,
     trust_proxy: bool,
@@ -434,6 +435,28 @@ struct UpdateDiagramPresenceRequest { x: i32, y: i32 }
 
 #[derive(Serialize)]
 struct DiagramPresenceEntry { user_id: Uuid, username: String, x: i32, y: i32 }
+
+#[derive(Deserialize)]
+struct DiagramMergeRequest {
+    operation_id: Uuid,
+    title: String,
+    base_title: String,
+    base_document: Value,
+    document: Value,
+}
+
+#[derive(Clone, Serialize)]
+struct DiagramMergeEvent {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    card_id: Uuid,
+    operation_id: Uuid,
+    actor_id: Uuid,
+    title: String,
+    base_title: String,
+    base_document: Value,
+    document: Value,
+}
 
 #[derive(Deserialize)]
 struct UpdateBoardPresenceRequest {
@@ -1739,6 +1762,8 @@ async fn main() {
         .route("/v1/notifications/read", post(mark_all_notifications_read))
         .route("/v1/notifications/{notification_id}/read", post(mark_notification_read))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
+        .route("/v1/cards/{card_id}/diagram/sync", post(sync_card_diagram))
+        .route("/v1/cards/{card_id}/diagram/ws", get(card_diagram_websocket))
         .route("/v1/cards/{card_id}/diagram/presence", get(get_card_diagram_presence).put(update_card_diagram_presence))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
         .route("/v1/checklists/{checklist_id}", patch(update_checklist).delete(delete_checklist))
@@ -1772,7 +1797,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), diagram_presence: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), diagram_presence: Arc::new(Mutex::new(HashMap::new())), diagram_events: broadcast::channel(512).0, freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -4677,6 +4702,59 @@ fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn diagram_items(document: &Value, key: &str) -> Result<Vec<Value>, ApiError> {
+    match document.get(key) {
+        Some(value) => value.as_array().cloned().ok_or_else(|| ApiError::bad_request("Diagram document is malformed.")),
+        None if key == "elements" => Ok(Vec::new()),
+        None => Err(ApiError::bad_request("Diagram document is malformed.")),
+    }
+}
+
+fn diagram_item_id(item: &Value) -> Result<String, ApiError> {
+    let id = item.get("id").and_then(Value::as_str).ok_or_else(|| ApiError::bad_request("Collaborative diagram objects need an id."))?;
+    if id.is_empty() || id.len() > 96 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+        return Err(ApiError::bad_request("A collaborative diagram object id is invalid."));
+    }
+    Ok(id.to_owned())
+}
+
+fn diagram_contains_unidentified_objects(document: &Value) -> bool {
+    ["strokes", "elements"].iter().any(|key| {
+        document.get(*key).and_then(Value::as_array).is_some_and(|items| {
+            items.iter().any(|item| item.get("id").and_then(Value::as_str).is_none())
+        })
+    })
+}
+
+fn merge_diagram_items(current: Vec<Value>, base: Vec<Value>, incoming: Vec<Value>) -> Result<Vec<Value>, ApiError> {
+    let base_by_id = base.iter().map(|item| Ok((diagram_item_id(item)?, item))).collect::<Result<HashMap<_, _>, ApiError>>()?;
+    let incoming_by_id = incoming.iter().map(|item| Ok((diagram_item_id(item)?, item))).collect::<Result<HashMap<_, _>, ApiError>>()?;
+    let mut merged = current;
+    let deleted = base_by_id.keys().filter(|id| !incoming_by_id.contains_key(*id)).cloned().collect::<HashSet<_>>();
+    merged.retain(|item| diagram_item_id(item).map_or(true, |id| !deleted.contains(&id)));
+    for item in incoming {
+        let id = diagram_item_id(&item)?;
+        let changed = base_by_id.get(&id).is_none_or(|previous| **previous != item);
+        if !changed { continue; }
+        if let Some(index) = merged.iter().position(|current_item| diagram_item_id(current_item).is_ok_and(|current_id| current_id == id)) { merged[index] = item; }
+        else { merged.push(item); }
+    }
+    Ok(merged)
+}
+
+fn merge_diagram_documents(current: Value, base: &Value, incoming: &Value) -> Result<Value, ApiError> {
+    validate_diagram_document(base)?;
+    validate_diagram_document(incoming)?;
+    let current = if diagram_contains_unidentified_objects(&current) && !diagram_contains_unidentified_objects(base) { base.clone() } else { current };
+    if diagram_contains_unidentified_objects(&current) || diagram_contains_unidentified_objects(base) || diagram_contains_unidentified_objects(incoming) {
+        return Err(ApiError::bad_request("Collaborative diagram objects need stable ids."));
+    }
+    Ok(json!({
+        "strokes": merge_diagram_items(diagram_items(&current, "strokes")?, diagram_items(base, "strokes")?, diagram_items(incoming, "strokes")?)?,
+        "elements": merge_diagram_items(diagram_items(&current, "elements")?, diagram_items(base, "elements")?, diagram_items(incoming, "elements")?)?,
+    }))
+}
+
 async fn card_diagram_presence_snapshot(state: &AppState, card_id: Uuid, current_user_id: Uuid) -> ApiResult<Vec<DiagramPresenceEntry>> {
     let active = {
         let now = Instant::now();
@@ -4744,6 +4822,75 @@ async fn replace_card_diagram(State(state): State<AppState>, current: CurrentUse
     record_card_activity(pool, card_id, current.id, "Обновлена схема", &diagram.title).await;
     let _ = state.events.send(());
     Ok(Json(diagram))
+}
+
+async fn apply_card_diagram_merge(state: &AppState, current: CurrentUser, card_id: Uuid, request: DiagramMergeRequest) -> Result<(DiagramResponse, Option<DiagramMergeEvent>), ApiError> {
+    let pool = database(state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    validate_diagram_document(&request.base_document)?;
+    validate_diagram_document(&request.document)?;
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    let previous = sqlx::query_as::<_, DiagramResponse>("SELECT id, card_id, title, document, version FROM card_diagrams WHERE card_id = $1 FOR UPDATE")
+        .bind(card_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?;
+    let already_applied = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM card_diagram_operations WHERE id = $1)")
+        .bind(request.operation_id).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
+    if already_applied {
+        let diagram = previous.ok_or_else(|| ApiError::bad_request("The diagram operation has no document."))?;
+        transaction.commit().await.map_err(ApiError::internal)?;
+        return Ok((diagram, None));
+    }
+    let previous_title = previous.as_ref().map(|diagram| diagram.title.clone()).unwrap_or_else(|| "Схема".to_owned());
+    let merged_title = if request.title == request.base_title { previous_title } else { valid_text(&request.title, "title", 120)?.to_owned() };
+    let current_document = previous.as_ref().map(|diagram| diagram.document.clone()).unwrap_or_else(|| json!({ "strokes": [], "elements": [] }));
+    let document = merge_diagram_documents(current_document, &request.base_document, &request.document)?;
+    validate_diagram_document(&document)?;
+    let diagram = if let Some(previous) = previous {
+        sqlx::query_as::<_, DiagramResponse>("UPDATE card_diagrams SET title = $1, document = $2, version = version + 1, updated_at = now() WHERE id = $3 RETURNING id, card_id, title, document, version")
+            .bind(&merged_title).bind(&document).bind(previous.id).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?
+    } else {
+        sqlx::query_as::<_, DiagramResponse>("INSERT INTO card_diagrams (id, card_id, title, document, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id, card_id, title, document, version")
+            .bind(Uuid::new_v4()).bind(card_id).bind(&merged_title).bind(&document).bind(current.id).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?
+    };
+    sqlx::query("INSERT INTO card_diagram_operations (id, card_id, actor_id) VALUES ($1, $2, $3)")
+        .bind(request.operation_id).bind(card_id).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    transaction.commit().await.map_err(ApiError::internal)?;
+    let event = DiagramMergeEvent { event_type: "diagram_merge", card_id, operation_id: request.operation_id, actor_id: current.id, title: diagram.title.clone(), base_title: request.base_title, base_document: request.base_document, document: request.document };
+    Ok((diagram, Some(event)))
+}
+
+async fn sync_card_diagram(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<DiagramMergeRequest>) -> ApiResult<DiagramResponse> {
+    let (diagram, event) = apply_card_diagram_merge(&state, current, card_id, request).await?;
+    if let Some(event) = event { let _ = state.diagram_events.send(event); let _ = state.events.send(()); }
+    Ok(Json(diagram))
+}
+
+async fn card_diagram_websocket(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, upgrade: WebSocketUpgrade) -> Result<Response, ApiError> {
+    ensure_card_public_read(database(&state)?, card_id, Some(current.id)).await?;
+    Ok(upgrade.on_upgrade(move |socket| run_card_diagram_websocket(state, card_id, current, socket)))
+}
+
+async fn run_card_diagram_websocket(state: AppState, card_id: Uuid, current: CurrentUser, socket: WebSocket) {
+    let (mut sender, mut receiver) = futures_util::StreamExt::split(socket);
+    let mut events = state.diagram_events.subscribe();
+    loop {
+        tokio::select! {
+            incoming = futures_util::StreamExt::next(&mut receiver) => {
+                let Some(Ok(Message::Text(payload))) = incoming else { break; };
+                let Ok(request) = serde_json::from_str::<DiagramMergeRequest>(&payload) else { continue; };
+                match apply_card_diagram_merge(&state, current, card_id, request).await {
+                    Ok((_, Some(event))) => { let _ = state.diagram_events.send(event); let _ = state.events.send(()); }
+                    Ok((_, None)) => {}
+                    Err(_) => break,
+                }
+            }
+            event = events.recv() => {
+                let Ok(event) = event else { continue; };
+                if event.card_id != card_id { continue; }
+                let Ok(payload) = serde_json::to_string(&event) else { continue; };
+                if sender.send(Message::Text(payload.into())).await.is_err() { break; }
+            }
+        }
+    }
 }
 
 async fn create_checklist(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<CreateChecklistRequest>) -> ApiResult<ChecklistResponse> {

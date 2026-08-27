@@ -102,12 +102,13 @@ type AdminWorkspace = { id: string; name: string; owner_username: string; member
 type AuthSession = { id: string; created_at: string; last_seen_at: string; expires_at: string; current: boolean };
 type DiscordIntegration = { id: string; name: string; default_list_id: string | null; created_at: string; last_used_at: string | null; token?: string };
 type DiagramPoint = { x: number; y: number };
-type DiagramStroke = { points: DiagramPoint[]; color?: string; width?: number };
-type DiagramRectangle = { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number };
-type DiagramArrow = { type: 'arrow'; x: number; y: number; x2: number; y2: number; color: string; lineWidth: number };
-type DiagramText = { type: 'text'; x: number; y: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
-type DiagramCallout = { type: 'callout'; x: number; y: number; x2: number; y2: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
-type DiagramImage = { type: 'image'; x: number; y: number; width: number; height: number; src: string; name?: string };
+type DiagramObject = { id?: string };
+type DiagramStroke = DiagramObject & { points: DiagramPoint[]; color?: string; width?: number };
+type DiagramRectangle = DiagramObject & { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number };
+type DiagramArrow = DiagramObject & { type: 'arrow'; x: number; y: number; x2: number; y2: number; color: string; lineWidth: number };
+type DiagramText = DiagramObject & { type: 'text'; x: number; y: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
+type DiagramCallout = DiagramObject & { type: 'callout'; x: number; y: number; x2: number; y2: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
+type DiagramImage = DiagramObject & { type: 'image'; x: number; y: number; width: number; height: number; src: string; name?: string };
 type DiagramElement = DiagramRectangle | DiagramArrow | DiagramText | DiagramCallout | DiagramImage;
 type DiagramDocument = { strokes: DiagramStroke[]; elements?: DiagramElement[] };
 type Diagram = { id: string; card_id: string; title: string; document: DiagramDocument; version: number };
@@ -116,6 +117,8 @@ type DiagramSnapshot = { strokes: DiagramStroke[]; elements: DiagramElement[] };
 type DiagramHandle = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'start' | 'end';
 type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean };
 type DiagramPresence = { user_id: string; username: string; x: number; y: number };
+type DiagramMergeRequest = { operation_id: string; title: string; base_title: string; base_document: DiagramDocument; document: DiagramDocument };
+type DiagramMergeEvent = DiagramMergeRequest & { type: 'diagram_merge'; card_id: string; actor_id: string };
 type CardContextMenu = { card: Card; x: number; y: number };
 type ColumnContextMenu = { column: Column; x: number; y: number };
 type ViewportRect = { left: number; top: number; width: number; height: number };
@@ -256,6 +259,13 @@ function AmbientStarfall() {
 function freeformLiveSocketUrl(boardId: string) {
   const base = API_URL || window.location.origin;
   const url = new URL(`/v1/boards/${boardId}/freeform/live/ws`, base);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
+}
+
+function diagramSocketUrl(cardId: string) {
+  const base = API_URL || window.location.origin;
+  const url = new URL(`/v1/cards/${cardId}/diagram/ws`, base);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString();
 }
@@ -893,6 +903,47 @@ function diagramBounds(element: DiagramElement) {
   return { left: Math.min(element.x, element.x + element.width), top: Math.min(element.y, element.y + element.height), right: Math.max(element.x, element.x + element.width), bottom: Math.max(element.y, element.y + element.height) };
 }
 
+function stableDiagramId(kind: string, index: number, object: DiagramObject) {
+  const copy = { ...object } as Record<string, unknown>;
+  delete copy.id;
+  const value = JSON.stringify(copy);
+  let hash = 2166136261;
+  for (let position = 0; position < value.length; position += 1) hash = Math.imul(hash ^ value.charCodeAt(position), 16777619);
+  return `legacy-${kind}-${index}-${(hash >>> 0).toString(36)}`;
+}
+
+function withDiagramObjectIds(document: DiagramDocument): DiagramDocument {
+  return {
+    strokes: document.strokes.map((stroke, index) => ({ ...stroke, id: stroke.id ?? stableDiagramId('stroke', index, stroke) })),
+    elements: (document.elements ?? []).map((element, index) => ({ ...element, id: element.id ?? stableDiagramId('element', index, element) })),
+  };
+}
+
+function mergeDiagramItems<T extends DiagramObject>(current: T[], base: T[], incoming: T[]) {
+  const baseById = new Map(base.map((item) => [item.id!, item]));
+  const incomingById = new Map(incoming.map((item) => [item.id!, item]));
+  const deleted = new Set([...baseById.keys()].filter((id) => !incomingById.has(id)));
+  const merged = current.filter((item) => !deleted.has(item.id!));
+  incoming.forEach((item) => {
+    const previous = baseById.get(item.id!);
+    if (previous && JSON.stringify(previous) === JSON.stringify(item)) return;
+    const index = merged.findIndex((currentItem) => currentItem.id === item.id);
+    if (index >= 0) merged[index] = item;
+    else merged.push(item);
+  });
+  return merged;
+}
+
+function mergeDiagramDocument(current: DiagramDocument, base: DiagramDocument, incoming: DiagramDocument): DiagramDocument {
+  const normalizedCurrent = withDiagramObjectIds(current);
+  const normalizedBase = withDiagramObjectIds(base);
+  const normalizedIncoming = withDiagramObjectIds(incoming);
+  return {
+    strokes: mergeDiagramItems(normalizedCurrent.strokes, normalizedBase.strokes, normalizedIncoming.strokes),
+    elements: mergeDiagramItems(normalizedCurrent.elements ?? [], normalizedBase.elements ?? [], normalizedIncoming.elements ?? []),
+  };
+}
+
 function pointToSegmentDistance(point: DiagramPoint, start: DiagramPoint, end: DiagramPoint) {
   const deltaX = end.x - start.x;
   const deltaY = end.y - start.y;
@@ -1250,6 +1301,11 @@ export default function Home() {
   const diagramPanRef = useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
   const diagramPresenceSentAtRef = useRef(0);
   const diagramSavedSnapshotRef = useRef('');
+  const diagramBaseDocumentRef = useRef<DiagramDocument>({ strokes: [], elements: [] });
+  const diagramBaseTitleRef = useRef('Схема');
+  const diagramDocumentRef = useRef<DiagramDocument>({ strokes: [], elements: [] });
+  const diagramTitleRef = useRef('Схема');
+  const diagramSocketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (!isWorkspaceToolsOpen) return;
@@ -1796,6 +1852,11 @@ export default function Home() {
   }, [diagramElements, diagramImageRevision, diagramPreview, diagramStrokes, isDiagramOpen, selectedDiagramElement]);
 
   useEffect(() => {
+    diagramDocumentRef.current = withDiagramObjectIds({ strokes: diagramStrokes, elements: diagramElements });
+    diagramTitleRef.current = diagramTitle;
+  }, [diagramElements, diagramStrokes, diagramTitle]);
+
+  useEffect(() => {
     if (!isDiagramOpen) return;
     const images = diagramElements.filter((element): element is DiagramImage => element.type === 'image').map((element) => diagramImage(element.src));
     const refresh = () => setDiagramImageRevision((current) => current + 1);
@@ -1822,33 +1883,43 @@ export default function Home() {
   }, [authState, isDiagramOpen, selected?.id]);
 
   useEffect(() => {
-    if (!isDiagramOpen || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
+    if (!isDiagramOpen || authState !== 'signed-in' || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
     let active = true;
-    const cardId = selected.id;
-    const refresh = () => {
-      void fetch(`${API_URL}/v1/cards/${cardId}/diagram`)
-        .then(async (response) => { if (!response.ok) throw new Error('diagram refresh failed'); return response.json() as Promise<Diagram | null>; })
-        .then((remote) => {
-          if (!active || !remote || remote.version <= (diagram?.version ?? -1)) return;
-          const localSnapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
-          // Never discard a stroke the person is still working on. The normal
-          // version check will surface a conflict instead of silently choosing
-          // a winner when two people edit the same document at once.
-          if (localSnapshot !== diagramSavedSnapshotRef.current) return;
-          setDiagram(remote);
-          setDiagramTitle(remote.title);
-          setDiagramStrokes(remote.document?.strokes ?? []);
-          setDiagramElements(remote.document?.elements ?? []);
-          setDiagramHistory([]);
-          setSelectedDiagramElement(null);
-          setEditingDiagramTextIndex(null);
-          diagramSavedSnapshotRef.current = JSON.stringify({ title: remote.title, document: { strokes: remote.document?.strokes ?? [], elements: remote.document?.elements ?? [] } });
-        })
-        .catch(() => undefined);
+    let reconnectTimer: number | null = null;
+    let socket: WebSocket | null = null;
+    const applyMerge = (event: DiagramMergeEvent) => {
+      const base = withDiagramObjectIds(event.base_document);
+      const incoming = withDiagramObjectIds(event.document);
+      const merged = mergeDiagramDocument(diagramDocumentRef.current, base, incoming);
+      diagramDocumentRef.current = merged;
+      diagramBaseDocumentRef.current = mergeDiagramDocument(diagramBaseDocumentRef.current, base, incoming);
+      setDiagramStrokes(merged.strokes);
+      setDiagramElements(merged.elements ?? []);
+      if (event.title !== event.base_title) {
+        diagramTitleRef.current = event.title;
+        diagramBaseTitleRef.current = event.title;
+        setDiagramTitle(event.title);
+      }
     };
-    const timer = window.setInterval(refresh, 650);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [diagram?.version, diagramElements, diagramStrokes, diagramTitle, isDiagramOpen, selected?.id]);
+    const connect = () => {
+      if (!active || typeof selected?.id !== 'string') return;
+      try { socket = new WebSocket(diagramSocketUrl(selected.id)); } catch { reconnectTimer = window.setTimeout(connect, 1_000); return; }
+      diagramSocketRef.current = socket;
+      socket.onmessage = (message) => {
+        try {
+          const event = JSON.parse(String(message.data)) as DiagramMergeEvent;
+          if (event.type === 'diagram_merge') applyMerge(event);
+        } catch { /* Ignore malformed diagram events. */ }
+      };
+      socket.onerror = () => socket?.close();
+      socket.onclose = () => {
+        if (diagramSocketRef.current === socket) diagramSocketRef.current = null;
+        if (active) reconnectTimer = window.setTimeout(connect, 1_000);
+      };
+    };
+    connect();
+    return () => { active = false; if (reconnectTimer !== null) window.clearTimeout(reconnectTimer); if (diagramSocketRef.current === socket) diagramSocketRef.current = null; socket?.close(); };
+  }, [authState, isDiagramOpen, selected?.id]);
 
   useEffect(() => {
     const viewport = diagramViewportRef.current;
@@ -1866,7 +1937,7 @@ export default function Home() {
     if (!isDiagramOpen || isDiagramSaving || !selected || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     const snapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
     if (!diagramTitle.trim() || snapshot === diagramSavedSnapshotRef.current) return;
-    const timer = window.setTimeout(() => saveDiagram(false), 700);
+    const timer = window.setTimeout(() => saveDiagram(false), 220);
     return () => window.clearTimeout(timer);
   }, [diagramElements, diagramStrokes, diagramTitle, isDiagramOpen, isDiagramSaving, selected?.id]);
 
@@ -3549,11 +3620,19 @@ export default function Home() {
     void fetch(`${API_URL}/v1/cards/${selected.id}/diagram`)
       .then(async (response) => { if (!response.ok) throw new Error('diagram load failed'); return response.json() as Promise<Diagram | null>; })
       .then((saved) => {
-        setDiagram(saved);
-        diagramSavedSnapshotRef.current = JSON.stringify({ title: saved?.title ?? 'Схема', document: { strokes: saved?.document?.strokes ?? [], elements: saved?.document?.elements ?? [] } });
-        setDiagramTitle(saved?.title ?? 'Схема');
-        setDiagramStrokes(saved?.document?.strokes ?? []);
-        setDiagramElements(saved?.document?.elements ?? []);
+        const rawDocument = { strokes: saved?.document?.strokes ?? [], elements: saved?.document?.elements ?? [] };
+        const hasLegacyObjects = rawDocument.strokes.some((stroke) => !stroke.id) || rawDocument.elements.some((element) => !element.id);
+        const document = withDiagramObjectIds(rawDocument);
+        const title = saved?.title ?? 'Схема';
+        setDiagram(saved ? { ...saved, document } : null);
+        diagramBaseDocumentRef.current = document;
+        diagramBaseTitleRef.current = title;
+        diagramDocumentRef.current = document;
+        diagramTitleRef.current = title;
+        diagramSavedSnapshotRef.current = hasLegacyObjects ? '' : JSON.stringify({ title, document });
+        setDiagramTitle(title);
+        setDiagramStrokes(document.strokes);
+        setDiagramElements(document.elements ?? []);
         setDiagramPreview(null);
         setDiagramHistory([]);
         setSelectedDiagramElement(null);
@@ -3696,7 +3775,7 @@ export default function Home() {
         }
       }
       commit();
-      return fragments.map((points) => ({ ...stroke, points }));
+      return fragments.map((points) => ({ ...stroke, id: crypto.randomUUID(), points }));
     };
     setDiagramStrokes((current) => current.flatMap(split));
   }
@@ -3728,7 +3807,7 @@ export default function Home() {
       const text = diagramTextDraft.trim();
       if (!text) { showToast('Сначала напишите текст в панели схемы'); return; }
       rememberDiagramState();
-      setDiagramElements((current) => [...current, { type: 'text', x: point.x, y: point.y, text, color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight }]);
+      setDiagramElements((current) => [...current, { id: crypto.randomUUID(), type: 'text', x: point.x, y: point.y, text, color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight }]);
       setSelectedDiagramElement(diagramElements.length);
       return;
     }
@@ -3737,7 +3816,7 @@ export default function Home() {
     isDrawingRef.current = true;
     if (diagramTool === 'draw') {
       rememberDiagramState();
-      setDiagramStrokes((current) => [...current, { points: [point], color: diagramColor, width: diagramLineWidth }]);
+      setDiagramStrokes((current) => [...current, { id: crypto.randomUUID(), points: [point], color: diagramColor, width: diagramLineWidth }]);
       return;
     }
     if (diagramTool === 'erase') {
@@ -3750,9 +3829,9 @@ export default function Home() {
   }
 
   function diagramElementFromDrag(tool: Exclude<DiagramTool, 'select' | 'draw' | 'erase' | 'text'>, start: DiagramPoint, end: DiagramPoint): DiagramElement {
-    if (tool === 'arrow') return { type: 'arrow', x: start.x, y: start.y, x2: end.x, y2: end.y, color: diagramColor, lineWidth: diagramLineWidth };
-    if (tool === 'callout') return { type: 'callout', x: start.x, y: start.y, x2: end.x, y2: end.y, text: diagramTextDraft.trim(), color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight };
-    return { type: tool, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), color: diagramColor, lineWidth: diagramLineWidth };
+    if (tool === 'arrow') return { id: crypto.randomUUID(), type: 'arrow', x: start.x, y: start.y, x2: end.x, y2: end.y, color: diagramColor, lineWidth: diagramLineWidth };
+    if (tool === 'callout') return { id: crypto.randomUUID(), type: 'callout', x: start.x, y: start.y, x2: end.x, y2: end.y, text: diagramTextDraft.trim(), color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight };
+    return { id: crypto.randomUUID(), type: tool, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), color: diagramColor, lineWidth: diagramLineWidth };
   }
 
   function continueDiagramStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -3815,12 +3894,26 @@ export default function Home() {
   function saveDiagram(closeAfterSave = true) {
     if (!selected || isSelectedReadOnly || typeof selected.id !== 'string' || !diagramTitle.trim() || isDiagramSaving) return;
     const title = diagramTitle.trim();
-    const document = { strokes: diagramStrokes, elements: diagramElements };
+    const document = withDiagramObjectIds({ strokes: diagramStrokes, elements: diagramElements });
+    const baseDocument = diagramBaseDocumentRef.current;
+    const baseTitle = diagramBaseTitleRef.current;
     const snapshot = JSON.stringify({ title, document });
+    const request: DiagramMergeRequest = { operation_id: crypto.randomUUID(), title, base_title: baseTitle, base_document: baseDocument, document };
     setDiagramSaving(true);
-    void fetch(`${API_URL}/v1/cards/${selected.id}/diagram`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, document, version: diagram?.version ?? null }) })
+    void fetch(`${API_URL}/v1/cards/${selected.id}/diagram/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })
       .then(async (response) => { if (!response.ok) { const message = (await response.json().catch(() => null) as { message?: string } | null)?.message; throw new Error(message ?? 'diagram save failed'); } return response.json() as Promise<Diagram>; })
-      .then((saved) => { diagramSavedSnapshotRef.current = snapshot; setDiagram(saved); if (closeAfterSave) { setDiagramOpen(false); showToast('Схема сохранена'); } })
+      .then((saved) => {
+        const canonical = withDiagramObjectIds(saved.document);
+        const merged = mergeDiagramDocument(diagramDocumentRef.current, baseDocument, canonical);
+        diagramDocumentRef.current = merged;
+        diagramBaseDocumentRef.current = canonical;
+        diagramBaseTitleRef.current = saved.title;
+        diagramSavedSnapshotRef.current = JSON.stringify({ title: saved.title, document: canonical });
+        setDiagramStrokes(merged.strokes);
+        setDiagramElements(merged.elements ?? []);
+        setDiagram({ ...saved, document: canonical });
+        if (closeAfterSave) { setDiagramOpen(false); showToast('Схема сохранена'); }
+      })
       .catch((error) => { if (closeAfterSave) showToast(error instanceof Error ? error.message : 'Не удалось сохранить схему'); })
       .finally(() => setDiagramSaving(false));
   }
@@ -4314,6 +4407,7 @@ export default function Home() {
     if (!uploaded.length) return;
     rememberDiagramState();
     setDiagramElements((current) => [...current, ...uploaded.map((attachment, index) => ({
+      id: crypto.randomUUID(),
       type: 'image' as const,
       x: 140 + index * 32,
       y: 120 + index * 32,
