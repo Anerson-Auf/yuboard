@@ -116,7 +116,7 @@ type DiagramSticker = DiagramObject & { type: 'sticker'; x: number; y: number; i
 type DiagramElement = DiagramRectangle | DiagramArrow | DiagramText | DiagramCallout | DiagramImage | DiagramSticker;
 type DiagramDocument = { strokes: DiagramStroke[]; elements?: DiagramElement[] };
 type Diagram = { id: string; card_id: string; title: string; document: DiagramDocument; version: number };
-type DiagramTool = 'select' | 'draw' | 'erase' | 'rectangle' | 'ellipse' | 'arrow' | 'text' | 'callout' | 'sticker';
+type DiagramTool = 'select' | 'draw' | 'erase' | 'rectangle' | 'ellipse' | 'arrow' | 'text' | 'callout' | 'sticker' | 'note';
 type DiagramSnapshot = { strokes: DiagramStroke[]; elements: DiagramElement[] };
 type DiagramHandle = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'start' | 'end' | 'rotate';
 type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean; objectId?: string };
@@ -125,8 +125,11 @@ type DiagramMergeRequest = { operation_id: string; title: string; base_title: st
 type DiagramMergeEvent = DiagramMergeRequest & { type: 'diagram_merge'; card_id: string; actor_id: string };
 type DiagramCursorEvent = { type: 'diagram_cursor'; card_id: string; user_id: string; username: string; avatar_url?: string | null; x: number; y: number };
 type DiagramObjectLockEvent = { type: 'diagram_object_lock'; card_id: string; object_id: string; user_id: string; username: string; active: boolean; expires_in_ms: number };
-type DiagramLiveEvent = DiagramMergeEvent | DiagramCursorEvent | DiagramObjectLockEvent;
+type DiagramNotesChangedEvent = { type: 'diagram_notes_changed'; card_id: string };
+type DiagramLiveEvent = DiagramMergeEvent | DiagramCursorEvent | DiagramObjectLockEvent | DiagramNotesChangedEvent;
 type DiagramObjectLock = { user_id: string; username: string; expires_at: number };
+type DiagramNoteComment = { id: string; author_id: string | null; author_name: string; author_avatar_url?: string | null; body: string; created_at: string };
+type DiagramNote = { id: string; x: number; y: number; author_id: string | null; author_name: string; author_avatar_url?: string | null; created_at: string; comments: DiagramNoteComment[] };
 type CardContextMenu = { card: Card; x: number; y: number };
 type ColumnContextMenu = { column: Column; x: number; y: number };
 type ViewportRect = { left: number; top: number; width: number; height: number };
@@ -1397,6 +1400,11 @@ export default function Home() {
   const [diagramImageRevision, setDiagramImageRevision] = useState(0);
   const [diagramPresence, setDiagramPresence] = useState<DiagramPresence[]>([]);
   const [diagramObjectLocks, setDiagramObjectLocks] = useState<Record<string, DiagramObjectLock>>({});
+  const [diagramNotes, setDiagramNotes] = useState<DiagramNote[]>([]);
+  const [selectedDiagramNoteId, setSelectedDiagramNoteId] = useState<string | null>(null);
+  const [diagramNoteComposerPoint, setDiagramNoteComposerPoint] = useState<DiagramPoint | null>(null);
+  const [diagramNoteDraft, setDiagramNoteDraft] = useState('');
+  const [diagramNoteReplyDrafts, setDiagramNoteReplyDrafts] = useState<Record<string, string>>({});
   const [editingDiagramTextIndex, setEditingDiagramTextIndex] = useState<number | null>(null);
   const [editingDiagramTextDraft, setEditingDiagramTextDraft] = useState('');
   const [isDiagramSaving, setDiagramSaving] = useState(false);
@@ -2169,6 +2177,7 @@ export default function Home() {
           if (event.type === 'diagram_merge') applyMerge(event);
           else if (event.type === 'diagram_cursor') applyCursor(event);
           else if (event.type === 'diagram_object_lock') applyLock(event);
+          else if (event.type === 'diagram_notes_changed') loadDiagramNotes(event.card_id);
         } catch { /* Ignore malformed diagram events. */ }
       };
       socket.onerror = () => socket?.close();
@@ -3934,6 +3943,30 @@ export default function Home() {
       .catch(() => { updateSelectedCard({ members: previousMembers }); showToast('Не удалось изменить участие в задаче'); })
       .finally(() => setUpdatingOwnAssignment(false));
   }
+  function loadDiagramNotes(cardId = selected?.id) {
+    if (typeof cardId !== 'string' || isParkingCardId(cardId)) return;
+    void fetch(`${API_URL}/v1/cards/${cardId}/diagram/notes`)
+      .then(async (response) => { if (!response.ok) throw new Error('diagram notes load failed'); return response.json() as Promise<DiagramNote[]>; })
+      .then((notes) => setDiagramNotes(notes))
+      .catch(() => undefined);
+  }
+  function createDiagramNote(event: FormEvent) {
+    event.preventDefault();
+    if (!selected || typeof selected.id !== 'string' || !diagramNoteComposerPoint || !diagramNoteDraft.trim() || isSelectedReadOnly) return;
+    const point = diagramNoteComposerPoint;
+    void fetch(`${API_URL}/v1/cards/${selected.id}/diagram/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y), body: diagramNoteDraft }) })
+      .then(async (response) => { if (!response.ok) throw new Error('diagram note create failed'); return response.json() as Promise<DiagramNote>; })
+      .then((note) => { setDiagramNotes((current) => [...current, note]); setSelectedDiagramNoteId(note.id); setDiagramNoteComposerPoint(null); setDiagramNoteDraft(''); setDiagramTool('select'); })
+      .catch(() => showToast('Не удалось создать заметку'));
+  }
+  function replyToDiagramNote(note: DiagramNote) {
+    const body = diagramNoteReplyDrafts[note.id]?.trim();
+    if (!body || isSelectedReadOnly) return;
+    void fetch(`${API_URL}/v1/diagram/notes/${note.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
+      .then(async (response) => { if (!response.ok) throw new Error('diagram note reply failed'); return response.json() as Promise<DiagramNote>; })
+      .then((saved) => { setDiagramNotes((current) => current.map((item) => item.id === saved.id ? saved : item)); setDiagramNoteReplyDrafts((current) => ({ ...current, [note.id]: '' })); })
+      .catch(() => showToast('Не удалось отправить ответ'));
+  }
   function openDiagram() {
     if (!selected || typeof selected.id !== 'string') return;
     setSidebarPanel(null);
@@ -3959,6 +3992,12 @@ export default function Home() {
         setSelectedDiagramElement(null);
         setEditingDiagramTextIndex(null);
         setEditingDiagramTextDraft('');
+        setDiagramNotes([]);
+        setSelectedDiagramNoteId(null);
+        setDiagramNoteComposerPoint(null);
+        setDiagramNoteDraft('');
+        setDiagramNoteReplyDrafts({});
+        loadDiagramNotes(selected.id);
         setDiagramTool('select');
         setDiagramZoom(.35);
         setDiagramFullscreen(false);
@@ -4273,6 +4312,12 @@ export default function Home() {
       setEditingDiagramTextDraft('');
       return;
     }
+    if (diagramTool === 'note') {
+      setDiagramNoteComposerPoint(point);
+      setDiagramNoteDraft('');
+      setSelectedDiagramNoteId(null);
+      return;
+    }
     if (diagramTool === 'sticker') {
       rememberDiagramState();
       const index = diagramElements.length;
@@ -4296,7 +4341,7 @@ export default function Home() {
     setDiagramPreview(null);
   }
 
-  function diagramElementFromDrag(tool: Exclude<DiagramTool, 'select' | 'draw' | 'erase' | 'text' | 'sticker'>, start: DiagramPoint, end: DiagramPoint): DiagramElement {
+  function diagramElementFromDrag(tool: Exclude<DiagramTool, 'select' | 'draw' | 'erase' | 'text' | 'sticker' | 'note'>, start: DiagramPoint, end: DiagramPoint): DiagramElement {
     if (tool === 'arrow' || tool === 'callout') {
       const connectorStart = diagramConnectorEndpoint(start, diagramElements);
       const connectorEnd = diagramConnectorEndpoint(end, diagramElements);
@@ -4349,7 +4394,7 @@ export default function Home() {
     }
     if (diagramTool === 'erase') { diagramCoalescedPoints(event).forEach((sample) => eraseDiagramStrokeAt(sample)); return; }
     const start = diagramStartRef.current;
-    if (start && diagramTool !== 'sticker') setDiagramPreview(diagramElementFromDrag(diagramTool, start, point));
+    if (start && diagramTool !== 'sticker' && diagramTool !== 'note') setDiagramPreview(diagramElementFromDrag(diagramTool, start, point));
   }
 
   function finishDiagramInteraction(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -4362,7 +4407,7 @@ export default function Home() {
     if (diagramInteractionRef.current) { publishDiagramObjectLock(diagramInteractionRef.current.objectId, false); diagramInteractionRef.current = null; return; }
     const start = diagramStartRef.current;
     const point = diagramPoint(event);
-    if (diagramTool !== 'draw' && diagramTool !== 'erase' && diagramTool !== 'sticker' && start && point) {
+    if (diagramTool !== 'draw' && diagramTool !== 'erase' && diagramTool !== 'sticker' && diagramTool !== 'note' && start && point) {
       const element = diagramElementFromDrag(diagramTool, start, point);
       const length = element.type === 'arrow' || element.type === 'callout' ? Math.hypot(element.x2 - element.x, element.y2 - element.y) : Math.max(element.width, element.height);
       if (length >= 5) {
@@ -5723,6 +5768,7 @@ export default function Home() {
               ['arrow', '→', 'Стрелка'],
               ['text', 'T', 'Текст'],
               ['callout', '↗', 'Текстовая выноска'],
+              ['note', '●', 'Заметка с обсуждением'],
               ['sticker', '!', 'Стикер'],
             ] as [DiagramTool, string, string][]).map(([tool, icon, label]) => <button key={tool} type="button" className={`diagram-tool ${diagramTool === tool ? 'active' : ''}`} onClick={() => setDiagramTool(tool)} title={label} aria-label={label}>{icon}</button>)}
             <button type="button" className="diagram-tool" disabled={isSelectedReadOnly} onClick={() => diagramImageUploadRef.current?.click()} title="Добавить изображение" aria-label="Добавить изображение">▧</button>
@@ -5750,7 +5796,7 @@ export default function Home() {
           </article>)}</div> : <p>Добавьте фигуру, текст, стрелку или изображение — они появятся здесь.</p>}
         </section>}
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.2, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .2} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(2.2, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 2.2} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(.35)}>Обзор</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
-        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(DIAGRAM_CANVAS_WIDTH * diagramZoom)}px`, height: `${Math.round(DIAGRAM_CANVAS_HEIGHT * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width={DIAGRAM_CANVAS_WIDTH} height={DIAGRAM_CANVAS_HEIGHT} style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onLostPointerCapture={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
+        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(DIAGRAM_CANVAS_WIDTH * diagramZoom)}px`, height: `${Math.round(DIAGRAM_CANVAS_HEIGHT * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width={DIAGRAM_CANVAS_WIDTH} height={DIAGRAM_CANVAS_HEIGHT} style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onLostPointerCapture={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramNotes.map((note) => <div className="diagram-note-anchor" key={note.id} style={{ left: `${note.x * diagramZoom}px`, top: `${note.y * diagramZoom}px` }} onPointerDown={(event) => event.stopPropagation()}><button type="button" className={`diagram-note-pin ${selectedDiagramNoteId === note.id ? 'open' : ''}`} onClick={() => { setSelectedDiagramNoteId((current) => current === note.id ? null : note.id); setDiagramNoteComposerPoint(null); }} title={`Заметка @${note.author_name}`} aria-label={`Открыть заметку @${note.author_name}`}>{note.author_avatar_url ? <img src={assetUrl(note.author_avatar_url)} alt="" /> : <span>{note.author_name.slice(0, 1).toUpperCase()}</span>}<i>{note.comments.length}</i></button>{selectedDiagramNoteId === note.id && <section className="diagram-note-thread" onPointerDown={(event) => event.stopPropagation()}><header><span><b>@{note.author_name}</b><small>{new Date(note.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></span><button type="button" onClick={() => setSelectedDiagramNoteId(null)} aria-label="Закрыть заметку">×</button></header><div className="diagram-note-messages">{note.comments.map((comment) => <article key={comment.id}><span>{comment.author_avatar_url ? <img src={assetUrl(comment.author_avatar_url)} alt="" /> : comment.author_name.slice(0, 1).toUpperCase()}</span><p><b>@{comment.author_name}</b>{comment.body}</p></article>)}</div>{!isSelectedReadOnly && <form onSubmit={(event) => { event.preventDefault(); replyToDiagramNote(note); }}><textarea value={diagramNoteReplyDrafts[note.id] ?? ''} onChange={(event) => setDiagramNoteReplyDrafts((current) => ({ ...current, [note.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); replyToDiagramNote(note); } }} maxLength={4000} placeholder="Ответить…" aria-label="Ответ на заметку" /><button type="submit" disabled={!(diagramNoteReplyDrafts[note.id] ?? '').trim()}>↑</button></form>}</section>}</div>)}{diagramNoteComposerPoint && <form className="diagram-note-composer" style={{ left: `${diagramNoteComposerPoint.x * diagramZoom}px`, top: `${diagramNoteComposerPoint.y * diagramZoom}px` }} onPointerDown={(event) => event.stopPropagation()} onSubmit={createDiagramNote}><b>Новая заметка</b><textarea autoFocus value={diagramNoteDraft} onChange={(event) => setDiagramNoteDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={4000} placeholder="Что обсудить в этой точке?" aria-label="Текст заметки" /><span><button type="button" onClick={() => setDiagramNoteComposerPoint(null)}>Отмена</button><button type="submit" className="create-button" disabled={!diagramNoteDraft.trim()}>Создать</button></span></form>}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
         <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly} title="Ctrl+Z / ⌘Z">↶ Отменить <kbd>Ctrl+Z</kbd></button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button><span className="diagram-autosave-status" aria-live="polite">{isDiagramSaving ? 'Сохраняем…' : 'Сохраняется автоматически'}</span></div>
       </section>
     </div>}

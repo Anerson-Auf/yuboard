@@ -496,11 +496,69 @@ struct DiagramObjectLockEvent {
     expires_in_ms: u64,
 }
 
+#[derive(Clone, Serialize)]
+struct DiagramNotesChangedEvent {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    card_id: Uuid,
+}
+
 #[derive(Clone)]
 enum DiagramLiveEvent {
     Merge(DiagramMergeEvent),
     Cursor(DiagramCursorEvent),
     ObjectLock(DiagramObjectLockEvent),
+    NotesChanged(DiagramNotesChangedEvent),
+}
+
+#[derive(Deserialize)]
+struct CreateDiagramNoteRequest { x: i32, y: i32, body: String }
+
+#[derive(Deserialize)]
+struct CreateDiagramNoteCommentRequest { body: String }
+
+#[derive(FromRow)]
+struct DiagramNoteRow {
+    id: Uuid,
+    x: i32,
+    y: i32,
+    author_id: Option<Uuid>,
+    author_name: String,
+    author_avatar_url: Option<String>,
+    created_at: String,
+}
+
+#[derive(FromRow)]
+struct DiagramNoteCommentRow {
+    id: Uuid,
+    note_id: Uuid,
+    author_id: Option<Uuid>,
+    author_name: String,
+    author_avatar_url: Option<String>,
+    body: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct DiagramNoteCommentResponse {
+    id: Uuid,
+    author_id: Option<Uuid>,
+    author_name: String,
+    author_avatar_url: Option<String>,
+    body: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct DiagramNoteResponse {
+    id: Uuid,
+    x: i32,
+    y: i32,
+    author_id: Option<Uuid>,
+    author_name: String,
+    author_avatar_url: Option<String>,
+    created_at: String,
+    comments: Vec<DiagramNoteCommentResponse>,
 }
 
 #[derive(Deserialize)]
@@ -1828,6 +1886,8 @@ async fn main() {
         .route("/v1/cards/{card_id}/diagram/sync", post(sync_card_diagram))
         .route("/v1/cards/{card_id}/diagram/ws", get(card_diagram_websocket))
         .route("/v1/cards/{card_id}/diagram/presence", get(get_card_diagram_presence).put(update_card_diagram_presence))
+        .route("/v1/cards/{card_id}/diagram/notes", get(list_card_diagram_notes).post(create_card_diagram_note))
+        .route("/v1/diagram/notes/{note_id}/comments", post(create_card_diagram_note_comment))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
         .route("/v1/checklists/{checklist_id}", patch(update_checklist).delete(delete_checklist))
         .route("/v1/checklists/{checklist_id}/items", post(create_checklist_item))
@@ -4921,11 +4981,11 @@ async fn ensure_diagram_object_locks(state: &AppState, card_id: Uuid, current: C
 }
 
 fn diagram_live_event_card_id(event: &DiagramLiveEvent) -> Uuid {
-    match event { DiagramLiveEvent::Merge(event) => event.card_id, DiagramLiveEvent::Cursor(event) => event.card_id, DiagramLiveEvent::ObjectLock(event) => event.card_id }
+    match event { DiagramLiveEvent::Merge(event) => event.card_id, DiagramLiveEvent::Cursor(event) => event.card_id, DiagramLiveEvent::ObjectLock(event) => event.card_id, DiagramLiveEvent::NotesChanged(event) => event.card_id }
 }
 
 fn diagram_live_event_payload(event: &DiagramLiveEvent) -> Result<String, serde_json::Error> {
-    match event { DiagramLiveEvent::Merge(event) => serde_json::to_string(event), DiagramLiveEvent::Cursor(event) => serde_json::to_string(event), DiagramLiveEvent::ObjectLock(event) => serde_json::to_string(event) }
+    match event { DiagramLiveEvent::Merge(event) => serde_json::to_string(event), DiagramLiveEvent::Cursor(event) => serde_json::to_string(event), DiagramLiveEvent::ObjectLock(event) => serde_json::to_string(event), DiagramLiveEvent::NotesChanged(event) => serde_json::to_string(event) }
 }
 
 async fn get_card_diagram_presence(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<DiagramPresenceEntry>> {
@@ -4939,6 +4999,62 @@ async fn update_card_diagram_presence(State(state): State<AppState>, current: Cu
     let event = record_diagram_cursor(&state, card_id, current, &account, request.x, request.y).await?;
     let _ = state.diagram_events.send(event);
     card_diagram_presence_snapshot(&state, card_id, current.id).await
+}
+
+async fn load_card_diagram_notes(pool: &PgPool, card_id: Uuid) -> Result<Vec<DiagramNoteResponse>, ApiError> {
+    let rows = sqlx::query_as::<_, DiagramNoteRow>(
+        "SELECT n.id, n.x, n.y, n.created_by AS author_id, COALESCE(u.username, 'Deleted user') AS author_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS author_avatar_url, n.created_at::text AS created_at FROM card_diagram_notes n LEFT JOIN users u ON u.id = n.created_by WHERE n.card_id = $1 ORDER BY n.created_at ASC, n.id ASC",
+    ).bind(card_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    if rows.is_empty() { return Ok(Vec::new()); }
+    let note_ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let comments = sqlx::query_as::<_, DiagramNoteCommentRow>(
+        "SELECT c.id, c.note_id, c.author_id, COALESCE(u.username, 'Deleted user') AS author_name, CASE WHEN u.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || u.id::text END AS author_avatar_url, c.body, c.created_at::text AS created_at FROM card_diagram_note_comments c LEFT JOIN users u ON u.id = c.author_id WHERE c.note_id = ANY($1) ORDER BY c.created_at ASC, c.id ASC",
+    ).bind(&note_ids).fetch_all(pool).await.map_err(ApiError::internal)?;
+    let mut comments_by_note = HashMap::<Uuid, Vec<DiagramNoteCommentResponse>>::new();
+    for comment in comments {
+        comments_by_note.entry(comment.note_id).or_default().push(DiagramNoteCommentResponse { id: comment.id, author_id: comment.author_id, author_name: comment.author_name, author_avatar_url: comment.author_avatar_url, body: comment.body, created_at: comment.created_at });
+    }
+    Ok(rows.into_iter().map(|row| DiagramNoteResponse { id: row.id, x: row.x, y: row.y, author_id: row.author_id, author_name: row.author_name, author_avatar_url: row.author_avatar_url, created_at: row.created_at, comments: comments_by_note.remove(&row.id).unwrap_or_default() }).collect())
+}
+
+async fn list_card_diagram_notes(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<Vec<DiagramNoteResponse>> {
+    let pool = database(&state)?;
+    ensure_card_public_read(pool, card_id, current.0.map(|user| user.id)).await?;
+    Ok(Json(load_card_diagram_notes(pool, card_id).await?))
+}
+
+async fn create_card_diagram_note(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<CreateDiagramNoteRequest>) -> ApiResult<DiagramNoteResponse> {
+    if !(0..=20_000).contains(&request.x) || !(0..=20_000).contains(&request.y) { return Err(ApiError::bad_request("Diagram note coordinates must be between 0 and 20000.")); }
+    let body = valid_text(&request.body, "body", 4_000)?;
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    let note_id = Uuid::new_v4();
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    sqlx::query("INSERT INTO card_diagram_notes (id, card_id, x, y, created_by) VALUES ($1, $2, $3, $4, $5)")
+        .bind(note_id).bind(card_id).bind(request.x).bind(request.y).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    sqlx::query("INSERT INTO card_diagram_note_comments (id, note_id, author_id, body) VALUES ($1, $2, $3, $4)")
+        .bind(Uuid::new_v4()).bind(note_id).bind(current.id).bind(body).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    transaction.commit().await.map_err(ApiError::internal)?;
+    let note = load_card_diagram_notes(pool, card_id).await?.into_iter().find(|note| note.id == note_id)
+        .ok_or_else(|| ApiError::internal(sqlx::Error::RowNotFound))?;
+    let _ = state.diagram_events.send(DiagramLiveEvent::NotesChanged(DiagramNotesChangedEvent { event_type: "diagram_notes_changed", card_id }));
+    Ok(Json(note))
+}
+
+async fn create_card_diagram_note_comment(State(state): State<AppState>, current: CurrentUser, Path(note_id): Path<Uuid>, Json(request): Json<CreateDiagramNoteCommentRequest>) -> ApiResult<DiagramNoteResponse> {
+    let body = valid_text(&request.body, "body", 4_000)?;
+    let pool = database(&state)?;
+    let card_id = sqlx::query_scalar::<_, Uuid>("SELECT card_id FROM card_diagram_notes WHERE id = $1")
+        .bind(note_id).fetch_optional(pool).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "diagram_note_not_found", "Diagram note was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    sqlx::query("INSERT INTO card_diagram_note_comments (id, note_id, author_id, body) VALUES ($1, $2, $3, $4)")
+        .bind(Uuid::new_v4()).bind(note_id).bind(current.id).bind(body).execute(pool).await.map_err(ApiError::internal)?;
+    sqlx::query("UPDATE card_diagram_notes SET updated_at = now() WHERE id = $1").bind(note_id).execute(pool).await.map_err(ApiError::internal)?;
+    let note = load_card_diagram_notes(pool, card_id).await?.into_iter().find(|note| note.id == note_id)
+        .ok_or_else(|| ApiError::internal(sqlx::Error::RowNotFound))?;
+    let _ = state.diagram_events.send(DiagramLiveEvent::NotesChanged(DiagramNotesChangedEvent { event_type: "diagram_notes_changed", card_id }));
+    Ok(Json(note))
 }
 
 async fn get_card_diagram(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<Option<DiagramResponse>> {
