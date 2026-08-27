@@ -64,6 +64,7 @@ type BoardUiScale = 'compact' | 'normal' | 'roomy';
 type BoardLocalPreferences = {
   version: 1;
   boardUiScale: BoardUiScale;
+  boardViewMode: BoardViewMode;
   filterMode: FilterMode;
   labelFilterIds: string[];
   milestoneFilterId: string | null;
@@ -1232,6 +1233,7 @@ export default function Home() {
     if (!boardPreferencesStorageKey) {
       setBoardPreferencesLoadedKey(null);
       setBoardUiScale('normal');
+      setBoardViewMode('standard');
       setFilterMode('all');
       setLabelFilterIds([]);
       setMilestoneFilterId(null);
@@ -1250,6 +1252,7 @@ export default function Home() {
     setBoardUiScale(stored.boardUiScale === 'compact' || stored.boardUiScale === 'roomy' || stored.boardUiScale === 'normal'
       ? stored.boardUiScale
       : legacyScale === 'compact' || legacyScale === 'roomy' ? legacyScale : 'normal');
+    setBoardViewMode(authState === 'public' ? 'standard' : stored.boardViewMode === 'freeform' || stored.boardViewMode === 'dependencies' || stored.boardViewMode === 'standard' ? stored.boardViewMode : 'standard');
     setFilterMode(stored.filterMode === 'assigned' || stored.filterMode === 'my_roles' || stored.filterMode === 'due' || stored.filterMode === 'overdue' || stored.filterMode === 'unread' || stored.filterMode === 'all' ? stored.filterMode : 'all');
     setLabelFilterIds(Array.isArray(stored.labelFilterIds) ? stored.labelFilterIds.filter((value): value is string => typeof value === 'string') : []);
     setMilestoneFilterId(typeof stored.milestoneFilterId === 'string' ? stored.milestoneFilterId : null);
@@ -1258,13 +1261,13 @@ export default function Home() {
     setLabelsCollapsed(Boolean(stored.labelsCollapsed));
     setHideCompletedChecklistItems(Boolean(stored.hideCompletedChecklistItems));
     setBoardPreferencesLoadedKey(boardPreferencesStorageKey);
-  }, [boardPreferencesStorageKey, boardUiScaleStorageKey]);
+  }, [authState, boardPreferencesStorageKey, boardUiScaleStorageKey]);
 
   useEffect(() => {
     if (!boardPreferencesStorageKey || boardPreferencesLoadedKey !== boardPreferencesStorageKey) return;
-    const preferences: BoardLocalPreferences = { version: 1, boardUiScale, filterMode, labelFilterIds, milestoneFilterId, cardSort, boardContentMode, labelsCollapsed, hideCompletedChecklistItems };
+    const preferences: BoardLocalPreferences = { version: 1, boardUiScale, boardViewMode, filterMode, labelFilterIds, milestoneFilterId, cardSort, boardContentMode, labelsCollapsed, hideCompletedChecklistItems };
     try { localStorage.setItem(boardPreferencesStorageKey, JSON.stringify(preferences)); } catch { /* Local storage can be disabled or full. */ }
-  }, [boardContentMode, boardPreferencesLoadedKey, boardPreferencesStorageKey, boardUiScale, cardSort, filterMode, hideCompletedChecklistItems, labelFilterIds, labelsCollapsed, milestoneFilterId]);
+  }, [boardContentMode, boardPreferencesLoadedKey, boardPreferencesStorageKey, boardUiScale, boardViewMode, cardSort, filterMode, hideCompletedChecklistItems, labelFilterIds, labelsCollapsed, milestoneFilterId]);
 
   function changeBoardUiScale(next: BoardUiScale) { setBoardUiScale(next); }
 
@@ -2127,12 +2130,19 @@ export default function Home() {
       .then(async (response) => { if (!response.ok) throw new Error('layout load failed'); return response.json() as Promise<BoardLayout>; })
       .then((layout) => {
         if (!active) return;
-        setBoardViewMode(layout.view_mode === 'freeform' || layout.view_mode === 'dependencies' ? layout.view_mode : 'standard');
+        // Column positions are shared with the team, while the chosen way of
+        // looking at them belongs to the current person and browser.
+        let preferredMode: BoardViewMode = 'standard';
+        try {
+          const stored = JSON.parse(localStorage.getItem(boardPreferencesStorageKey ?? '') ?? 'null') as Partial<BoardLocalPreferences> | null;
+          if (stored?.boardViewMode === 'freeform' || stored?.boardViewMode === 'dependencies' || stored?.boardViewMode === 'standard') preferredMode = stored.boardViewMode;
+        } catch { /* The standard row is always a safe fallback. */ }
+        setBoardViewMode(preferredMode);
         setFreeformLayout(Object.fromEntries(layout.positions.map((position) => [position.list_id, { x: position.x, y: position.y }])));
       })
       .catch(() => { if (active) { setBoardViewMode('standard'); setFreeformLayout({}); } });
     return () => { active = false; };
-  }, [authState, boardId]);
+  }, [authState, boardId, boardPreferencesStorageKey]);
 
   useEffect(() => {
     if (!boardId || authState !== 'signed-in') return;
