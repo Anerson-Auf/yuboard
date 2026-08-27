@@ -1849,10 +1849,14 @@ export default function Home() {
         event.preventDefault();
         undoDiagram();
       }
+      if ((event.key === 'Backspace' || event.key === 'Delete') && selectedDiagramElement !== null && !target?.matches('input, textarea, select')) {
+        event.preventDefault();
+        deleteSelectedDiagramElement();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [diagramHistory, isDiagramOpen]);
+  }, [diagramHistory, isDiagramOpen, selectedDiagramElement]);
 
   useEffect(() => {
     if (!isBoardMenuOpen && !isBoardScaleOpen && !isFilterOpen && !isRecentCardsOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId && !reactionPickerCommentId && !stickerPickerTarget) return;
@@ -3554,6 +3558,13 @@ export default function Home() {
     setSelectedDiagramElement(null);
     setDiagramPreview(null);
   }
+  function deleteSelectedDiagramElement() {
+    if (selectedDiagramElement === null || isSelectedReadOnly) return;
+    rememberDiagramState();
+    setDiagramElements((current) => current.filter((_, index) => index !== selectedDiagramElement));
+    setSelectedDiagramElement(null);
+    setEditingDiagramTextIndex(null);
+  }
   function beginDiagramTextEdit(index: number) {
     const element = diagramElements[index];
     if (!element || (element.type !== 'text' && element.type !== 'callout')) return;
@@ -3672,6 +3683,7 @@ export default function Home() {
       diagramPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop };
       return;
     }
+    if (isSelectedReadOnly) return;
     if (diagramTool === 'select') {
       const index = diagramElementAtPoint(point);
       if (index === null) { setSelectedDiagramElement(null); return; }
@@ -3772,7 +3784,7 @@ export default function Home() {
     if (element.type === 'text' || element.type === 'callout') beginDiagramTextEdit(index);
   }
   function saveDiagram(closeAfterSave = true) {
-    if (!selected || typeof selected.id !== 'string' || !diagramTitle.trim() || isDiagramSaving) return;
+    if (!selected || isSelectedReadOnly || typeof selected.id !== 'string' || !diagramTitle.trim() || isDiagramSaving) return;
     const title = diagramTitle.trim();
     const document = { strokes: diagramStrokes, elements: diagramElements };
     const snapshot = JSON.stringify({ title, document });
@@ -4263,6 +4275,7 @@ export default function Home() {
     await uploadMediaFiles(files);
   }
   async function uploadDiagramImages(event: ChangeEvent<HTMLInputElement>) {
+    if (isSelectedReadOnly) return;
     const files = Array.from(event.target.files ?? []);
     event.target.value = '';
     const images = files.filter((file) => file.type.startsWith('image/'));
@@ -5084,7 +5097,8 @@ export default function Home() {
               ['text', 'T', 'Текст'],
               ['callout', '↗', 'Текстовая выноска'],
             ] as [DiagramTool, string, string][]).map(([tool, icon, label]) => <button key={tool} type="button" className={`diagram-tool ${diagramTool === tool ? 'active' : ''}`} onClick={() => setDiagramTool(tool)} title={label} aria-label={label}>{icon}</button>)}
-            <button type="button" className="diagram-tool" onClick={() => diagramImageUploadRef.current?.click()} title="Добавить изображение" aria-label="Добавить изображение">▧</button>
+            <button type="button" className="diagram-tool" disabled={isSelectedReadOnly} onClick={() => diagramImageUploadRef.current?.click()} title="Добавить изображение" aria-label="Добавить изображение">▧</button>
+            <button type="button" className="diagram-tool" disabled={selectedDiagramElement === null || isSelectedReadOnly} onClick={deleteSelectedDiagramElement} title="Удалить выбранный объект" aria-label="Удалить выбранный объект">⌫</button>
             <input ref={diagramImageUploadRef} className="diagram-image-upload" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => void uploadDiagramImages(event)} />
           </div>
           <label className="diagram-control">Цвет<input type="color" value={diagramColor} onChange={(event) => setDiagramColor(event.target.value)} aria-label="Цвет" /></label>
@@ -5099,7 +5113,7 @@ export default function Home() {
         {editingDiagramTextIndex !== null && <label className="diagram-text-draft diagram-text-editor">Редактирование текста<textarea autoFocus value={editingDiagramTextDraft} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Текст элемента…" /></label>}
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.4, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .4} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(1.6, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 1.6} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
         <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>⌁</span><b>@{person.username}</b></div>)}</div></div>
-        <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length}>↶ Отменить</button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={!diagramStrokes.length && !diagramElements.length}>Очистить</button><button className="create-button" onClick={saveDiagram} disabled={isDiagramSaving}>{isDiagramSaving ? 'Сохраняем…' : 'Сохранить схему'}</button></div>
+        <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly}>↶ Отменить</button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button>{!isSelectedReadOnly && <button className="create-button" onClick={() => saveDiagram()} disabled={isDiagramSaving}>{isDiagramSaving ? 'Сохраняем…' : 'Сохранить схему'}</button>}</div>
       </section>
     </div>}
 
