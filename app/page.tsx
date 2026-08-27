@@ -2115,7 +2115,9 @@ export default function Home() {
         if (tool) { event.preventDefault(); setDiagramTool(tool); return; }
         if (event.key === '9' && !isSelectedReadOnly) { event.preventDefault(); diagramImageUploadRef.current?.click(); return; }
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !isTyping && !isSelectedReadOnly) {
+      // `event.key` becomes «я» on a Russian keyboard layout. `code` names
+      // the physical key instead, so Ctrl+Z behaves like every editor.
+      if ((event.ctrlKey || event.metaKey) && event.code === 'KeyZ' && !isTyping && !isSelectedReadOnly) {
         event.preventDefault();
         undoDiagram();
       }
