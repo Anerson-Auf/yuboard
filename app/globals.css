@@ -765,8 +765,9 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
    gives it a readable inverse tone on both a bright and a dark image. */
 .task-card:has(.card-cover:not(.top)) .card-title-row h3 { color: #fff; mix-blend-mode: difference; text-shadow: 0 1px 10px rgb(0 0 0 / 28%); }
 
-/* The vertical scrollbar must not make the right card inset look wider. */
-.card-list { scrollbar-gutter: stable both-edges; }
+/* Keep both card insets narrow. The list extends under its own scrollbar so
+   the right side does not gain a visibly wider empty strip. */
+.column { padding-right: 8px; padding-left: 8px; }.card-list { margin-right: -9px; scrollbar-gutter: auto; }.app-shell.board-ui-scale-compact .column { padding-right: 6px; padding-left: 6px; }.app-shell.board-ui-scale-roomy .column { padding-right: 10px; padding-left: 10px; }
 
 /* A pending vote is useful information, not an alarm. Keep it quiet and on
    the same vertical rhythm as the priority signal. */
