@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(root, 'public', 'release-history.generated.json');
+const buildMarkerOutput = resolve(root, 'public', 'build-marker.json');
 const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 
 function git(args) {
@@ -69,7 +70,11 @@ function toEntry(header, lines) {
 
 const raw = git(['log', '--reverse', '--date=short', '--format=%x1d%H%x1f%h%x1f%ad%x1f%an%x1f%s', '--numstat']);
 if (!raw.trim()) {
-  if (existsSync(output)) process.exit(0);
+  if (existsSync(output)) {
+    mkdirSync(dirname(buildMarkerOutput), { recursive: true });
+    writeFileSync(buildMarkerOutput, `${JSON.stringify({ build_id: `local-${Date.now()}`, revision: 'unknown', built_at: new Date().toISOString() })}\n`);
+    process.exit(0);
+  }
   console.warn('Git history is unavailable; release history was not generated.');
   process.exit(0);
 }
@@ -89,3 +94,5 @@ for (const line of raw.split(/\r?\n/)) {
 if (header) entries.push(toEntry(header, lines));
 mkdirSync(dirname(output), { recursive: true });
 writeFileSync(output, `${JSON.stringify({ version: packageJson.version, revision: entries.at(-1)?.shortHash ?? 'unknown', entries: entries.reverse() }, null, 2)}\n`);
+const revision = entries.at(-1)?.shortHash ?? 'unknown';
+writeFileSync(buildMarkerOutput, `${JSON.stringify({ build_id: `${revision}-${Date.now()}`, revision, built_at: new Date().toISOString() })}\n`);

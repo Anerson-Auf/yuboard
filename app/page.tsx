@@ -14,6 +14,7 @@ import PinnedCardsShelf from './pinned-cards-shelf';
 import InboxOverlay from './inbox-overlay';
 import MyTasksOverlay from './my-tasks-overlay';
 import ReleaseHistoryWidget from './release-history-widget';
+import BuildUpdateNotice from './build-update-notice';
 import SavedViewsOverlay from './saved-views-overlay';
 import CommandPalette from './command-palette';
 import ScheduleView from './schedule-view';
@@ -5255,13 +5256,13 @@ export default function Home() {
   ];
 
   if (authState === 'checking') {
-    return <main className="app-shell dark"><div className="board-loading auth-loading" role="status"><span className="loading-dot" />Проверяем доступ к пространству</div><ReleaseHistoryWidget /></main>;
+    return <main className="app-shell dark"><div className="board-loading auth-loading" role="status"><span className="loading-dot" />Проверяем доступ к пространству</div><BuildUpdateNotice /><ReleaseHistoryWidget /></main>;
   }
 
   if (authState === 'signed-out') {
     const canRegister = registrationOpen || Boolean(inviteToken);
     const isRegistering = Boolean(inviteToken) || (authMode === 'register' && canRegister);
-    return <main className="app-shell dark auth-shell"><section className="auth-card"><button className="brand auth-brand" type="button" onClick={() => setAuthMode('login')}><span className="brand-mark">✓</span><span>Flowboard</span></button><p className="eyebrow">FLOWBOARD</p><h1>{isRegistering ? inviteToken ? 'Активировать аккаунт' : 'Создать первый аккаунт' : 'С возвращением'}</h1><p className="auth-copy">{isRegistering ? inviteToken ? 'Выберите уникальный ник и пароль.' : 'Первый аккаунт станет system owner.' : 'Войдите по нику, чтобы продолжить.'}</p><form className="auth-form" onSubmit={submitAuth}><label>Ник<input value={authName} onChange={(event) => setAuthName(event.target.value)} maxLength={32} required autoComplete="username" placeholder="your_nick" /></label><label>Пароль<input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} minLength={10} maxLength={256} required autoComplete={isRegistering ? 'new-password' : 'current-password'} /></label>{authError && <p className="auth-error">{authError}</p>}<button className="create-button auth-submit" type="submit" disabled={isAuthorizing}>{isAuthorizing ? 'Подключаем…' : isRegistering ? inviteToken ? 'Активировать' : 'Создать аккаунт' : 'Войти'}</button></form></section><ReleaseHistoryWidget /></main>;
+    return <main className="app-shell dark auth-shell"><section className="auth-card"><button className="brand auth-brand" type="button" onClick={() => setAuthMode('login')}><span className="brand-mark">✓</span><span>Flowboard</span></button><p className="eyebrow">FLOWBOARD</p><h1>{isRegistering ? inviteToken ? 'Активировать аккаунт' : 'Создать первый аккаунт' : 'С возвращением'}</h1><p className="auth-copy">{isRegistering ? inviteToken ? 'Выберите уникальный ник и пароль.' : 'Первый аккаунт станет system owner.' : 'Войдите по нику, чтобы продолжить.'}</p><form className="auth-form" onSubmit={submitAuth}><label>Ник<input value={authName} onChange={(event) => setAuthName(event.target.value)} maxLength={32} required autoComplete="username" placeholder="your_nick" /></label><label>Пароль<input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} minLength={10} maxLength={256} required autoComplete={isRegistering ? 'new-password' : 'current-password'} /></label>{authError && <p className="auth-error">{authError}</p>}<button className="create-button auth-submit" type="submit" disabled={isAuthorizing}>{isAuthorizing ? 'Подключаем…' : isRegistering ? inviteToken ? 'Активировать' : 'Создать аккаунт' : 'Войти'}</button></form></section><BuildUpdateNotice /><ReleaseHistoryWidget /></main>;
   }
 
   return <CardPresenceContext.Provider value={{ people: boardPresence, currentUserId: account?.user.id }}><main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${view === 'board' ? `board-ui-scale-${boardUiScale}` : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
@@ -5514,6 +5515,7 @@ export default function Home() {
       myTasks={{ disabled: authState !== 'signed-in', onSelect: () => setMyTasksOpen(true) }}
       filters={{ disabled: view !== 'board', onSelect: () => setFilterOpen(true) }}
     />
+    <BuildUpdateNotice />
     {!isPublicViewer && <ReleaseHistoryWidget />}
   </main></CardPresenceContext.Provider>;
 }
