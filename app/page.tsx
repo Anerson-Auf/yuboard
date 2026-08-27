@@ -1837,6 +1837,9 @@ export default function Home() {
     if (!context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = '#171923'; context.fillRect(0, 0, canvas.width, canvas.height);
+    diagramElements.forEach((element) => drawDiagramElement(context, element));
+    // Ink is a separate top layer: annotations must remain visible over
+    // screenshots, references and every other canvas object.
     diagramStrokes.forEach((stroke) => {
       const [first, ...rest] = stroke.points;
       if (!first) return;
@@ -1851,7 +1854,6 @@ export default function Home() {
       context.stroke();
       context.restore();
     });
-    diagramElements.forEach((element) => drawDiagramElement(context, element));
     if (diagramPreview) drawDiagramElement(context, diagramPreview);
     if (selectedDiagramElement !== null && diagramElements[selectedDiagramElement]) drawDiagramSelection(context, diagramElements[selectedDiagramElement]);
   }, [diagramElements, diagramImageRevision, diagramPreview, diagramStrokes, isDiagramOpen, selectedDiagramElement]);
