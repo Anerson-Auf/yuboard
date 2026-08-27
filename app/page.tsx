@@ -3847,12 +3847,20 @@ export default function Home() {
       diagramPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop };
       return;
     }
-    if (isSelectedReadOnly) return;
     if (diagramTool === 'select') {
       const selectedElement = selectedDiagramElement === null ? null : diagramElements[selectedDiagramElement];
       const selectedHandle = selectedElement ? diagramHandleAtPoint(selectedElement, point) : null;
       const index = selectedHandle !== null && selectedDiagramElement !== null ? selectedDiagramElement : diagramElementAtPoint(point);
-      if (index === null) { setSelectedDiagramElement(null); return; }
+      if (index === null) {
+        const viewport = diagramViewportRef.current;
+        setSelectedDiagramElement(null);
+        if (!viewport) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        diagramPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop };
+        return;
+      }
+      if (isSelectedReadOnly) return;
       const element = diagramElements[index];
       const handle = selectedHandle ?? (selectedDiagramElement === index ? diagramHandleAtPoint(element, point) : null);
       setSelectedDiagramElement(index);
@@ -3861,6 +3869,7 @@ export default function Home() {
       diagramInteractionRef.current = { kind: handle ? 'resize' : 'move', index, handle: handle ?? 'move', start: point, initial: element, historyStored: false };
       return;
     }
+    if (isSelectedReadOnly) return;
     if (diagramTool === 'text') {
       rememberDiagramState();
       const index = diagramElements.length;
@@ -5275,7 +5284,7 @@ export default function Home() {
         <button className="modal-close" onClick={closeDiagram} aria-label="Закрыть">×</button>
         <p className="eyebrow">CANVAS</p>
         <input className="diagram-title" value={diagramTitle} onChange={(event) => setDiagramTitle(event.target.value)} maxLength={120} aria-label="Название схемы" />
-        <p className="diagram-hint">Средняя кнопка мыши двигает полотно, колесо масштабирует к курсору. Двойной клик по тексту открывает его редактирование.</p>
+        <p className="diagram-hint">В «Схватить» тяните пустое место ЛКМ, чтобы двигать полотно. Колесо масштабирует к курсору, двойной клик по тексту открывает редактор.</p>
         <div className="diagram-toolbar" role="toolbar" aria-label="Инструменты схемы">
           <div className="diagram-tool-group">
             {([

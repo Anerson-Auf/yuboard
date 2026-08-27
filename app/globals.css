@@ -329,9 +329,11 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .task-card.completed .card-title-row h3 { transform: translateX(27px); }
 
 /* Diagram canvas editor. */
-.diagram-modal { width: min(1080px, calc(100vw - 32px)); padding: 24px 28px; }
-.diagram-hint { margin: 8px 0 14px; }
-.diagram-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 9px; margin: 0 0 12px; padding: 10px; border: 1px solid #3f4448; border-radius: 12px; background: #242528; }
+.diagram-modal { width: min(1240px, calc(100vw - 24px)); padding: 16px 20px; }
+.diagram-modal .eyebrow { margin: 0 0 3px; font-size: 10px; }
+.diagram-title { font-size: 21px; }
+.diagram-hint { margin: 4px 0 8px; font-size: 11px; }
+.diagram-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 7px; margin: 0 0 7px; padding: 7px 8px; border: 1px solid #3f4448; border-radius: 10px; background: #242528; }
 .diagram-tool-group { display: flex; align-items: center; gap: 4px; padding-right: 8px; border-right: 1px solid #3f4448; }
 .diagram-tool { display: grid; width: 34px; height: 34px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #cecfd2; font-size: 17px; line-height: 1; }
 .diagram-tool:hover { border-color: #5a6066; background: #303134; }
@@ -354,7 +356,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .diagram-zoom button:hover:not(:disabled) { border-color: #7198e8; background: #3a4048; }
 .diagram-zoom button:disabled { cursor: not-allowed; opacity: .42; }
 .diagram-zoom output { min-width: 47px; background: #242528; }
-.diagram-viewport { max-height: min(62vh, 680px); overflow: auto; padding: 10px; border: 1px solid #3f4448; border-radius: 12px; background: #101204; overscroll-behavior: contain; }
+.diagram-viewport { max-height: min(73vh, 820px); overflow: auto; padding: 8px; border: 1px solid #3f4448; border-radius: 12px; background: #101204; overscroll-behavior: contain; }
 .diagram-stage { position: relative; flex: none; min-width: 1px; min-height: 1px; }
 .diagram-canvas { display: block; max-width: none; cursor: crosshair; background: #171923; }
 .diagram-inline-text-editor { position: absolute; z-index: 4; width: min(340px, 42vw); min-height: 1.5em; padding: 2px 5px; resize: both; overflow: auto; border: 1px dashed #8ba9ff; border-radius: 5px; outline: 0; background: rgb(17 19 28 / 88%); line-height: 1.35; text-shadow: 0 1px 2px rgb(0 0 0 / 65%); }
