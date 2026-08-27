@@ -103,7 +103,7 @@ type AdminWorkspace = { id: string; name: string; owner_username: string; member
 type AuthSession = { id: string; created_at: string; last_seen_at: string; expires_at: string; current: boolean };
 type DiscordIntegration = { id: string; name: string; default_list_id: string | null; created_at: string; last_used_at: string | null; token?: string };
 type DiagramPoint = { x: number; y: number };
-type DiagramObject = { id?: string };
+type DiagramObject = { id?: string; hidden?: boolean; locked?: boolean };
 type DiagramStroke = DiagramObject & { points: DiagramPoint[]; color?: string; width?: number };
 type DiagramRectangle = DiagramObject & { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number };
 type DiagramConnectorSide = 'top' | 'right' | 'bottom' | 'left';
@@ -825,6 +825,7 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
 });
 
 function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramElement) {
+  if (element.hidden) return;
   context.save();
   context.strokeStyle = element.color;
   context.fillStyle = element.color;
@@ -908,6 +909,16 @@ function diagramBounds(element: DiagramElement) {
   }
   if (element.type === 'image') return { left: element.x, top: element.y, right: element.x + element.width, bottom: element.y + element.height };
   return { left: Math.min(element.x, element.x + element.width), top: Math.min(element.y, element.y + element.height), right: Math.max(element.x, element.x + element.width), bottom: Math.max(element.y, element.y + element.height) };
+}
+
+function diagramLayerName(element: DiagramElement, position: number) {
+  if (element.type === 'rectangle') return `Прямоугольник ${position}`;
+  if (element.type === 'ellipse') return `Эллипс ${position}`;
+  if (element.type === 'arrow') return `Стрелка ${position}`;
+  if (element.type === 'image') return element.name?.trim() || `Изображение ${position}`;
+  const preview = element.text.replace(/\s+/g, ' ').trim();
+  if (element.type === 'callout') return preview ? `Выноска: ${preview.slice(0, 28)}` : `Выноска ${position}`;
+  return preview ? `Текст: ${preview.slice(0, 30)}` : `Текст ${position}`;
 }
 
 const DIAGRAM_SNAP_DISTANCE = 14;
@@ -1281,6 +1292,7 @@ export default function Home() {
   const [diagramStrokes, setDiagramStrokes] = useState<DiagramStroke[]>([]);
   const [diagramElements, setDiagramElements] = useState<DiagramElement[]>([]);
   const [diagramHistory, setDiagramHistory] = useState<DiagramSnapshot[]>([]);
+  const [isDiagramLayersOpen, setDiagramLayersOpen] = useState(false);
   const [selectedDiagramElement, setSelectedDiagramElement] = useState<number | null>(null);
   const [diagramPreview, setDiagramPreview] = useState<DiagramElement | null>(null);
   const [diagramTool, setDiagramTool] = useState<DiagramTool>('draw');
@@ -1960,7 +1972,7 @@ export default function Home() {
       context.restore();
     });
     if (diagramPreview) drawDiagramElement(context, diagramPreview);
-    if (selectedDiagramElement !== null && diagramElements[selectedDiagramElement]) drawDiagramSelection(context, diagramElements[selectedDiagramElement]);
+    if (selectedDiagramElement !== null && diagramElements[selectedDiagramElement] && !diagramElements[selectedDiagramElement].hidden) drawDiagramSelection(context, diagramElements[selectedDiagramElement]);
   }, [diagramElements, diagramImageRevision, diagramPreview, diagramStrokes, isDiagramOpen, selectedDiagramElement]);
 
   useEffect(() => {
@@ -3846,6 +3858,7 @@ export default function Home() {
   }
   function deleteSelectedDiagramElement() {
     if (selectedDiagramElement === null || isSelectedReadOnly) return;
+    if (diagramElements[selectedDiagramElement]?.locked) return;
     rememberDiagramState();
     setDiagramElements((current) => resolveDiagramConnectors(current.filter((_, index) => index !== selectedDiagramElement)));
     setSelectedDiagramElement(null);
@@ -3853,7 +3866,7 @@ export default function Home() {
   }
   function beginDiagramTextEdit(index: number) {
     const element = diagramElements[index];
-    if (!element || (element.type !== 'text' && element.type !== 'callout')) return;
+    if (!element || element.locked || (element.type !== 'text' && element.type !== 'callout')) return;
     rememberDiagramState();
     setSelectedDiagramElement(index);
     setEditingDiagramTextIndex(index);
@@ -3869,7 +3882,25 @@ export default function Home() {
   }
   function updateSelectedDiagramTextStyle(patch: Partial<Pick<DiagramText | DiagramCallout, 'color' | 'fontSize' | 'fontFamily' | 'fontWeight'>>) {
     if (selectedDiagramElement === null) return;
+    if (diagramElements[selectedDiagramElement]?.locked) return;
     setDiagramElements((current) => current.map((element, index) => index === selectedDiagramElement && (element.type === 'text' || element.type === 'callout') ? { ...element, ...patch } : element));
+  }
+  function setDiagramLayerProperty(index: number, patch: Pick<DiagramObject, 'hidden'> | Pick<DiagramObject, 'locked'>) {
+    if (isSelectedReadOnly) return;
+    rememberDiagramState();
+    setDiagramElements((current) => current.map((element, position) => position === index ? { ...element, ...patch } : element));
+  }
+  function moveDiagramLayer(index: number, direction: -1 | 1) {
+    if (isSelectedReadOnly) return;
+    const target = index + direction;
+    if (target < 0 || target >= diagramElements.length) return;
+    rememberDiagramState();
+    setDiagramElements((current) => {
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+    setSelectedDiagramElement(target);
   }
   function selectedDiagramTextElement() {
     const element = selectedDiagramElement === null ? null : diagramElements[selectedDiagramElement];
@@ -3906,6 +3937,7 @@ export default function Home() {
   function diagramElementAtPoint(point: DiagramPoint) {
     for (let index = diagramElements.length - 1; index >= 0; index -= 1) {
       const element = diagramElements[index];
+      if (element.hidden) continue;
       const bounds = diagramBounds(element);
       if (element.type === 'arrow' && pointToSegmentDistance(point, { x: element.x, y: element.y }, { x: element.x2, y: element.y2 }) <= 13) return index;
       if (element.type === 'callout' && (pointToSegmentDistance(point, { x: element.x, y: element.y }, { x: element.x2, y: element.y2 }) <= 13 || (point.x >= element.x2 && point.x <= bounds.right && point.y >= element.y2 && point.y <= bounds.bottom))) return index;
@@ -4031,6 +4063,7 @@ export default function Home() {
       const element = diagramElements[index];
       const handle = selectedHandle ?? (selectedDiagramElement === index ? diagramHandleAtPoint(element, point) : null);
       setSelectedDiagramElement(index);
+      if (element.locked) return;
       event.currentTarget.setPointerCapture(event.pointerId);
       isDrawingRef.current = true;
       diagramInteractionRef.current = { kind: handle ? 'resize' : 'move', index, handle: handle ?? 'move', start: point, initial: element, historyStored: false };
@@ -5489,6 +5522,7 @@ export default function Home() {
             ] as [DiagramTool, string, string][]).map(([tool, icon, label]) => <button key={tool} type="button" className={`diagram-tool ${diagramTool === tool ? 'active' : ''}`} onClick={() => setDiagramTool(tool)} title={label} aria-label={label}>{icon}</button>)}
             <button type="button" className="diagram-tool" disabled={isSelectedReadOnly} onClick={() => diagramImageUploadRef.current?.click()} title="Добавить изображение" aria-label="Добавить изображение">▧</button>
             <button type="button" className="diagram-tool" disabled={selectedDiagramElement === null || isSelectedReadOnly} onClick={deleteSelectedDiagramElement} title="Удалить выбранный объект" aria-label="Удалить выбранный объект">⌫</button>
+            <button type="button" className={`diagram-tool ${isDiagramLayersOpen ? 'active' : ''}`} onClick={() => setDiagramLayersOpen((current) => !current)} title="Слои" aria-label="Открыть слои">☷</button>
             <input ref={diagramImageUploadRef} className="diagram-image-upload" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => void uploadDiagramImages(event)} />
           </div>
           <label className="diagram-control">Цвет<input type="color" value={diagramColor} onChange={(event) => setDiagramColor(event.target.value)} aria-label="Цвет" /></label>
@@ -5499,6 +5533,13 @@ export default function Home() {
             <button type="button" className={`diagram-tool diagram-bold ${(selectedDiagramTextElement()?.fontWeight ?? diagramFontWeight) === 'bold' ? 'active' : ''}`} onClick={() => setDiagramTextStyle({ fontWeight: (selectedDiagramTextElement()?.fontWeight ?? diagramFontWeight) === 'bold' ? 'normal' : 'bold' })} aria-label="Полужирный текст"><b>B</b></button>
           </>}
         </div>
+        {isDiagramLayersOpen && <section className="diagram-layers-panel" aria-label="Слои схемы">
+          <header><span><b>Слои</b><small>Верхняя строка — поверх остальных</small></span><button type="button" onClick={() => setDiagramLayersOpen(false)} aria-label="Закрыть слои">×</button></header>
+          {diagramElements.length ? <div className="diagram-layers-list">{diagramElements.map((element, index) => ({ element, index })).reverse().map(({ element, index }) => <article key={element.id ?? `layer-${index}`} className={`${selectedDiagramElement === index ? 'selected' : ''} ${element.hidden ? 'hidden' : ''}`}>
+            <button type="button" className="diagram-layer-select" onClick={() => setSelectedDiagramElement(index)} title={diagramLayerName(element, index + 1)}><i>{element.type === 'rectangle' ? '▭' : element.type === 'ellipse' ? '◯' : element.type === 'arrow' ? '→' : element.type === 'callout' ? '↗' : element.type === 'image' ? '▧' : 'T'}</i><span>{diagramLayerName(element, index + 1)}</span></button>
+            <div className="diagram-layer-actions"><button type="button" disabled={isSelectedReadOnly} onClick={() => setDiagramLayerProperty(index, { hidden: !element.hidden })} title={element.hidden ? 'Показать слой' : 'Скрыть слой'} aria-label={element.hidden ? 'Показать слой' : 'Скрыть слой'}>{element.hidden ? '◌' : '◉'}</button><button type="button" disabled={isSelectedReadOnly} onClick={() => setDiagramLayerProperty(index, { locked: !element.locked })} title={element.locked ? 'Разблокировать слой' : 'Заблокировать слой'} aria-label={element.locked ? 'Разблокировать слой' : 'Заблокировать слой'}>{element.locked ? '🔒' : '🔓'}</button><button type="button" disabled={isSelectedReadOnly || index === diagramElements.length - 1} onClick={() => moveDiagramLayer(index, 1)} title="Поднять слой" aria-label="Поднять слой">↑</button><button type="button" disabled={isSelectedReadOnly || index === 0} onClick={() => moveDiagramLayer(index, -1)} title="Опустить слой" aria-label="Опустить слой">↓</button></div>
+          </article>)}</div> : <p>Добавьте фигуру, текст, стрелку или изображение — они появятся здесь.</p>}
+        </section>}
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.4, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .4} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(1.6, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 1.6} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
         <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
         <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly} title="Ctrl+Z / ⌘Z">↶ Отменить <kbd>Ctrl+Z</kbd></button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button><span className="diagram-autosave-status" aria-live="polite">{isDiagramSaving ? 'Сохраняем…' : 'Сохраняется автоматически'}</span></div>
