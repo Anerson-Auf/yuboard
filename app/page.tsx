@@ -1301,10 +1301,13 @@ export default function Home() {
   const diagramPresenceSentAtRef = useRef(0);
   const diagramSavedSnapshotRef = useRef('');
   const diagramBaseDocumentRef = useRef<DiagramDocument>({ strokes: [], elements: [] });
+  const diagramInFlightDocumentRef = useRef<DiagramDocument | null>(null);
   const diagramBaseTitleRef = useRef('Схема');
   const diagramDocumentRef = useRef<DiagramDocument>({ strokes: [], elements: [] });
   const diagramTitleRef = useRef('Схема');
   const diagramSocketRef = useRef<WebSocket | null>(null);
+  const diagramInlineTextEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const diagramLastSyncAtRef = useRef(0);
   // WebSocket makes remote edits immediate. The version is also polled as a
   // fallback: reverse proxies can silently drop an upgraded connection.
   const diagramServerVersionRef = useRef(-1);
@@ -1892,7 +1895,7 @@ export default function Home() {
     const applyMerge = (event: DiagramMergeEvent) => {
       const base = withDiagramObjectIds(event.base_document);
       const incoming = withDiagramObjectIds(event.document);
-      const merged = mergeDiagramDocument(diagramDocumentRef.current, base, incoming);
+      const merged = mergeDiagramDocument(diagramDocumentRef.current, diagramInFlightDocumentRef.current ?? base, incoming);
       diagramDocumentRef.current = merged;
       diagramBaseDocumentRef.current = mergeDiagramDocument(diagramBaseDocumentRef.current, base, incoming);
       setDiagramStrokes(merged.strokes);
@@ -1938,7 +1941,7 @@ export default function Home() {
           const before = diagramDocumentRef.current;
           const hadLocalChanges = JSON.stringify({ title: diagramTitleRef.current.trim(), document: before }) !== diagramSavedSnapshotRef.current;
           const remoteDocument = withDiagramObjectIds(remote.document);
-          const merged = mergeDiagramDocument(before, diagramBaseDocumentRef.current, remoteDocument);
+          const merged = mergeDiagramDocument(before, diagramInFlightDocumentRef.current ?? diagramBaseDocumentRef.current, remoteDocument);
           const keepLocalTitle = diagramTitleRef.current.trim() !== diagramBaseTitleRef.current;
           const title = keepLocalTitle ? diagramTitleRef.current : remote.title;
           diagramServerVersionRef.current = remote.version;
@@ -1972,10 +1975,25 @@ export default function Home() {
   }, [diagramZoom, isDiagramOpen]);
 
   useEffect(() => {
+    if (editingDiagramTextIndex === null) return;
+    const frame = window.requestAnimationFrame(() => {
+      const editor = diagramInlineTextEditorRef.current;
+      if (!editor) return;
+      editor.focus();
+      editor.setSelectionRange(editor.value.length, editor.value.length);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [editingDiagramTextIndex]);
+
+  useEffect(() => {
     if (!isDiagramOpen || isDiagramSaving || !selected || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     const snapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
     if (!diagramTitle.trim() || snapshot === diagramSavedSnapshotRef.current) return;
-    const timer = window.setTimeout(() => saveDiagram(false), 220);
+    // This is a throttle rather than a debounce. Long freehand strokes and a
+    // resize therefore become visible to collaborators before the pointer is
+    // released, while the API still receives a bounded number of requests.
+    const delay = Math.max(0, 160 - (Date.now() - diagramLastSyncAtRef.current));
+    const timer = window.setTimeout(() => saveDiagram(false), delay);
     return () => window.clearTimeout(timer);
   }, [diagramElements, diagramStrokes, diagramTitle, isDiagramOpen, isDiagramSaving, selected?.id]);
 
@@ -3975,12 +3993,17 @@ export default function Home() {
     const baseTitle = diagramBaseTitleRef.current;
     const snapshot = JSON.stringify({ title, document });
     const request: DiagramMergeRequest = { operation_id: crypto.randomUUID(), title, base_title: baseTitle, base_document: baseDocument, document };
+    diagramLastSyncAtRef.current = Date.now();
+    diagramInFlightDocumentRef.current = document;
     setDiagramSaving(true);
     void fetch(`${API_URL}/v1/cards/${selected.id}/diagram/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })
       .then(async (response) => { if (!response.ok) { const message = (await response.json().catch(() => null) as { message?: string } | null)?.message; throw new Error(message ?? 'diagram save failed'); } return response.json() as Promise<Diagram>; })
       .then((saved) => {
         const canonical = withDiagramObjectIds(saved.document);
-        const merged = mergeDiagramDocument(diagramDocumentRef.current, baseDocument, canonical);
+        // `document` is the exact snapshot sent by this request. Comparing the
+        // response against it preserves new points drawn while the request was
+        // in flight instead of snapping a live stroke backwards.
+        const merged = mergeDiagramDocument(diagramDocumentRef.current, document, canonical);
         diagramServerVersionRef.current = saved.version;
         diagramDocumentRef.current = merged;
         diagramBaseDocumentRef.current = canonical;
@@ -3992,7 +4015,7 @@ export default function Home() {
         if (closeAfterSave) { setDiagramOpen(false); showToast('Схема сохранена'); }
       })
       .catch((error) => { if (closeAfterSave) showToast(error instanceof Error ? error.message : 'Не удалось сохранить схему'); })
-      .finally(() => setDiagramSaving(false));
+      .finally(() => { diagramInFlightDocumentRef.current = null; setDiagramSaving(false); });
   }
   function closeDiagram() {
     const snapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
@@ -5310,7 +5333,7 @@ export default function Home() {
           </>}
         </div>
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.4, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .4} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(1.6, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 1.6} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
-        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea className="diagram-inline-text-editor" autoFocus value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
+        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
         <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly}>↶ Отменить</button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button><span className="diagram-autosave-status" aria-live="polite">{isDiagramSaving ? 'Сохраняем…' : 'Сохраняется автоматически'}</span></div>
       </section>
     </div>}
