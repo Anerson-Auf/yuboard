@@ -75,6 +75,8 @@ type BoardLocalPreferences = {
 };
 const boardContentToggleOptions = [{ value: 'columns', label: 'Колонки' }, { value: 'members', label: 'По людям' }, { value: 'schedule', label: 'Календарь' }] as const;
 const boardViewToggleOptions = [{ value: 'standard', label: 'Ряд' }, { value: 'freeform', label: 'Свободно', title: 'Колонки можно свободно двигать; Shift включает привязку к сетке' }, { value: 'dependencies', label: 'Зависимости', title: 'Дерево связей между карточками' }] as const;
+const filterModeLabels: Record<Exclude<FilterMode, 'all'>, string> = { assigned: 'Назначенные мне', my_roles: 'По моим ролям', due: 'С дедлайном', overdue: 'Просроченные', unread: 'Непрочитанное' };
+const cardSortLabels: Record<Exclude<CardSort, 'manual'>, string> = { priority: 'Важные', activity: 'Недавние' };
 type MemberDragState = { card: Card; sourceMemberId: string | null };
 type FreeformPosition = { x: number; y: number };
 type BoardLayout = { view_mode: BoardViewMode; positions: { list_id: string; x: number; y: number }[] };
@@ -911,6 +913,8 @@ export default function Home() {
   const [memberDrag, setMemberDrag] = useState<MemberDragState | null>(null);
   const [labelsCollapsed, setLabelsCollapsed] = useState(false);
   const [isFilterOpen, setFilterOpen] = useState(false);
+  const [isRecentCardsOpen, setRecentCardsOpen] = useState(false);
+  const [recentCardIds, setRecentCardIds] = useState<string[]>([]);
   const [isBoardLabelsOpen, setBoardLabelsOpen] = useState(false);
   const [isMilestonesOpen, setMilestonesOpen] = useState(false);
   const [isMembersPopoverOpen, setMembersPopoverOpen] = useState(false);
@@ -1224,6 +1228,7 @@ export default function Home() {
   const selectedCardId = selected?.id;
 
   const pinnedCardsStorageKey = account && boardId ? `flowboard.pinned-cards.${account.user.id}.${boardId}` : null;
+  const recentCardsStorageKey = boardId ? `flowboard.recent-cards.${account?.user.id ?? 'guest'}.${boardId}` : null;
   const boardUiScaleStorageKey = boardId ? `flowboard.board-ui-scale.${account?.user.id ?? 'guest'}.${boardId}` : null;
   const boardPreferencesStorageKey = boardId ? `flowboard.board-preferences.${account?.user.id ?? 'guest'}.${boardId}` : null;
 
@@ -1234,6 +1239,19 @@ export default function Home() {
       setPinnedCardIds(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string').slice(0, 12) : []);
     } catch { setPinnedCardIds([]); }
   }, [pinnedCardsStorageKey]);
+
+  useEffect(() => {
+    if (!recentCardsStorageKey) { setRecentCardIds([]); return; }
+    try {
+      const stored = JSON.parse(localStorage.getItem(recentCardsStorageKey) ?? '[]');
+      setRecentCardIds(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string').slice(0, 12) : []);
+    } catch { setRecentCardIds([]); }
+  }, [recentCardsStorageKey]);
+
+  useEffect(() => {
+    if (!recentCardsStorageKey) return;
+    try { localStorage.setItem(recentCardsStorageKey, JSON.stringify(recentCardIds.slice(0, 12))); } catch { /* History is optional local convenience. */ }
+  }, [recentCardIds, recentCardsStorageKey]);
 
   useEffect(() => {
     if (!boardPreferencesStorageKey) {
@@ -1749,12 +1767,13 @@ export default function Home() {
   }, [diagramHistory, isDiagramOpen]);
 
   useEffect(() => {
-    if (!isBoardMenuOpen && !isBoardScaleOpen && !isFilterOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId && !reactionPickerCommentId && !stickerPickerTarget) return;
+    if (!isBoardMenuOpen && !isBoardScaleOpen && !isFilterOpen && !isRecentCardsOpen && !isBoardLabelsOpen && !isMilestonesOpen && !isMembersPopoverOpen && !isCardMilestoneOpen && !isNotificationsOpen && !sidebarPanel && !columnMenuId && !reactionPickerCommentId && !stickerPickerTarget) return;
     const closePopovers = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
       if (isBoardMenuOpen && !event.target.closest('.board-menu-control')) setBoardMenuOpen(false);
       if (isBoardScaleOpen && !event.target.closest('.board-scale-control')) setBoardScaleOpen(false);
       if (isFilterOpen && !event.target.closest('.filter-control')) setFilterOpen(false);
+      if (isRecentCardsOpen && !event.target.closest('.recent-cards-control')) setRecentCardsOpen(false);
       if (isBoardLabelsOpen && !event.target.closest('.board-labels-control')) { setBoardLabelsOpen(false); setEditingBoardLabel(null); }
       if (isMilestonesOpen && !event.target.closest('.board-milestones-control')) setMilestonesOpen(false);
       if (isMembersPopoverOpen && !event.target.closest('.board-members-control')) setMembersPopoverOpen(false);
@@ -1767,7 +1786,7 @@ export default function Home() {
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setBoardMenuOpen(false); setBoardScaleOpen(false); setFilterOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setNotificationsOpen(false); setColumnMenuId(null); setSidebarPanel(null); setReactionPickerCommentId(null); setStickerPickerTarget(null);
+      setBoardMenuOpen(false); setBoardScaleOpen(false); setFilterOpen(false); setRecentCardsOpen(false); setBoardLabelsOpen(false); setEditingBoardLabel(null); setMilestonesOpen(false); setMembersPopoverOpen(false); setCardMilestoneOpen(false); setNotificationsOpen(false); setColumnMenuId(null); setSidebarPanel(null); setReactionPickerCommentId(null); setStickerPickerTarget(null);
     };
     // A limit field commits on blur. Closing a column menu on pointerdown
     // unmounted that field before the blur event could run, so a typed value
@@ -1775,7 +1794,7 @@ export default function Home() {
     window.addEventListener('click', closePopovers);
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('click', closePopovers); window.removeEventListener('keydown', closeOnEscape); };
-  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isBoardScaleOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, reactionPickerCommentId, sidebarPanel, stickerPickerTarget]);
+  }, [columnMenuId, isBoardLabelsOpen, isBoardMenuOpen, isBoardScaleOpen, isCardMilestoneOpen, isFilterOpen, isMembersPopoverOpen, isMilestonesOpen, isNotificationsOpen, isRecentCardsOpen, reactionPickerCommentId, sidebarPanel, stickerPickerTarget]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2751,6 +2770,7 @@ export default function Home() {
 
   function openCard(card: Card) {
     setLastOpenedCard(card);
+    if (typeof card.id === 'string' && !isParkingCardId(card.id)) setRecentCardIds((current) => [card.id, ...current.filter((id) => id !== card.id)].slice(0, 12));
     setSelected(card);
     setCardAdditionalOptionsOpen(false);
     setEditingCardDescription(false);
@@ -4647,6 +4667,15 @@ export default function Home() {
       .catch((error) => setProfileError(error instanceof Error ? error.message : 'Не удалось загрузить аватар')).finally(() => setSavingProfile(false));
   }
 
+  const currentBoardCards = columns.flatMap((column) => column.cards.map((card) => ({ card, listTitle: column.title })));
+  const recentCards = recentCardIds.flatMap((id) => currentBoardCards.filter(({ card }) => String(card.id) === id)).slice(0, 12);
+  const activeBoardFilters = [
+    ...(filterMode === 'all' ? [] : [{ key: 'mode', label: filterModeLabels[filterMode], clear: () => setFilterMode('all') }]),
+    ...labelFilterIds.flatMap((id) => boardLabels.filter((label) => label.id === id).map((label) => ({ key: `label-${id}`, label: `Метка: ${label.name}`, clear: () => setLabelFilterIds((current) => current.filter((currentId) => currentId !== id)) }))),
+    ...(milestoneFilterId ? milestones.filter((milestone) => milestone.id === milestoneFilterId).map((milestone) => ({ key: 'milestone', label: `Milestone: ${milestone.name}`, clear: () => setMilestoneFilterId(null) })) : []),
+    ...(cardSort === 'manual' ? [] : [{ key: 'sort', label: `Порядок: ${cardSortLabels[cardSort]}`, clear: () => setCardSort('manual') }]),
+  ];
+
   if (authState === 'checking') {
     return <main className="app-shell dark"><div className="board-loading auth-loading" role="status"><span className="loading-dot" />Проверяем доступ к пространству</div><ReleaseHistoryWidget /></main>;
   }
@@ -4691,6 +4720,7 @@ export default function Home() {
           <SegmentedToggle className="board-segmented-toggle" label="Представление задач" options={boardContentToggleOptions} value={boardContentMode} onChange={(next) => setBoardContentMode(next as BoardContentMode)} />
           {!isPublicViewer && boardContentMode === 'columns' && <SegmentedToggle className="board-segmented-toggle" label="Режим расположения колонок" options={boardViewToggleOptions} value={boardViewMode} onChange={(next) => changeBoardViewMode(next as BoardViewMode)} />}
           <div className="board-scale-control"><button className={`board-icon-button ${boardUiScale !== 'normal' ? 'active-filter' : ''}`} type="button" title="Масштаб доски" aria-label="Масштаб доски" aria-expanded={isBoardScaleOpen} onClick={() => setBoardScaleOpen((current) => !current)}><span aria-hidden="true">A↔</span></button>{isBoardScaleOpen && <div className="board-scale-popover" role="dialog" aria-label="Масштаб доски"><div><b>Масштаб доски</b><small>Только для вас на этой доске</small></div>{([['compact', 'A−', 'Компактнее'], ['normal', 'A', 'Обычный'], ['roomy', 'A+', 'Крупнее']] as [BoardUiScale, string, string][]).map(([value, icon, label]) => <button key={value} type="button" className={boardUiScale === value ? 'active' : ''} onClick={() => { changeBoardUiScale(value); setBoardScaleOpen(false); }}><span>{icon}</span><b>{label}</b>{boardUiScale === value && <i>✓</i>}</button>)}</div>}</div>
+          {recentCards.length > 0 && <div className="recent-cards-control"><button className="board-icon-button" type="button" title="Недавно открытые карточки" aria-label="Недавно открытые карточки" aria-expanded={isRecentCardsOpen} onClick={() => setRecentCardsOpen((current) => !current)}>◷</button>{isRecentCardsOpen && <div className="recent-cards-popover" role="dialog" aria-label="Недавно открытые карточки"><div className="popover-heading"><b>Недавно открытые</b><button type="button" onClick={() => { setRecentCardIds([]); setRecentCardsOpen(false); }} title="Очистить историю" aria-label="Очистить историю">×</button></div>{recentCards.map(({ card, listTitle }) => <button type="button" key={String(card.id)} onClick={() => { setRecentCardsOpen(false); openCard(card); }}><span>{card.completedAt ? '✓' : '□'}</span><b>{card.title}</b><small>{listTitle}</small></button>)}</div>}</div>}
           <div className="filter-control">
             <button className={`board-icon-button ${filterMode !== 'all' || cardSort !== 'manual' || labelFilterIds.length ? 'active-filter' : ''}`} type="button" title="Фильтры и сортировка" aria-label="Фильтры и сортировка" aria-expanded={isFilterOpen} onClick={() => setFilterOpen((current) => !current)}><BoardToolbarIcon type="filter" /></button>
           {isFilterOpen && <div className="filter-popover" role="dialog" aria-label="Фильтры и сортировка"><div className="filter-popover-heading"><b>Фильтры</b>{(filterMode !== 'all' || cardSort !== 'manual' || labelFilterIds.length > 0) && <button type="button" onClick={() => { setFilterMode('all'); setCardSort('manual'); setLabelFilterIds([]); }}>Сбросить</button>}</div><section><p>Показывать</p><div className="filter-mode-grid">{([['all', 'Все задачи'], ['assigned', 'Назначенные мне'], ['my_roles', 'По моим ролям'], ['due', 'С дедлайном'], ['overdue', 'Просроченные'], ['unread', 'Непрочитанное']] as [FilterMode, string][]).map(([mode, label]) => <button key={mode} className={filterMode === mode ? 'active' : ''} onClick={() => setFilterMode(mode)}>{label}{filterMode === mode && <b>✓</b>}</button>)}</div></section>{boardLabels.length > 0 && <section className="filter-popover-section"><p>Метки</p><div className="label-filter-options">{boardLabels.map((label) => <button key={label.id} type="button" className={labelFilterIds.includes(label.id) ? 'active' : ''} onClick={() => setLabelFilterIds((current) => current.includes(label.id) ? current.filter((id) => id !== label.id) : [...current, label.id])}><LabelChip label={label} />{labelFilterIds.includes(label.id) && <b>✓</b>}</button>)}</div>{labelFilterIds.length > 0 && <button type="button" className="text-action label-filter-reset" onClick={() => setLabelFilterIds([])}>Сбросить метки</button>}</section>}<section className="filter-popover-section"><p>Порядок в колонках</p><div className="filter-sort-options">{([['manual', 'Как на доске'], ['priority', 'Важные'], ['activity', 'Недавние']] as [CardSort, string][]).map(([mode, label]) => <button key={mode} className={cardSort === mode ? 'active' : ''} onClick={() => setCardSort(mode)}>{label}</button>)}</div></section></div>}
@@ -4715,6 +4745,7 @@ export default function Home() {
             <section className="discord-integration-list"><h3>Активные токены</h3>{isDiscordIntegrationLoading ? <p className="detail-loading">Загружаем…</p> : discordIntegrations.length ? discordIntegrations.map((integration) => <article key={integration.id}><div><b>{integration.name}</b><small>Вся доска · по умолчанию: {columns.find((column) => String(column.id) === integration.default_list_id)?.title ?? 'не выбрана'} · {integration.last_used_at ? `последнее использование ${new Date(integration.last_used_at).toLocaleString('ru-RU')}` : 'ещё не использовался'}</small></div><button className="danger-action" type="button" onClick={() => revokeDiscordIntegration(integration)}>Отозвать</button></article>) : <p className="empty-comments">Активных токенов нет.</p>}</section>
           </section>
         </div>}
+      {activeBoardFilters.length > 0 && <div className="active-board-filters" aria-label="Активные фильтры"><span>Показаны:</span>{activeBoardFilters.map((filter) => <button type="button" key={filter.key} onClick={filter.clear}>{filter.label}<i aria-hidden="true">×</i></button>)}<button type="button" className="active-board-filters-reset" onClick={() => { setFilterMode('all'); setLabelFilterIds([]); setMilestoneFilterId(null); setCardSort('manual'); }}>Сбросить всё</button></div>}
       {isPublicViewer && <p className="public-board-notice">Публичный просмотр · Войдите в аккаунт, чтобы работать с задачами.</p>}
       {isBulkMode && <aside className="bulk-actions bulk-actions-compact" aria-label="Массовые действия"><header><b>Выбрано: {bulkCardIds.length}</b><span>ЛКМ ведите по карточкам · ПКМ добавляет</span><button type="button" className="bulk-close" onClick={() => { setBulkMode(false); setBulkCardIds([]); }}>×</button></header><footer><button type="button" onClick={() => void applyBulkAction('complete')} disabled={!bulkCardIds.length || isApplyingBulkAction}>✓ Выполнить</button><label>Приоритет<select defaultValue="" onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) void applyBulkAction('priority', value); event.currentTarget.value = ''; }} disabled={!bulkCardIds.length || isApplyingBulkAction}><option value="" disabled>Выбрать</option>{[0, 1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value || 'Снять'}</option>)}</select></label><label>Перенести<select value={bulkTargetListId} onChange={(event) => setBulkTargetListId(event.target.value)} disabled={isApplyingBulkAction}><option value="">Выбрать колонку</option>{columns.map((column) => <option key={column.id} value={column.id}>{column.title}</option>)}</select></label><button type="button" onClick={() => void applyBulkAction('move')} disabled={!bulkCardIds.length || !bulkTargetListId || isApplyingBulkAction}>→ Перенести</button><button type="button" className="danger-action" onClick={() => void applyBulkAction('archive')} disabled={!bulkCardIds.length || isApplyingBulkAction}>Архив</button></footer></aside>}
       {account && boardId && <PinnedCardsShelf ids={pinnedCardIds} cards={columns.flatMap((column) => column.cards.map((card) => ({ id: String(card.id), title: card.title, listTitle: column.title, completed: Boolean(card.completedAt) })))} onOpen={(cardId) => { const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === cardId); if (card) openCard(card); }} onUnpin={togglePinnedCard} />}
