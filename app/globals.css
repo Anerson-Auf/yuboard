@@ -775,7 +775,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 /* Roles are deliberately quieter than board labels: a dark compact capsule
    with the role colour kept in its shape and rim. */
-.profile-role-chip { min-height: 0; padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--profile-role-color) 45%, var(--line)); border-radius: 999px; background-color: color-mix(in srgb, var(--profile-role-color) 20%, var(--surface-raised)) !important; font-size: 13px; font-weight: 500; line-height: 1; }.profile-role-chip .role-shape-icon { width: 13px; height: 13px; flex: 0 0 13px; }.profile-role-chip.compact { min-height: 0; padding: 1px 7px; font-size: 12px; }.profile-role-chip:hover { background-color: color-mix(in srgb, var(--profile-role-color) 29%, var(--surface-raised)) !important; }
+.profile-role-chip { min-height: 0; padding: 1px 7px !important; border: 1px solid color-mix(in srgb, var(--profile-role-color) 45%, var(--line)); border-radius: 999px; background-color: color-mix(in srgb, var(--profile-role-color) 20%, var(--surface-raised)) !important; font-size: 13px; font-weight: 500; line-height: 1.05; }.profile-role-chip .role-shape-icon { width: 13px; height: 13px; flex: 0 0 13px; }.profile-role-chip.compact { min-height: 0; padding: 1px 6px !important; font-size: 12px; }.profile-role-chip:hover { background-color: color-mix(in srgb, var(--profile-role-color) 29%, var(--surface-raised)) !important; }
 
 /* Avatar opens a quick account menu, matching the Work menu. Full profile
    editing is deliberately one explicit click away. */
