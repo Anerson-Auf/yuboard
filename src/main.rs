@@ -37,6 +37,7 @@ struct AppState {
     events: broadcast::Sender<()>,
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
     board_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, BoardPresence>>>>,
+    diagram_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, DiagramCursorPresence>>>>,
     freeform_live_events: broadcast::Sender<FreeformLiveEvent>,
     auth_rate_limiter: RateLimiter,
     trust_proxy: bool,
@@ -424,6 +425,15 @@ struct BoardPresence {
     editing_description: bool,
     last_seen: Instant,
 }
+
+#[derive(Clone)]
+struct DiagramCursorPresence { x: i32, y: i32, last_seen: Instant }
+
+#[derive(Deserialize)]
+struct UpdateDiagramPresenceRequest { x: i32, y: i32 }
+
+#[derive(Serialize)]
+struct DiagramPresenceEntry { user_id: Uuid, username: String, x: i32, y: i32 }
 
 #[derive(Deserialize)]
 struct UpdateBoardPresenceRequest {
@@ -1729,6 +1739,7 @@ async fn main() {
         .route("/v1/notifications/read", post(mark_all_notifications_read))
         .route("/v1/notifications/{notification_id}/read", post(mark_notification_read))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
+        .route("/v1/cards/{card_id}/diagram/presence", get(get_card_diagram_presence).put(update_card_diagram_presence))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
         .route("/v1/checklists/{checklist_id}", patch(update_checklist).delete(delete_checklist))
         .route("/v1/checklists/{checklist_id}/items", post(create_checklist_item))
@@ -1761,7 +1772,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), diagram_presence: Arc::new(Mutex::new(HashMap::new())), freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -4664,6 +4675,39 @@ fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {
         }
     }
     Ok(())
+}
+
+async fn card_diagram_presence_snapshot(state: &AppState, card_id: Uuid, current_user_id: Uuid) -> ApiResult<Vec<DiagramPresenceEntry>> {
+    let active = {
+        let now = Instant::now();
+        let mut cards = state.diagram_presence.lock().await;
+        let card = cards.entry(card_id).or_default();
+        card.retain(|_, presence| now.duration_since(presence.last_seen) <= Duration::from_secs(8));
+        card.iter()
+            .filter(|(user_id, _)| **user_id != current_user_id)
+            .map(|(user_id, presence)| (*user_id, presence.x, presence.y))
+            .collect::<Vec<_>>()
+    };
+    if active.is_empty() { return Ok(Json(Vec::new())); }
+    let user_ids = active.iter().map(|(user_id, _, _)| *user_id).collect::<Vec<_>>();
+    let accounts = sqlx::query_as::<_, FreeformLiveAccount>("SELECT id, username, CASE WHEN avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || id::text END AS avatar_url FROM users WHERE id = ANY($1) AND disabled_at IS NULL")
+        .bind(&user_ids).fetch_all(database(state)?).await.map_err(ApiError::internal)?;
+    let accounts = accounts.into_iter().map(|account| (account.id, account)).collect::<HashMap<_, _>>();
+    Ok(Json(active.into_iter().filter_map(|(user_id, x, y)| accounts.get(&user_id).map(|account| DiagramPresenceEntry { user_id, username: account.username.clone(), x, y })).collect()))
+}
+
+async fn get_card_diagram_presence(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<DiagramPresenceEntry>> {
+    ensure_card_public_read(database(&state)?, card_id, Some(current.id)).await?;
+    card_diagram_presence_snapshot(&state, card_id, current.id).await
+}
+
+async fn update_card_diagram_presence(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateDiagramPresenceRequest>) -> ApiResult<Vec<DiagramPresenceEntry>> {
+    if !(0..=20_000).contains(&request.x) || !(0..=20_000).contains(&request.y) {
+        return Err(ApiError::bad_request("Diagram cursor coordinates must be between 0 and 20000."));
+    }
+    ensure_card_public_read(database(&state)?, card_id, Some(current.id)).await?;
+    state.diagram_presence.lock().await.entry(card_id).or_default().insert(current.id, DiagramCursorPresence { x: request.x, y: request.y, last_seen: Instant::now() });
+    card_diagram_presence_snapshot(&state, card_id, current.id).await
 }
 
 async fn get_card_diagram(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<Option<DiagramResponse>> {

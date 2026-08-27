@@ -115,6 +115,7 @@ type DiagramTool = 'select' | 'draw' | 'erase' | 'rectangle' | 'ellipse' | 'arro
 type DiagramSnapshot = { strokes: DiagramStroke[]; elements: DiagramElement[] };
 type DiagramHandle = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'start' | 'end';
 type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean };
+type DiagramPresence = { user_id: string; username: string; x: number; y: number };
 type CardContextMenu = { card: Card; x: number; y: number };
 type ColumnContextMenu = { column: Column; x: number; y: number };
 type ViewportRect = { left: number; top: number; width: number; height: number };
@@ -1146,6 +1147,9 @@ export default function Home() {
   const [diagramFontWeight, setDiagramFontWeight] = useState<'normal' | 'bold'>('normal');
   const [diagramZoom, setDiagramZoom] = useState(.7);
   const [diagramImageRevision, setDiagramImageRevision] = useState(0);
+  const [diagramPresence, setDiagramPresence] = useState<DiagramPresence[]>([]);
+  const [editingDiagramTextIndex, setEditingDiagramTextIndex] = useState<number | null>(null);
+  const [editingDiagramTextDraft, setEditingDiagramTextDraft] = useState('');
   const [isDiagramSaving, setDiagramSaving] = useState(false);
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dragOverListId, setDragOverListId] = useState<EntityId | null>(null);
@@ -1228,6 +1232,7 @@ export default function Home() {
   const parkingDragPointRef = useRef({ x: 0, y: 0 });
   const cardDragPreviewElementRef = useRef<HTMLDivElement | null>(null);
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const diagramViewportRef = useRef<HTMLDivElement | null>(null);
   const diagramImageUploadRef = useRef<HTMLInputElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
@@ -1242,6 +1247,9 @@ export default function Home() {
   const isDrawingRef = useRef(false);
   const diagramStartRef = useRef<DiagramPoint | null>(null);
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
+  const diagramPanRef = useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
+  const diagramPresenceSentAtRef = useRef(0);
+  const diagramSavedSnapshotRef = useRef('');
 
   useEffect(() => {
     if (!isWorkspaceToolsOpen) return;
@@ -1794,6 +1802,44 @@ export default function Home() {
     images.forEach((image) => image.addEventListener('load', refresh, { once: true }));
     return () => images.forEach((image) => image.removeEventListener('load', refresh));
   }, [diagramElements, isDiagramOpen]);
+
+  useEffect(() => {
+    if (!isDiagramOpen || authState !== 'signed-in' || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) {
+      setDiagramPresence([]);
+      return;
+    }
+    let active = true;
+    const cardId = selected.id;
+    const refresh = () => {
+      void fetch(`${API_URL}/v1/cards/${cardId}/diagram/presence`)
+        .then(async (response) => { if (!response.ok) throw new Error('diagram presence failed'); return response.json() as Promise<DiagramPresence[]>; })
+        .then((people) => { if (active) setDiagramPresence(people); })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 350);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [authState, isDiagramOpen, selected?.id]);
+
+  useEffect(() => {
+    const viewport = diagramViewportRef.current;
+    if (!isDiagramOpen || !viewport) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      zoomDiagramAt(viewport, event.clientX, event.clientY, event.deltaY);
+    };
+    viewport.addEventListener('wheel', onWheel, { passive: false });
+    return () => viewport.removeEventListener('wheel', onWheel);
+  }, [diagramZoom, isDiagramOpen]);
+
+  useEffect(() => {
+    if (!isDiagramOpen || isDiagramSaving || !selected || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
+    const snapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
+    if (!diagramTitle.trim() || snapshot === diagramSavedSnapshotRef.current) return;
+    const timer = window.setTimeout(() => saveDiagram(false), 700);
+    return () => window.clearTimeout(timer);
+  }, [diagramElements, diagramStrokes, diagramTitle, isDiagramOpen, isDiagramSaving, selected?.id]);
 
   useEffect(() => {
     if (!isDiagramOpen) return;
@@ -3471,24 +3517,30 @@ export default function Home() {
       .then(async (response) => { if (!response.ok) throw new Error('diagram load failed'); return response.json() as Promise<Diagram | null>; })
       .then((saved) => {
         setDiagram(saved);
+        diagramSavedSnapshotRef.current = JSON.stringify({ title: saved?.title ?? 'Схема', document: { strokes: saved?.document?.strokes ?? [], elements: saved?.document?.elements ?? [] } });
         setDiagramTitle(saved?.title ?? 'Схема');
         setDiagramStrokes(saved?.document?.strokes ?? []);
         setDiagramElements(saved?.document?.elements ?? []);
         setDiagramPreview(null);
         setDiagramHistory([]);
         setSelectedDiagramElement(null);
+        setEditingDiagramTextIndex(null);
+        setEditingDiagramTextDraft('');
         setDiagramTool('select');
         setDiagramZoom(.7);
         setDiagramOpen(true);
       })
       .catch(() => showToast('Не удалось загрузить схему'));
   }
-  function diagramPoint(event: ReactPointerEvent<HTMLCanvasElement>): DiagramPoint | null {
+  function diagramPointFromClient(clientX: number, clientY: number): DiagramPoint | null {
     const canvas = diagramCanvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
-    return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
+    return { x: (clientX - rect.left) * canvas.width / rect.width, y: (clientY - rect.top) * canvas.height / rect.height };
+  }
+  function diagramPoint(event: ReactPointerEvent<HTMLCanvasElement>): DiagramPoint | null {
+    return diagramPointFromClient(event.clientX, event.clientY);
   }
   function rememberDiagramState() {
     setDiagramHistory((current) => [...current.slice(-49), { strokes: diagramStrokes, elements: diagramElements }]);
@@ -3501,6 +3553,43 @@ export default function Home() {
     setDiagramHistory((current) => current.slice(0, -1));
     setSelectedDiagramElement(null);
     setDiagramPreview(null);
+  }
+  function beginDiagramTextEdit(index: number) {
+    const element = diagramElements[index];
+    if (!element || (element.type !== 'text' && element.type !== 'callout')) return;
+    rememberDiagramState();
+    setSelectedDiagramElement(index);
+    setEditingDiagramTextIndex(index);
+    setEditingDiagramTextDraft(element.text);
+  }
+  function updateDiagramTextEdit(text: string) {
+    if (editingDiagramTextIndex === null) return;
+    setEditingDiagramTextDraft(text);
+    setDiagramElements((current) => current.map((element, index) => index === editingDiagramTextIndex && (element.type === 'text' || element.type === 'callout') ? { ...element, text } : element));
+  }
+  function finishDiagramTextEdit() {
+    setEditingDiagramTextIndex(null);
+  }
+  function publishDiagramCursor(point: DiagramPoint) {
+    if (!isDiagramOpen || authState !== 'signed-in' || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
+    const now = Date.now();
+    if (now - diagramPresenceSentAtRef.current < 65) return;
+    diagramPresenceSentAtRef.current = now;
+    void fetch(`${API_URL}/v1/cards/${selected.id}/diagram/presence`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y) }) }).catch(() => undefined);
+  }
+  function zoomDiagramAt(viewport: HTMLDivElement, clientX: number, clientY: number, deltaY: number) {
+    const next = Math.max(.35, Math.min(1.8, Number((diagramZoom + (deltaY > 0 ? -.08 : .08)).toFixed(2))));
+    if (next === diagramZoom) return;
+    const bounds = viewport.getBoundingClientRect();
+    const offsetX = clientX - bounds.left;
+    const offsetY = clientY - bounds.top;
+    const documentX = (viewport.scrollLeft + offsetX) / diagramZoom;
+    const documentY = (viewport.scrollTop + offsetY) / diagramZoom;
+    setDiagramZoom(next);
+    window.requestAnimationFrame(() => {
+      viewport.scrollLeft = documentX * next - offsetX;
+      viewport.scrollTop = documentY * next - offsetY;
+    });
   }
   function diagramElementAtPoint(point: DiagramPoint) {
     for (let index = diagramElements.length - 1; index >= 0; index -= 1) {
@@ -3574,6 +3663,15 @@ export default function Home() {
   function startDiagramStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
     const point = diagramPoint(event);
     if (!point) return;
+    publishDiagramCursor(point);
+    if (event.button === 1) {
+      const viewport = diagramViewportRef.current;
+      if (!viewport) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      diagramPanRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop };
+      return;
+    }
     if (diagramTool === 'select') {
       const index = diagramElementAtPoint(point);
       if (index === null) { setSelectedDiagramElement(null); return; }
@@ -3617,9 +3715,19 @@ export default function Home() {
   }
 
   function continueDiagramStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (!isDrawingRef.current) return;
     const point = diagramPoint(event);
     if (!point) return;
+    publishDiagramCursor(point);
+    const pan = diagramPanRef.current;
+    if (pan?.pointerId === event.pointerId) {
+      const viewport = diagramViewportRef.current;
+      if (viewport) {
+        viewport.scrollLeft = pan.scrollLeft - (event.clientX - pan.startX);
+        viewport.scrollTop = pan.scrollTop - (event.clientY - pan.startY);
+      }
+      return;
+    }
+    if (!isDrawingRef.current) return;
     const interaction = diagramInteractionRef.current;
     if (interaction) {
       if (!interaction.historyStored && Math.hypot(point.x - interaction.start.x, point.y - interaction.start.y) > 1) { rememberDiagramState(); interaction.historyStored = true; }
@@ -3637,6 +3745,10 @@ export default function Home() {
   }
 
   function finishDiagramInteraction(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (diagramPanRef.current?.pointerId === event.pointerId) {
+      diagramPanRef.current = null;
+      return;
+    }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     if (diagramInteractionRef.current) { diagramInteractionRef.current = null; return; }
@@ -3650,14 +3762,31 @@ export default function Home() {
     diagramStartRef.current = null;
     setDiagramPreview(null);
   }
-  function saveDiagram() {
+  function openDiagramTextEditor(event: ReactMouseEvent<HTMLCanvasElement>) {
+    if (diagramTool !== 'select') return;
+    const point = diagramPointFromClient(event.clientX, event.clientY);
+    if (!point) return;
+    const index = diagramElementAtPoint(point);
+    if (index === null) return;
+    const element = diagramElements[index];
+    if (element.type === 'text' || element.type === 'callout') beginDiagramTextEdit(index);
+  }
+  function saveDiagram(closeAfterSave = true) {
     if (!selected || typeof selected.id !== 'string' || !diagramTitle.trim() || isDiagramSaving) return;
+    const title = diagramTitle.trim();
+    const document = { strokes: diagramStrokes, elements: diagramElements };
+    const snapshot = JSON.stringify({ title, document });
     setDiagramSaving(true);
-    void fetch(`${API_URL}/v1/cards/${selected.id}/diagram`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements }, version: diagram?.version ?? null }) })
+    void fetch(`${API_URL}/v1/cards/${selected.id}/diagram`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, document, version: diagram?.version ?? null }) })
       .then(async (response) => { if (!response.ok) { const message = (await response.json().catch(() => null) as { message?: string } | null)?.message; throw new Error(message ?? 'diagram save failed'); } return response.json() as Promise<Diagram>; })
-      .then((saved) => { setDiagram(saved); setDiagramOpen(false); showToast('Схема сохранена'); })
-      .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось сохранить схему'))
+      .then((saved) => { diagramSavedSnapshotRef.current = snapshot; setDiagram(saved); if (closeAfterSave) { setDiagramOpen(false); showToast('Схема сохранена'); } })
+      .catch((error) => { if (closeAfterSave) showToast(error instanceof Error ? error.message : 'Не удалось сохранить схему'); })
       .finally(() => setDiagramSaving(false));
+  }
+  function closeDiagram() {
+    const snapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
+    if (!isDiagramSaving && diagramTitle.trim() && snapshot !== diagramSavedSnapshotRef.current) { saveDiagram(true); return; }
+    setDiagramOpen(false);
   }
   function addWorkspaceMember(event: FormEvent) {
     event.preventDefault();
@@ -4937,12 +5066,12 @@ export default function Home() {
       })}</div></>}</section></div>}
     </>}
 
-    {isDiagramOpen && <div className="modal-backdrop diagram-backdrop" role="presentation" onMouseDown={() => setDiagramOpen(false)}>
+    {isDiagramOpen && <div className="modal-backdrop diagram-backdrop" role="presentation" onMouseDown={closeDiagram}>
       <section className="diagram-modal" role="dialog" aria-modal="true" aria-label="Схема задачи" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" onClick={() => setDiagramOpen(false)} aria-label="Закрыть">×</button>
+        <button className="modal-close" onClick={closeDiagram} aria-label="Закрыть">×</button>
         <p className="eyebrow">CANVAS</p>
         <input className="diagram-title" value={diagramTitle} onChange={(event) => setDiagramTitle(event.target.value)} maxLength={120} aria-label="Название схемы" />
-        <p className="diagram-hint">Выберите инструмент, затем рисуйте на полотне. Текст вставляется кликом по полотну.</p>
+        <p className="diagram-hint">Средняя кнопка мыши двигает полотно, колесо масштабирует к курсору. Двойной клик по тексту открывает его редактирование.</p>
         <div className="diagram-toolbar" role="toolbar" aria-label="Инструменты схемы">
           <div className="diagram-tool-group">
             {([
@@ -4967,8 +5096,9 @@ export default function Home() {
           </>}
         </div>
         {(diagramTool === 'text' || diagramTool === 'callout') && <label className="diagram-text-draft">Текст для вставки<textarea value={diagramTextDraft} onChange={(event) => setDiagramTextDraft(event.target.value)} maxLength={4000} placeholder={diagramTool === 'callout' ? 'Напишите текст, затем протяните выноску от объекта…' : 'Напишите текст, затем кликните по полотну…'} /></label>}
+        {editingDiagramTextIndex !== null && <label className="diagram-text-draft diagram-text-editor">Редактирование текста<textarea autoFocus value={editingDiagramTextDraft} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Текст элемента…" /></label>}
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.4, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .4} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(1.6, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 1.6} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
-        <div className="diagram-viewport"><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} /></div>
+        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>⌁</span><b>@{person.username}</b></div>)}</div></div>
         <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length}>↶ Отменить</button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={!diagramStrokes.length && !diagramElements.length}>Очистить</button><button className="create-button" onClick={saveDiagram} disabled={isDiagramSaving}>{isDiagramSaving ? 'Сохраняем…' : 'Сохранить схему'}</button></div>
       </section>
     </div>}
