@@ -767,7 +767,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 /* Keep both card insets narrow. The list extends under its own scrollbar so
    the right side does not gain a visibly wider empty strip. */
-.column { padding-right: 8px; padding-left: 8px; }.card-list { width: 100%; margin-right: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: auto; }.card-list > .task-card { width: calc(100% + 10px); justify-self: start; }.card-list::-webkit-scrollbar { width: 7px; }.card-list::-webkit-scrollbar-track { margin: 3px 0; background: transparent; }.app-shell.board-ui-scale-compact .column { padding-right: 6px; padding-left: 6px; }.app-shell.board-ui-scale-roomy .column { padding-right: 10px; padding-left: 10px; }
+.column { padding-right: 8px; padding-left: 8px; }.card-list { width: 100%; margin-right: 0; padding-right: 4px; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: auto; }.card-list > .task-card { width: calc(100% + 4px); justify-self: start; }.card-list::-webkit-scrollbar { width: 8px; }.card-list::-webkit-scrollbar-thumb { border-width: 2px; }.card-list::-webkit-scrollbar-track { margin: 3px 0; background: transparent; }.app-shell.board-ui-scale-compact .column { padding-right: 6px; padding-left: 6px; }.app-shell.board-ui-scale-roomy .column { padding-right: 10px; padding-left: 10px; }
 
 /* A pending vote is useful information, not an alarm. Keep it quiet and on
    the same vertical rhythm as the priority signal. */
