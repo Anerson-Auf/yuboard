@@ -1192,7 +1192,6 @@ export default function Home() {
   const [diagramTool, setDiagramTool] = useState<DiagramTool>('draw');
   const [diagramColor, setDiagramColor] = useState('#9ea7ff');
   const [diagramLineWidth, setDiagramLineWidth] = useState(3);
-  const [diagramTextDraft, setDiagramTextDraft] = useState('');
   const [diagramFontSize, setDiagramFontSize] = useState(22);
   const [diagramFontFamily, setDiagramFontFamily] = useState('Inter, system-ui, sans-serif');
   const [diagramFontWeight, setDiagramFontWeight] = useState<'normal' | 'bold'>('normal');
@@ -1306,6 +1305,9 @@ export default function Home() {
   const diagramDocumentRef = useRef<DiagramDocument>({ strokes: [], elements: [] });
   const diagramTitleRef = useRef('Схема');
   const diagramSocketRef = useRef<WebSocket | null>(null);
+  // WebSocket makes remote edits immediate. The version is also polled as a
+  // fallback: reverse proxies can silently drop an upgraded connection.
+  const diagramServerVersionRef = useRef(-1);
 
   useEffect(() => {
     if (!isWorkspaceToolsOpen) return;
@@ -1920,6 +1922,42 @@ export default function Home() {
     connect();
     return () => { active = false; if (reconnectTimer !== null) window.clearTimeout(reconnectTimer); if (diagramSocketRef.current === socket) diagramSocketRef.current = null; socket?.close(); };
   }, [authState, isDiagramOpen, selected?.id]);
+
+  useEffect(() => {
+    if (!isDiagramOpen || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
+    let active = true;
+    const cardId = selected.id;
+    const refresh = () => {
+      void fetch(`${API_URL}/v1/cards/${cardId}/diagram`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error('diagram refresh failed');
+          return response.json() as Promise<Diagram | null>;
+        })
+        .then((remote) => {
+          if (!active || !remote || remote.version <= diagramServerVersionRef.current) return;
+          const before = diagramDocumentRef.current;
+          const hadLocalChanges = JSON.stringify({ title: diagramTitleRef.current.trim(), document: before }) !== diagramSavedSnapshotRef.current;
+          const remoteDocument = withDiagramObjectIds(remote.document);
+          const merged = mergeDiagramDocument(before, diagramBaseDocumentRef.current, remoteDocument);
+          const keepLocalTitle = diagramTitleRef.current.trim() !== diagramBaseTitleRef.current;
+          const title = keepLocalTitle ? diagramTitleRef.current : remote.title;
+          diagramServerVersionRef.current = remote.version;
+          diagramDocumentRef.current = merged;
+          diagramBaseDocumentRef.current = remoteDocument;
+          diagramBaseTitleRef.current = remote.title;
+          diagramTitleRef.current = title;
+          if (!hadLocalChanges) diagramSavedSnapshotRef.current = JSON.stringify({ title, document: merged });
+          setDiagramStrokes(merged.strokes);
+          setDiagramElements(merged.elements ?? []);
+          setDiagramTitle(title);
+          setDiagram({ ...remote, document: remoteDocument });
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 350);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [isDiagramOpen, selected?.id]);
 
   useEffect(() => {
     const viewport = diagramViewportRef.current;
@@ -3625,6 +3663,7 @@ export default function Home() {
         const document = withDiagramObjectIds(rawDocument);
         const title = saved?.title ?? 'Схема';
         setDiagram(saved ? { ...saved, document } : null);
+        diagramServerVersionRef.current = saved?.version ?? -1;
         diagramBaseDocumentRef.current = document;
         diagramBaseTitleRef.current = title;
         diagramDocumentRef.current = document;
@@ -3689,6 +3728,21 @@ export default function Home() {
   function finishDiagramTextEdit() {
     setEditingDiagramTextIndex(null);
   }
+  function updateSelectedDiagramTextStyle(patch: Partial<Pick<DiagramText | DiagramCallout, 'color' | 'fontSize' | 'fontFamily' | 'fontWeight'>>) {
+    if (selectedDiagramElement === null) return;
+    setDiagramElements((current) => current.map((element, index) => index === selectedDiagramElement && (element.type === 'text' || element.type === 'callout') ? { ...element, ...patch } : element));
+  }
+  function selectedDiagramTextElement() {
+    const element = selectedDiagramElement === null ? null : diagramElements[selectedDiagramElement];
+    return element?.type === 'text' || element?.type === 'callout' ? element : null;
+  }
+  function setDiagramTextStyle(patch: Partial<Pick<DiagramText | DiagramCallout, 'color' | 'fontSize' | 'fontFamily' | 'fontWeight'>>) {
+    if (patch.color) setDiagramColor(patch.color);
+    if (patch.fontSize) setDiagramFontSize(patch.fontSize);
+    if (patch.fontFamily) setDiagramFontFamily(patch.fontFamily);
+    if (patch.fontWeight) setDiagramFontWeight(patch.fontWeight);
+    updateSelectedDiagramTextStyle(patch);
+  }
   function publishDiagramCursor(point: DiagramPoint) {
     if (!isDiagramOpen || authState !== 'signed-in' || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
     const now = Date.now();
@@ -3727,7 +3781,9 @@ export default function Home() {
     return null;
   }
   function diagramHandleAtPoint(element: DiagramElement, point: DiagramPoint): DiagramHandle | null {
-    const near = (target: DiagramPoint) => Math.hypot(point.x - target.x, point.y - target.y) <= 11;
+    // The drawn corner is small, but its click target must remain comfortable
+    // at every zoom level and not depend on hitting a single canvas pixel.
+    const near = (target: DiagramPoint) => Math.hypot(point.x - target.x, point.y - target.y) <= 20;
     if (element.type === 'arrow' || element.type === 'callout') return near({ x: element.x, y: element.y }) ? 'start' : near({ x: element.x2, y: element.y2 }) ? 'end' : null;
     const bounds = diagramBounds(element);
     if (near({ x: bounds.left, y: bounds.top })) return 'nw';
@@ -3793,10 +3849,12 @@ export default function Home() {
     }
     if (isSelectedReadOnly) return;
     if (diagramTool === 'select') {
-      const index = diagramElementAtPoint(point);
+      const selectedElement = selectedDiagramElement === null ? null : diagramElements[selectedDiagramElement];
+      const selectedHandle = selectedElement ? diagramHandleAtPoint(selectedElement, point) : null;
+      const index = selectedHandle !== null && selectedDiagramElement !== null ? selectedDiagramElement : diagramElementAtPoint(point);
       if (index === null) { setSelectedDiagramElement(null); return; }
       const element = diagramElements[index];
-      const handle = selectedDiagramElement === index ? diagramHandleAtPoint(element, point) : null;
+      const handle = selectedHandle ?? (selectedDiagramElement === index ? diagramHandleAtPoint(element, point) : null);
       setSelectedDiagramElement(index);
       event.currentTarget.setPointerCapture(event.pointerId);
       isDrawingRef.current = true;
@@ -3804,14 +3862,14 @@ export default function Home() {
       return;
     }
     if (diagramTool === 'text') {
-      const text = diagramTextDraft.trim();
-      if (!text) { showToast('Сначала напишите текст в панели схемы'); return; }
       rememberDiagramState();
-      setDiagramElements((current) => [...current, { id: crypto.randomUUID(), type: 'text', x: point.x, y: point.y, text, color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight }]);
-      setSelectedDiagramElement(diagramElements.length);
+      const index = diagramElements.length;
+      setDiagramElements((current) => [...current, { id: crypto.randomUUID(), type: 'text', x: point.x, y: point.y, text: '', color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight }]);
+      setSelectedDiagramElement(index);
+      setEditingDiagramTextIndex(index);
+      setEditingDiagramTextDraft('');
       return;
     }
-    if (diagramTool === 'callout' && !diagramTextDraft.trim()) { showToast('Сначала напишите текст выноски в панели схемы'); return; }
     event.currentTarget.setPointerCapture(event.pointerId);
     isDrawingRef.current = true;
     if (diagramTool === 'draw') {
@@ -3830,7 +3888,7 @@ export default function Home() {
 
   function diagramElementFromDrag(tool: Exclude<DiagramTool, 'select' | 'draw' | 'erase' | 'text'>, start: DiagramPoint, end: DiagramPoint): DiagramElement {
     if (tool === 'arrow') return { id: crypto.randomUUID(), type: 'arrow', x: start.x, y: start.y, x2: end.x, y2: end.y, color: diagramColor, lineWidth: diagramLineWidth };
-    if (tool === 'callout') return { id: crypto.randomUUID(), type: 'callout', x: start.x, y: start.y, x2: end.x, y2: end.y, text: diagramTextDraft.trim(), color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight };
+    if (tool === 'callout') return { id: crypto.randomUUID(), type: 'callout', x: start.x, y: start.y, x2: end.x, y2: end.y, text: '', color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight };
     return { id: crypto.randomUUID(), type: tool, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), color: diagramColor, lineWidth: diagramLineWidth };
   }
 
@@ -3877,7 +3935,16 @@ export default function Home() {
     if (diagramTool !== 'draw' && diagramTool !== 'erase' && start && point) {
       const element = diagramElementFromDrag(diagramTool, start, point);
       const length = element.type === 'arrow' || element.type === 'callout' ? Math.hypot(element.x2 - element.x, element.y2 - element.y) : Math.max(element.width, element.height);
-      if (length >= 5) { rememberDiagramState(); setDiagramElements((current) => [...current, element]); setSelectedDiagramElement(diagramElements.length); }
+      if (length >= 5) {
+        rememberDiagramState();
+        const index = diagramElements.length;
+        setDiagramElements((current) => [...current, element]);
+        setSelectedDiagramElement(index);
+        if (element.type === 'callout') {
+          setEditingDiagramTextIndex(index);
+          setEditingDiagramTextDraft('');
+        }
+      }
     }
     diagramStartRef.current = null;
     setDiagramPreview(null);
@@ -3905,6 +3972,7 @@ export default function Home() {
       .then((saved) => {
         const canonical = withDiagramObjectIds(saved.document);
         const merged = mergeDiagramDocument(diagramDocumentRef.current, baseDocument, canonical);
+        diagramServerVersionRef.current = saved.version;
         diagramDocumentRef.current = merged;
         diagramBaseDocumentRef.current = canonical;
         diagramBaseTitleRef.current = saved.title;
@@ -5226,17 +5294,15 @@ export default function Home() {
           </div>
           <label className="diagram-control">Цвет<input type="color" value={diagramColor} onChange={(event) => setDiagramColor(event.target.value)} aria-label="Цвет" /></label>
           <div className="diagram-width-picker" aria-label="Толщина кисти и линий"><span>Кисть / линия</span><div>{([2, 3, 6, 12] as const).map((width) => <button type="button" key={width} className={diagramLineWidth === width ? 'active' : ''} onClick={() => setDiagramLineWidth(width)} aria-label={`${width} px`} title={`${width} px`}><i style={{ width, height: width }} /></button>)}</div></div>
-          {(diagramTool === 'text' || diagramTool === 'callout') && <>
-            <label className="diagram-control">Шрифт<select value={diagramFontFamily} onChange={(event) => setDiagramFontFamily(event.target.value)} aria-label="Шрифт"><option value="Inter, system-ui, sans-serif">Sans</option><option value="Georgia, serif">Serif</option><option value="ui-monospace, SFMono-Regular, Menlo, monospace">Mono</option></select></label>
-            <label className="diagram-control">Размер<select value={diagramFontSize} onChange={(event) => setDiagramFontSize(Number(event.target.value))} aria-label="Размер шрифта"><option value={16}>16 px</option><option value={22}>22 px</option><option value={30}>30 px</option><option value={42}>42 px</option></select></label>
-            <button type="button" className={`diagram-tool diagram-bold ${diagramFontWeight === 'bold' ? 'active' : ''}`} onClick={() => setDiagramFontWeight((current) => current === 'bold' ? 'normal' : 'bold')} aria-label="Полужирный текст"><b>B</b></button>
+          {(diagramTool === 'text' || diagramTool === 'callout' || selectedDiagramTextElement()) && <>
+            <label className="diagram-control">Шрифт<select value={selectedDiagramTextElement()?.fontFamily ?? diagramFontFamily} onChange={(event) => setDiagramTextStyle({ fontFamily: event.target.value })} aria-label="Шрифт"><option value="Inter, system-ui, sans-serif">Sans</option><option value="Georgia, serif">Serif</option><option value="ui-monospace, SFMono-Regular, Menlo, monospace">Mono</option></select></label>
+            <label className="diagram-control">Размер<select value={selectedDiagramTextElement()?.fontSize ?? diagramFontSize} onChange={(event) => setDiagramTextStyle({ fontSize: Number(event.target.value) })} aria-label="Размер шрифта"><option value={16}>16 px</option><option value={22}>22 px</option><option value={30}>30 px</option><option value={42}>42 px</option><option value={56}>56 px</option></select></label>
+            <button type="button" className={`diagram-tool diagram-bold ${(selectedDiagramTextElement()?.fontWeight ?? diagramFontWeight) === 'bold' ? 'active' : ''}`} onClick={() => setDiagramTextStyle({ fontWeight: (selectedDiagramTextElement()?.fontWeight ?? diagramFontWeight) === 'bold' ? 'normal' : 'bold' })} aria-label="Полужирный текст"><b>B</b></button>
           </>}
         </div>
-        {(diagramTool === 'text' || diagramTool === 'callout') && <label className="diagram-text-draft">Текст для вставки<textarea value={diagramTextDraft} onChange={(event) => setDiagramTextDraft(event.target.value)} maxLength={4000} placeholder={diagramTool === 'callout' ? 'Напишите текст, затем протяните выноску от объекта…' : 'Напишите текст, затем кликните по полотну…'} /></label>}
-        {editingDiagramTextIndex !== null && <label className="diagram-text-draft diagram-text-editor">Редактирование текста<textarea autoFocus value={editingDiagramTextDraft} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Текст элемента…" /></label>}
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.4, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .4} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(1.6, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 1.6} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
-        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
-        <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly}>↶ Отменить</button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button>{!isSelectedReadOnly && <button className="create-button" onClick={() => saveDiagram()} disabled={isDiagramSaving}>{isDiagramSaving ? 'Сохраняем…' : 'Сохранить схему'}</button>}</div>
+        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea className="diagram-inline-text-editor" autoFocus value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
+        <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly}>↶ Отменить</button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button><span className="diagram-autosave-status" aria-live="polite">{isDiagramSaving ? 'Сохраняем…' : 'Сохраняется автоматически'}</span></div>
       </section>
     </div>}
 

@@ -347,8 +347,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .diagram-width-picker button.active { background: #7198e8; }
 .diagram-width-picker i { display: block; max-width: 15px; max-height: 15px; border-radius: 999px; background: #cecfd2; }
 .diagram-width-picker button.active i { background: #101204; }
-.diagram-text-draft { display: grid; gap: 6px; margin: 0 0 12px; color: #cecfd2; font-size: 12px; font-weight: 700; }
-.diagram-text-draft textarea { min-height: 64px; resize: vertical; border: 1px solid #4b5056; border-radius: 9px; background: #303134; color: #cecfd2; }
+.diagram-autosave-status { margin-left: auto; align-self: center; color: var(--muted); font-size: 12px; font-weight: 650; }
 .diagram-zoom { display: flex; align-items: center; gap: 5px; margin: 0 0 8px; color: #cecfd2; font-size: 11px; font-weight: 700; }
 .diagram-zoom span { margin-right: 3px; color: var(--muted); }
 .diagram-zoom button, .diagram-zoom output { display: grid; min-width: 30px; height: 27px; place-items: center; padding: 0 7px; border: 1px solid #4b5056; border-radius: 6px; background: #303134; color: #cecfd2; font: inherit; }
@@ -358,6 +357,8 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .diagram-viewport { max-height: min(62vh, 680px); overflow: auto; padding: 10px; border: 1px solid #3f4448; border-radius: 12px; background: #101204; overscroll-behavior: contain; }
 .diagram-stage { position: relative; flex: none; min-width: 1px; min-height: 1px; }
 .diagram-canvas { display: block; max-width: none; cursor: crosshair; background: #171923; }
+.diagram-inline-text-editor { position: absolute; z-index: 4; width: min(340px, 42vw); min-height: 1.5em; padding: 2px 5px; resize: both; overflow: auto; border: 1px dashed #8ba9ff; border-radius: 5px; outline: 0; background: rgb(17 19 28 / 88%); line-height: 1.35; text-shadow: 0 1px 2px rgb(0 0 0 / 65%); }
+.diagram-inline-text-editor::placeholder { color: #9ea7b7; opacity: .8; }
 .diagram-canvas.tool-text { cursor: text; }
 .diagram-canvas.tool-callout { cursor: crosshair; }
 .diagram-canvas.tool-erase { cursor: cell; }
