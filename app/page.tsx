@@ -107,10 +107,11 @@ type DiagramRectangle = { type: 'rectangle' | 'ellipse'; x: number; y: number; w
 type DiagramArrow = { type: 'arrow'; x: number; y: number; x2: number; y2: number; color: string; lineWidth: number };
 type DiagramText = { type: 'text'; x: number; y: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
 type DiagramCallout = { type: 'callout'; x: number; y: number; x2: number; y2: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
-type DiagramElement = DiagramRectangle | DiagramArrow | DiagramText | DiagramCallout;
+type DiagramImage = { type: 'image'; x: number; y: number; width: number; height: number; src: string; name?: string };
+type DiagramElement = DiagramRectangle | DiagramArrow | DiagramText | DiagramCallout | DiagramImage;
 type DiagramDocument = { strokes: DiagramStroke[]; elements?: DiagramElement[] };
 type Diagram = { id: string; card_id: string; title: string; document: DiagramDocument; version: number };
-type DiagramTool = 'select' | 'draw' | 'rectangle' | 'ellipse' | 'arrow' | 'text' | 'callout';
+type DiagramTool = 'select' | 'draw' | 'erase' | 'rectangle' | 'ellipse' | 'arrow' | 'text' | 'callout';
 type DiagramSnapshot = { strokes: DiagramStroke[]; elements: DiagramElement[] };
 type DiagramHandle = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'start' | 'end';
 type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean };
@@ -844,12 +845,36 @@ function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramE
     context.font = `${element.fontWeight === 'bold' ? '700' : '400'} ${element.fontSize}px ${element.fontFamily}`;
     context.textBaseline = 'top';
     element.text.split('\n').forEach((line, index) => context.fillText(line, element.x2 + 8, element.y2 + 8 + index * element.fontSize * 1.28));
+  } else if (element.type === 'image') {
+    const image = diagramImage(element.src);
+    if (image.complete && image.naturalWidth > 0) context.drawImage(image, element.x, element.y, element.width, element.height);
+    else {
+      context.fillStyle = '#30363e';
+      context.fillRect(element.x, element.y, element.width, element.height);
+      context.strokeStyle = '#69717b';
+      context.strokeRect(element.x, element.y, element.width, element.height);
+      context.fillStyle = '#cbd5e1';
+      context.font = '600 16px system-ui, sans-serif';
+      context.fillText('Загружаем изображение…', element.x + 14, element.y + 14);
+    }
   } else {
     context.font = `${element.fontWeight === 'bold' ? '700' : '400'} ${element.fontSize}px ${element.fontFamily}`;
     context.textBaseline = 'top';
     element.text.split('\n').forEach((line, index) => context.fillText(line, element.x, element.y + index * element.fontSize * 1.28));
   }
   context.restore();
+}
+
+const diagramImageCache = new Map<string, HTMLImageElement>();
+function diagramImage(src: string) {
+  let image = diagramImageCache.get(src);
+  if (!image) {
+    image = new Image();
+    image.decoding = 'async';
+    image.src = src;
+    diagramImageCache.set(src, image);
+  }
+  return image;
 }
 
 function diagramBounds(element: DiagramElement) {
@@ -863,6 +888,7 @@ function diagramBounds(element: DiagramElement) {
     const textWidth = Math.max(...element.text.split('\n').map((line) => line.length), 1) * element.fontSize * .62;
     return { left: element.x, top: element.y, right: element.x + textWidth, bottom: element.y + element.text.split('\n').length * element.fontSize * 1.28 };
   }
+  if (element.type === 'image') return { left: element.x, top: element.y, right: element.x + element.width, bottom: element.y + element.height };
   return { left: Math.min(element.x, element.x + element.width), top: Math.min(element.y, element.y + element.height), right: Math.max(element.x, element.x + element.width), bottom: Math.max(element.y, element.y + element.height) };
 }
 
@@ -1119,6 +1145,7 @@ export default function Home() {
   const [diagramFontFamily, setDiagramFontFamily] = useState('Inter, system-ui, sans-serif');
   const [diagramFontWeight, setDiagramFontWeight] = useState<'normal' | 'bold'>('normal');
   const [diagramZoom, setDiagramZoom] = useState(.7);
+  const [diagramImageRevision, setDiagramImageRevision] = useState(0);
   const [isDiagramSaving, setDiagramSaving] = useState(false);
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dragOverListId, setDragOverListId] = useState<EntityId | null>(null);
@@ -1201,6 +1228,7 @@ export default function Home() {
   const parkingDragPointRef = useRef({ x: 0, y: 0 });
   const cardDragPreviewElementRef = useRef<HTMLDivElement | null>(null);
   const diagramCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const diagramImageUploadRef = useRef<HTMLInputElement | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const boardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const workspaceBackgroundFileRef = useRef<HTMLInputElement | null>(null);
@@ -1757,7 +1785,15 @@ export default function Home() {
     diagramElements.forEach((element) => drawDiagramElement(context, element));
     if (diagramPreview) drawDiagramElement(context, diagramPreview);
     if (selectedDiagramElement !== null && diagramElements[selectedDiagramElement]) drawDiagramSelection(context, diagramElements[selectedDiagramElement]);
-  }, [diagramElements, diagramPreview, diagramStrokes, isDiagramOpen, selectedDiagramElement]);
+  }, [diagramElements, diagramImageRevision, diagramPreview, diagramStrokes, isDiagramOpen, selectedDiagramElement]);
+
+  useEffect(() => {
+    if (!isDiagramOpen) return;
+    const images = diagramElements.filter((element): element is DiagramImage => element.type === 'image').map((element) => diagramImage(element.src));
+    const refresh = () => setDiagramImageRevision((current) => current + 1);
+    images.forEach((image) => image.addEventListener('load', refresh, { once: true }));
+    return () => images.forEach((image) => image.removeEventListener('load', refresh));
+  }, [diagramElements, isDiagramOpen]);
 
   useEffect(() => {
     if (!isDiagramOpen) return;
@@ -3512,6 +3548,29 @@ export default function Home() {
     if (handle === 'sw' || handle === 'se') bottom = point.y;
     return { ...element, x: Math.min(left, right), y: Math.min(top, bottom), width: Math.max(4, Math.abs(right - left)), height: Math.max(4, Math.abs(bottom - top)) };
   }
+  function eraseDiagramStrokeAt(point: DiagramPoint, radius = 15) {
+    const split = (stroke: DiagramStroke): DiagramStroke[] => {
+      if (stroke.points.length < 2) return stroke.points.some((item) => Math.hypot(item.x - point.x, item.y - point.y) <= radius) ? [] : [stroke];
+      const fragments: DiagramPoint[][] = [];
+      let fragment: DiagramPoint[] = [];
+      const commit = () => { if (fragment.length > 1) fragments.push(fragment); fragment = []; };
+      for (let index = 1; index < stroke.points.length; index += 1) {
+        const from = stroke.points[index - 1];
+        const to = stroke.points[index];
+        const distance = Math.hypot(to.x - from.x, to.y - from.y);
+        const steps = Math.max(1, Math.min(48, Math.ceil(distance / 3)));
+        for (let step = 0; step <= steps; step += 1) {
+          const ratio = step / steps;
+          const sample = { x: from.x + (to.x - from.x) * ratio, y: from.y + (to.y - from.y) * ratio };
+          if (Math.hypot(sample.x - point.x, sample.y - point.y) <= radius + (stroke.width ?? 3) / 2) commit();
+          else if (!fragment.length || Math.hypot(fragment.at(-1)!.x - sample.x, fragment.at(-1)!.y - sample.y) > .5) fragment.push(sample);
+        }
+      }
+      commit();
+      return fragments.map((points) => ({ ...stroke, points }));
+    };
+    setDiagramStrokes((current) => current.flatMap(split));
+  }
   function startDiagramStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
     const point = diagramPoint(event);
     if (!point) return;
@@ -3542,11 +3601,16 @@ export default function Home() {
       setDiagramStrokes((current) => [...current, { points: [point], color: diagramColor, width: diagramLineWidth }]);
       return;
     }
+    if (diagramTool === 'erase') {
+      rememberDiagramState();
+      eraseDiagramStrokeAt(point);
+      return;
+    }
     diagramStartRef.current = point;
     setDiagramPreview(null);
   }
 
-  function diagramElementFromDrag(tool: Exclude<DiagramTool, 'select' | 'draw' | 'text'>, start: DiagramPoint, end: DiagramPoint): DiagramElement {
+  function diagramElementFromDrag(tool: Exclude<DiagramTool, 'select' | 'draw' | 'erase' | 'text'>, start: DiagramPoint, end: DiagramPoint): DiagramElement {
     if (tool === 'arrow') return { type: 'arrow', x: start.x, y: start.y, x2: end.x, y2: end.y, color: diagramColor, lineWidth: diagramLineWidth };
     if (tool === 'callout') return { type: 'callout', x: start.x, y: start.y, x2: end.x, y2: end.y, text: diagramTextDraft.trim(), color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight };
     return { type: tool, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), color: diagramColor, lineWidth: diagramLineWidth };
@@ -3567,6 +3631,7 @@ export default function Home() {
       setDiagramStrokes((current) => current.map((stroke, index) => index === current.length - 1 ? { ...stroke, points: [...stroke.points, point] } : stroke));
       return;
     }
+    if (diagramTool === 'erase') { eraseDiagramStrokeAt(point); return; }
     const start = diagramStartRef.current;
     if (start) setDiagramPreview(diagramElementFromDrag(diagramTool, start, point));
   }
@@ -3577,7 +3642,7 @@ export default function Home() {
     if (diagramInteractionRef.current) { diagramInteractionRef.current = null; return; }
     const start = diagramStartRef.current;
     const point = diagramPoint(event);
-    if (diagramTool !== 'draw' && start && point) {
+    if (diagramTool !== 'draw' && diagramTool !== 'erase' && start && point) {
       const element = diagramElementFromDrag(diagramTool, start, point);
       const length = element.type === 'arrow' || element.type === 'callout' ? Math.hypot(element.x2 - element.x, element.y2 - element.y) : Math.max(element.width, element.height);
       if (length >= 5) { rememberDiagramState(); setDiagramElements((current) => [...current, element]); setSelectedDiagramElement(diagramElements.length); }
@@ -4067,6 +4132,27 @@ export default function Home() {
     const files = Array.from(event.target.files ?? []);
     event.target.value = '';
     await uploadMediaFiles(files);
+  }
+  async function uploadDiagramImages(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    const images = files.filter((file) => file.type.startsWith('image/'));
+    if (images.length !== files.length) showToast('В схему можно добавить только изображения');
+    if (!images.length) return;
+    const uploaded = await uploadMediaFiles(images);
+    if (!uploaded.length) return;
+    rememberDiagramState();
+    setDiagramElements((current) => [...current, ...uploaded.map((attachment, index) => ({
+      type: 'image' as const,
+      x: 140 + index * 32,
+      y: 120 + index * 32,
+      width: 420,
+      height: 280,
+      src: attachment.url,
+      name: attachment.original_name,
+    }))]);
+    setSelectedDiagramElement(diagramElements.length + uploaded.length - 1);
+    showToast(uploaded.length === 1 ? 'Изображение добавлено в схему' : `Добавлено изображений: ${uploaded.length}`);
   }
   function handleMediaDrop(event: ReactDragEvent<HTMLTextAreaElement | HTMLDivElement>, target: 'description' | 'comment' | 'thread') {
     const files = Array.from(event.dataTransfer.files);
@@ -4862,12 +4948,15 @@ export default function Home() {
             {([
               ['select', '⌖', 'Выбрать и перемещать'],
               ['draw', '✎', 'Карандаш'],
+              ['erase', '⌫', 'Ластик — стирает часть линии'],
               ['rectangle', '▭', 'Прямоугольник'],
               ['ellipse', '◯', 'Круг / овал'],
               ['arrow', '→', 'Стрелка'],
               ['text', 'T', 'Текст'],
               ['callout', '↗', 'Текстовая выноска'],
             ] as [DiagramTool, string, string][]).map(([tool, icon, label]) => <button key={tool} type="button" className={`diagram-tool ${diagramTool === tool ? 'active' : ''}`} onClick={() => setDiagramTool(tool)} title={label} aria-label={label}>{icon}</button>)}
+            <button type="button" className="diagram-tool" onClick={() => diagramImageUploadRef.current?.click()} title="Добавить изображение" aria-label="Добавить изображение">▧</button>
+            <input ref={diagramImageUploadRef} className="diagram-image-upload" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => void uploadDiagramImages(event)} />
           </div>
           <label className="diagram-control">Цвет<input type="color" value={diagramColor} onChange={(event) => setDiagramColor(event.target.value)} aria-label="Цвет" /></label>
           <div className="diagram-width-picker" aria-label="Толщина кисти и линий"><span>Кисть / линия</span><div>{([2, 3, 6, 12] as const).map((width) => <button type="button" key={width} className={diagramLineWidth === width ? 'active' : ''} onClick={() => setDiagramLineWidth(width)} aria-label={`${width} px`} title={`${width} px`}><i style={{ width, height: width }} /></button>)}</div></div>

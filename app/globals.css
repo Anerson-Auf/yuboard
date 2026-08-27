@@ -359,8 +359,10 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .diagram-canvas { display: block; max-width: none; cursor: crosshair; background: #171923; }
 .diagram-canvas.tool-text { cursor: text; }
 .diagram-canvas.tool-callout { cursor: crosshair; }
+.diagram-canvas.tool-erase { cursor: cell; }
 .diagram-canvas.tool-select { cursor: grab; }
 .diagram-canvas.tool-select:active { cursor: grabbing; }
+.diagram-image-upload { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 .board-background-upload { display: flex; justify-content: flex-end; margin: -4px 34px 8px; }
 .board-background-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .public-board-notice { margin: 0 34px 12px; color: #cecfd2; font-size: 12px; font-weight: 700; }

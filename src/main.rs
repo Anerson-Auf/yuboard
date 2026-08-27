@@ -4656,6 +4656,8 @@ fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {
                     && element.get("text").and_then(Value::as_str).is_some_and(|value| value.len() <= 4_000)
                     && element.get("fontFamily").and_then(Value::as_str).is_some_and(|value| value.len() <= 120)
                     && element.get("fontWeight").and_then(Value::as_str).is_some_and(|value| matches!(value, "normal" | "bold")),
+                "image" => number("x") && number("y") && number("width") && number("height")
+                    && element.get("src").and_then(Value::as_str).is_some_and(|value| value.len() <= 240 && value.starts_with("/v1/attachments/") && value.ends_with("/content")),
                 _ => false,
             };
             if !valid { return Err(ApiError::bad_request("A diagram element is invalid.")); }
