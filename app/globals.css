@@ -371,6 +371,24 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .diagram-presence-cursor { position: absolute; z-index: 3; display: flex; align-items: flex-start; gap: 2px; pointer-events: none; transform: translate(-2px, -2px); transition: left 70ms cubic-bezier(.2,.78,.28,1), top 70ms cubic-bezier(.2,.78,.28,1); will-change: left, top; color: #ff7aa8; font-size: 19px; line-height: 1; }
 .diagram-presence-cursor span { display: block; text-shadow: 0 1px 3px rgb(0 0 0 / 70%); }
 .diagram-presence-cursor b { margin-top: 11px; padding: 3px 5px; border-radius: 5px; background: #ff4f8a; color: #fff; box-shadow: 0 2px 7px rgb(0 0 0 / 38%); font-size: 10px; line-height: 1; white-space: nowrap; }
+.diagram-backdrop-fullscreen { padding: 0; }
+.diagram-modal.fullscreen { width: 100vw; height: 100vh; max-height: none; padding: 16px 20px; border: 0; border-radius: 0; }
+.diagram-modal.fullscreen .diagram-viewport { max-height: calc(100vh - 260px); }
+.diagram-fullscreen-toggle { position: absolute; z-index: 1; top: 15px; right: 52px; display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--muted); font-size: 17px; line-height: 1; }
+.diagram-fullscreen-toggle:hover { color: var(--text); border-color: var(--primary); }
+.diagram-sticker-picker { display: flex; align-items: end; gap: 3px; min-height: 42px; }
+.diagram-sticker-picker button { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--muted); font-size: 16px; font-weight: 900; }
+.diagram-sticker-picker button.active { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 18%, var(--surface-raised)); color: var(--text); }
+.diagram-rotation-control { min-width: 132px; }
+.diagram-rotation-control input { accent-color: var(--primary); }
+.diagram-rotation-control output { margin-left: 5px; color: var(--muted); font-size: 11px; }
+.diagram-shape-inspector { display: grid; grid-template-columns: minmax(145px, .7fr) minmax(220px, 1.7fr) 125px; gap: 8px; margin: 0 0 8px; padding: 9px; border: 1px solid #3f4448; border-radius: 10px; background: #202226; }
+.diagram-shape-inspector label { display: grid; gap: 4px; align-content: start; color: var(--muted); font-size: 10px; font-weight: 750; }
+.diagram-shape-inspector input[type="range"] { width: 100%; accent-color: var(--primary); }
+.diagram-shape-inspector output { color: var(--text); font-size: 11px; }
+.diagram-shape-inspector textarea { width: 100%; min-height: 42px; resize: vertical; padding: 6px 7px; border: 1px solid var(--line); border-radius: 7px; outline: 0; background: var(--surface-raised); color: var(--text); font: inherit; font-size: 12px; line-height: 1.35; }
+.diagram-shape-inspector textarea:focus { border-color: var(--primary); }
+@media (max-width: 760px) { .diagram-shape-inspector { grid-template-columns: 1fr; }.diagram-modal.fullscreen { padding: 12px; }.diagram-modal.fullscreen .diagram-viewport { max-height: calc(100vh - 305px); } }
 .board-background-upload { display: flex; justify-content: flex-end; margin: -4px 34px 8px; }
 .board-background-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .public-board-notice { margin: 0 34px 12px; color: #cecfd2; font-size: 12px; font-weight: 700; }

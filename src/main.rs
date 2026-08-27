@@ -4758,19 +4758,27 @@ fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {
             let type_name = element.get("type").and_then(Value::as_str).ok_or_else(|| ApiError::bad_request("A diagram element has no type."))?;
             let number = |field: &str| element.get(field).is_some_and(Value::is_number);
             let style = || element.get("color").and_then(Value::as_str).is_some_and(|value| value.len() <= 32);
+            let optional_style = |field: &str| element.get(field).is_none_or(|value| value.as_str().is_some_and(|color| color.len() <= 32));
+            let optional_number = |field: &str| element.get(field).is_none_or(Value::is_number);
+            let optional_text = |field: &str| element.get(field).is_none_or(|value| value.as_str().is_some_and(|text| text.len() <= 4_000));
+            let optional_font = || element.get("fontFamily").is_none_or(|value| value.as_str().is_some_and(|font| font.len() <= 120));
+            let optional_weight = || element.get("fontWeight").is_none_or(|value| value.as_str().is_some_and(|weight| matches!(weight, "normal" | "bold")));
             let valid = match type_name {
-                "rectangle" | "ellipse" => number("x") && number("y") && number("width") && number("height") && number("lineWidth") && style(),
-                "arrow" => number("x") && number("y") && number("x2") && number("y2") && number("lineWidth") && style(),
+                "rectangle" | "ellipse" => number("x") && number("y") && number("width") && number("height") && number("lineWidth") && style()
+                    && optional_style("fillColor") && optional_style("textColor") && optional_number("cornerRadius") && optional_number("rotation") && optional_number("fontSize") && optional_text("text") && optional_font() && optional_weight(),
+                "arrow" => number("x") && number("y") && number("x2") && number("y2") && number("lineWidth") && style() && optional_number("rotation"),
                 "text" => number("x") && number("y") && number("fontSize") && style()
                     && element.get("text").and_then(Value::as_str).is_some_and(|value| value.len() <= 4_000)
                     && element.get("fontFamily").and_then(Value::as_str).is_some_and(|value| value.len() <= 120)
-                    && element.get("fontWeight").and_then(Value::as_str).is_some_and(|value| matches!(value, "normal" | "bold")),
+                    && element.get("fontWeight").and_then(Value::as_str).is_some_and(|value| matches!(value, "normal" | "bold")) && optional_number("rotation"),
                 "callout" => number("x") && number("y") && number("x2") && number("y2") && number("fontSize") && style()
                     && element.get("text").and_then(Value::as_str).is_some_and(|value| value.len() <= 4_000)
                     && element.get("fontFamily").and_then(Value::as_str).is_some_and(|value| value.len() <= 120)
-                    && element.get("fontWeight").and_then(Value::as_str).is_some_and(|value| matches!(value, "normal" | "bold")),
+                    && element.get("fontWeight").and_then(Value::as_str).is_some_and(|value| matches!(value, "normal" | "bold")) && optional_number("rotation"),
                 "image" => number("x") && number("y") && number("width") && number("height")
-                    && element.get("src").and_then(Value::as_str).is_some_and(|value| value.len() <= 240 && value.starts_with("/v1/attachments/") && value.ends_with("/content")),
+                    && element.get("src").and_then(Value::as_str).is_some_and(|value| value.len() <= 240 && value.starts_with("/v1/attachments/") && value.ends_with("/content")) && optional_number("rotation"),
+                "sticker" => number("x") && number("y") && number("size") && style() && element.get("fillColor").and_then(Value::as_str).is_some_and(|value| value.len() <= 32)
+                    && element.get("icon").and_then(Value::as_str).is_some_and(|value| matches!(value, "?" | "!")) && optional_number("rotation"),
                 _ => false,
             };
             if !valid { return Err(ApiError::bad_request("A diagram element is invalid.")); }
