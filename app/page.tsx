@@ -995,6 +995,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<AuthSession[]>([]);
   const [notifications, setNotifications] = useState<CardNotification[]>([]);
   const [isNotificationsOpen, setNotificationsOpen] = useState(false);
+  const [isWorkspaceToolsOpen, setWorkspaceToolsOpen] = useState(false);
   const [isInboxOpen, setInboxOpen] = useState(false);
   const [isMyTasksOpen, setMyTasksOpen] = useState(false);
   const [isSavedViewsOpen, setSavedViewsOpen] = useState(false);
@@ -1168,12 +1169,22 @@ export default function Home() {
   const workspaceBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const cardBackgroundFileRef = useRef<HTMLInputElement | null>(null);
   const boardStickerFileRef = useRef<HTMLInputElement | null>(null);
+  const workspaceToolsRef = useRef<HTMLDivElement | null>(null);
   const stickerComposerButtonRefs = useRef<{ comment: HTMLButtonElement | null; thread: HTMLButtonElement | null }>({ comment: null, thread: null });
   const commentComposerRef = useRef<InlineStickerComposerHandle | null>(null);
   const threadComposerRef = useRef<InlineStickerComposerHandle | null>(null);
   const isDrawingRef = useRef(false);
   const diagramStartRef = useRef<DiagramPoint | null>(null);
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
+
+  useEffect(() => {
+    if (!isWorkspaceToolsOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!workspaceToolsRef.current?.contains(event.target as Node)) setWorkspaceToolsOpen(false);
+    };
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [isWorkspaceToolsOpen]);
   const selectedCardId = selected?.id;
 
   useEffect(() => { columnsRef.current = columns; }, [columns]);
@@ -2913,6 +2924,7 @@ export default function Home() {
       .catch(() => undefined);
   }
   function toggleNotifications() {
+    setWorkspaceToolsOpen(false);
     setNotificationsOpen((current) => {
       const next = !current;
       if (next) { setNotificationsLoading(true); void loadNotifications().finally(() => setNotificationsLoading(false)); }
@@ -4545,11 +4557,7 @@ export default function Home() {
         {account && view === 'board' && <BoardPresence people={boardPresence} currentUserId={account.user.id} onPersonClick={(person) => openBoardActivityForUser(person.user_id)} />}
         {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
         {account && <ThemePicker className="top-theme-picker" />}
-        {account && <button className="top-utility-button" type="button" onClick={() => setMyTasksOpen(true)} aria-label="Открыть мои задачи">✓ <span>Мои задачи</span></button>}
-        {account && view === 'board' && <button className="top-utility-button" type="button" onClick={() => setSavedViewsOpen(true)} aria-label="Сохранённые представления">▱ <span>Виды</span></button>}
-        {account && <button className="top-utility-button" type="button" onClick={() => { setNotificationsOpen(false); setInboxOpen(true); }} aria-label="Открыть входящие">▤ <span>Входящие</span></button>}
-        {account && <button className="top-utility-button" type="button" onClick={openSessions} aria-label="Открыть сессии">◷ <span>Сессии</span></button>}
-        {account?.user.is_system_owner && <button className="top-utility-button" type="button" onClick={openAdmin} aria-label="Открыть администрирование">⚙ <span>Админ</span></button>}
+        {account && <div className="top-workspace-tools" ref={workspaceToolsRef}><button className="top-utility-button" type="button" onClick={() => setWorkspaceToolsOpen((current) => !current)} aria-label="Открыть разделы работы" aria-expanded={isWorkspaceToolsOpen}>▦ <span>Работа</span></button>{isWorkspaceToolsOpen && <div className="top-workspace-tools-popover" role="dialog" aria-label="Разделы работы"><button type="button" onClick={() => { setWorkspaceToolsOpen(false); setMyTasksOpen(true); }}>✓ <span><b>Мои задачи</b><small>Назначения, проверки и ожидания</small></span></button>{view === 'board' && <button type="button" onClick={() => { setWorkspaceToolsOpen(false); setSavedViewsOpen(true); }}>▱ <span><b>Сохранённые виды</b><small>Фильтры и порядок этой доски</small></span></button>}<button type="button" onClick={() => { setWorkspaceToolsOpen(false); setNotificationsOpen(false); setInboxOpen(true); }}>▤ <span><b>Входящие</b><small>Все уведомления</small></span></button><button type="button" onClick={() => { setWorkspaceToolsOpen(false); openSessions(); }}>◷ <span><b>Сессии</b><small>Устройства и безопасность</small></span></button>{account.user.is_system_owner && <button type="button" onClick={() => { setWorkspaceToolsOpen(false); openAdmin(); }}>⚙ <span><b>Администрирование</b><small>Аккаунты и пространства</small></span></button>}</div>}</div>}
         {!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <button className="profile-trigger" onClick={() => { setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }} aria-label="Открыть профиль"><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>}</div>
     </header>
     <input ref={workspaceBackgroundFileRef} className="workspace-background-file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadWorkspaceBackground} />
