@@ -3490,16 +3490,20 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
 
 async fn list_board_activity(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Query(query): Query<BoardActivityQuery>) -> ApiResult<BoardActivityPageResponse> {
     let pool = database(&state)?;
-    ensure_board_full_access(pool, board_id, current.id).await?;
+    ensure_board_layout_access(pool, board_id, current.id).await?;
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(40).clamp(10, 100);
     let offset = (page - 1).saturating_mul(per_page);
     // Each row represents one human-readable action. Repeated identical
     // actions on the same card during one minute become a single feed entry.
-    let grouped = "SELECT a.card_id, a.action, a.detail, a.actor_id, date_trunc('minute', a.created_at) AS minute_bucket FROM card_activity a INNER JOIN cards c ON c.id = a.card_id WHERE c.board_id = $1 AND ($2::uuid IS NULL OR a.actor_id = $2) GROUP BY a.card_id, a.action, a.detail, a.actor_id, date_trunc('minute', a.created_at)";
+    // Activity is available to signed-in project members, but its rows must
+    // follow the same card visibility thresholds as the board itself.
+    let visible_to_viewer = "(EXISTS(SELECT 1 FROM users u WHERE u.id = $3 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3 AND wm.role IN ('owner', 'full_access')) OR EXISTS(SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $3 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END))";
+    let grouped = format!("SELECT a.card_id, a.action, a.detail, a.actor_id, date_trunc('minute', a.created_at) AS minute_bucket FROM card_activity a INNER JOIN cards c ON c.id = a.card_id INNER JOIN boards b ON b.id = c.board_id WHERE c.board_id = $1 AND ($2::uuid IS NULL OR a.actor_id = $2) AND {visible_to_viewer} GROUP BY a.card_id, a.action, a.detail, a.actor_id, date_trunc('minute', a.created_at)");
     let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM ({grouped}) grouped"))
         .bind(board_id)
         .bind(query.user_id)
+        .bind(current.id)
         .fetch_one(pool)
         .await
         .map_err(ApiError::internal)?;
@@ -3510,13 +3514,15 @@ async fn list_board_activity(State(state): State<AppState>, current: CurrentUser
                 MAX(a.created_at)::text AS created_at, COUNT(*)::bigint AS count \
          FROM card_activity a \
          INNER JOIN cards c ON c.id = a.card_id \
+         INNER JOIN boards b ON b.id = c.board_id \
          LEFT JOIN users u ON u.id = a.actor_id \
-         WHERE c.board_id = $1 AND ($2::uuid IS NULL OR a.actor_id = $2) \
+         WHERE c.board_id = $1 AND ($2::uuid IS NULL OR a.actor_id = $2) AND {visible_to_viewer} \
          GROUP BY a.card_id, c.title, a.action, a.detail, a.actor_id, u.id, u.username, u.avatar_key, date_trunc('minute', a.created_at) \
-         ORDER BY MAX(a.created_at) DESC, MIN(a.id::text) DESC LIMIT $3 OFFSET $4"
+         ORDER BY MAX(a.created_at) DESC, MIN(a.id::text) DESC LIMIT $4 OFFSET $5"
     ))
     .bind(board_id)
     .bind(query.user_id)
+    .bind(current.id)
     .bind(per_page)
     .bind(offset)
     .fetch_all(pool)

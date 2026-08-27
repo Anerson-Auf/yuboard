@@ -2832,6 +2832,13 @@ export default function Home() {
     setBoardActivityOpen(true);
     loadBoardActivity(1, '');
   }
+  function openBoardActivityForUser(userId: string) {
+    if (!boardId) return;
+    setBoardMenuOpen(false);
+    setBoardActivityUserId(userId);
+    setBoardActivityOpen(true);
+    loadBoardActivity(1, userId);
+  }
   function openBoardActivityCard(item: BoardActivityItem) {
     const card = columns.flatMap((column) => column.cards).find((current) => String(current.id) === item.card_id);
     if (!card) { showToast('Эта карточка сейчас в архиве'); return; }
@@ -4535,7 +4542,7 @@ export default function Home() {
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
       <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам" aria-label="Поиск по задачам" /></label>
       <div className="top-actions">
-        {account && view === 'board' && <BoardPresence people={boardPresence} currentUserId={account.user.id} />}
+        {account && view === 'board' && <BoardPresence people={boardPresence} currentUserId={account.user.id} onPersonClick={(person) => openBoardActivityForUser(person.user_id)} />}
         {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
         {account && <ThemePicker className="top-theme-picker" />}
         {account && <button className="top-utility-button" type="button" onClick={() => setMyTasksOpen(true)} aria-label="Открыть мои задачи">✓ <span>Мои задачи</span></button>}

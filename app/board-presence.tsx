@@ -40,12 +40,25 @@ function PresenceFaces({ people }: { people: Presence[] }) {
   return <div className="presence-avatars">{people.slice(0, 3).map((person) => person.avatar_url ? <img src={person.avatar_url} alt={`@${person.username}`} key={person.user_id} /> : <i key={person.user_id}>{person.username.slice(0, 1).toUpperCase()}</i>)}</div>;
 }
 
-export default function BoardPresence({ people, currentUserId }: { people: Presence[]; currentUserId: string }) {
-  const others = useMemo(() => people.filter((person) => person.user_id !== currentUserId), [currentUserId, people]);
-  return <div className="board-presence" title={others.length ? `На доске: ${others.map((person) => '@' + person.username).join(', ')}` : 'Сейчас на доске только вы'}>
-    <span className="presence-dot" />
-    <PresenceFaces people={others} />
-    <span>{others.length ? `${others.length + 1} на доске` : 'Вы на доске'}</span>
+export default function BoardPresence({ people, currentUserId, onPersonClick }: { people: Presence[]; currentUserId: string; onPersonClick?: (person: Presence) => void }) {
+  const [isOpen, setOpen] = useState(false);
+  const everyone = useMemo(() => [...people].sort((left, right) => (left.user_id === currentUserId ? -1 : right.user_id === currentUserId ? 1 : left.username.localeCompare(right.username, 'ru'))), [currentUserId, people]);
+  const others = useMemo(() => everyone.filter((person) => person.user_id !== currentUserId), [currentUserId, everyone]);
+  const count = everyone.length || 1;
+  return <div className="board-presence-control" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <button className="board-presence" type="button" onClick={() => setOpen((current) => !current)} aria-expanded={isOpen} aria-haspopup="dialog" title={others.length ? `На доске: ${others.map((person) => '@' + person.username).join(', ')}` : 'Сейчас на доске только вы'}>
+      <span className="presence-dot" />
+      <PresenceFaces people={others} />
+      <span>{count > 1 ? `${count} на доске` : 'Вы на доске'}</span>
+    </button>
+    {isOpen && <div className="board-presence-popover" role="dialog" aria-label="Кто сейчас на доске">
+      <div className="board-presence-heading"><b>Сейчас на доске</b><span>{count}</span></div>
+      <div className="board-presence-list">{everyone.map((person) => <button key={person.user_id} type="button" onClick={() => { setOpen(false); onPersonClick?.(person); }}>
+        {person.avatar_url ? <img src={person.avatar_url} alt="" /> : <i>{person.username.slice(0, 1).toUpperCase()}</i>}
+        <span><b>@{person.username}{person.user_id === currentUserId && ' · вы'}</b><small>{person.editing_description ? 'Редактирует описание' : person.card_id ? 'Открыл карточку' : 'На доске'}</small></span>
+      </button>)}</div>
+      <small className="board-presence-hint">Нажмите на участника, чтобы открыть его активность.</small>
+    </div>}
   </div>;
 }
 
