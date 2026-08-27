@@ -38,7 +38,8 @@ struct AppState {
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
     board_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, BoardPresence>>>>,
     diagram_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, DiagramCursorPresence>>>>,
-    diagram_events: broadcast::Sender<DiagramMergeEvent>,
+    diagram_locks: Arc<Mutex<HashMap<Uuid, HashMap<String, DiagramObjectLock>>>>,
+    diagram_events: broadcast::Sender<DiagramLiveEvent>,
     freeform_live_events: broadcast::Sender<FreeformLiveEvent>,
     auth_rate_limiter: RateLimiter,
     trust_proxy: bool,
@@ -438,13 +439,16 @@ enum BoardPresenceLocation {
 }
 
 #[derive(Clone)]
-struct DiagramCursorPresence { x: i32, y: i32, last_seen: Instant }
+struct DiagramCursorPresence { x: i32, y: i32, username: String, avatar_url: Option<String>, last_seen: Instant }
+
+#[derive(Clone)]
+struct DiagramObjectLock { user_id: Uuid, username: String, expires_at: Instant }
 
 #[derive(Deserialize)]
 struct UpdateDiagramPresenceRequest { x: i32, y: i32 }
 
 #[derive(Serialize)]
-struct DiagramPresenceEntry { user_id: Uuid, username: String, x: i32, y: i32 }
+struct DiagramPresenceEntry { user_id: Uuid, username: String, avatar_url: Option<String>, x: i32, y: i32 }
 
 #[derive(Deserialize)]
 struct DiagramMergeRequest {
@@ -466,6 +470,37 @@ struct DiagramMergeEvent {
     base_title: String,
     base_document: Value,
     document: Value,
+}
+
+#[derive(Clone, Serialize)]
+struct DiagramCursorEvent {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    card_id: Uuid,
+    user_id: Uuid,
+    username: String,
+    avatar_url: Option<String>,
+    x: i32,
+    y: i32,
+}
+
+#[derive(Clone, Serialize)]
+struct DiagramObjectLockEvent {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    card_id: Uuid,
+    object_id: String,
+    user_id: Uuid,
+    username: String,
+    active: bool,
+    expires_in_ms: u64,
+}
+
+#[derive(Clone)]
+enum DiagramLiveEvent {
+    Merge(DiagramMergeEvent),
+    Cursor(DiagramCursorEvent),
+    ObjectLock(DiagramObjectLockEvent),
 }
 
 #[derive(Deserialize)]
@@ -655,7 +690,21 @@ enum FreeformLiveSocketRequest {
     Ping { x: i32, y: i32 },
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DiagramSocketRequest {
+    Merge(DiagramMergeRequest),
+    Live(DiagramLiveSocketRequest),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum DiagramLiveSocketRequest {
+    Cursor { x: i32, y: i32 },
+    ObjectLock { object_id: String, active: bool },
+}
+
+#[derive(Clone, Serialize, FromRow)]
 struct FreeformLiveAccount {
     id: Uuid,
     username: String,
@@ -1811,7 +1860,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), diagram_presence: Arc::new(Mutex::new(HashMap::new())), diagram_events: broadcast::channel(512).0, freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), diagram_presence: Arc::new(Mutex::new(HashMap::new())), diagram_locks: Arc::new(Mutex::new(HashMap::new())), diagram_events: broadcast::channel(1_024).0, freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -4791,15 +4840,84 @@ async fn card_diagram_presence_snapshot(state: &AppState, card_id: Uuid, current
         card.retain(|_, presence| now.duration_since(presence.last_seen) <= Duration::from_secs(8));
         card.iter()
             .filter(|(user_id, _)| **user_id != current_user_id)
-            .map(|(user_id, presence)| (*user_id, presence.x, presence.y))
+            .map(|(user_id, presence)| DiagramPresenceEntry { user_id: *user_id, username: presence.username.clone(), avatar_url: presence.avatar_url.clone(), x: presence.x, y: presence.y })
             .collect::<Vec<_>>()
     };
-    if active.is_empty() { return Ok(Json(Vec::new())); }
-    let user_ids = active.iter().map(|(user_id, _, _)| *user_id).collect::<Vec<_>>();
-    let accounts = sqlx::query_as::<_, FreeformLiveAccount>("SELECT id, username, CASE WHEN avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || id::text END AS avatar_url FROM users WHERE id = ANY($1) AND disabled_at IS NULL")
-        .bind(&user_ids).fetch_all(database(state)?).await.map_err(ApiError::internal)?;
-    let accounts = accounts.into_iter().map(|account| (account.id, account)).collect::<HashMap<_, _>>();
-    Ok(Json(active.into_iter().filter_map(|(user_id, x, y)| accounts.get(&user_id).map(|account| DiagramPresenceEntry { user_id, username: account.username.clone(), x, y })).collect()))
+    Ok(Json(active))
+}
+
+async fn diagram_live_account(state: &AppState, current: CurrentUser) -> Result<FreeformLiveAccount, ApiError> {
+    sqlx::query_as::<_, FreeformLiveAccount>("SELECT id, username, CASE WHEN avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || id::text END AS avatar_url FROM users WHERE id = $1 AND disabled_at IS NULL")
+        .bind(current.id).fetch_optional(database(state)?).await.map_err(ApiError::internal)?
+        .ok_or_else(ApiError::unauthorized)
+}
+
+async fn record_diagram_cursor(state: &AppState, card_id: Uuid, current: CurrentUser, account: &FreeformLiveAccount, x: i32, y: i32) -> Result<DiagramLiveEvent, ApiError> {
+    if !(0..=20_000).contains(&x) || !(0..=20_000).contains(&y) {
+        return Err(ApiError::bad_request("Diagram cursor coordinates must be between 0 and 20000."));
+    }
+    state.diagram_presence.lock().await.entry(card_id).or_default().insert(current.id, DiagramCursorPresence { x, y, username: account.username.clone(), avatar_url: account.avatar_url.clone(), last_seen: Instant::now() });
+    Ok(DiagramLiveEvent::Cursor(DiagramCursorEvent { event_type: "diagram_cursor", card_id, user_id: current.id, username: account.username.clone(), avatar_url: account.avatar_url.clone(), x, y }))
+}
+
+async fn record_diagram_object_lock(state: &AppState, card_id: Uuid, current: CurrentUser, account: &FreeformLiveAccount, object_id: String, active: bool) -> DiagramLiveEvent {
+    let now = Instant::now();
+    let mut locks = state.diagram_locks.lock().await;
+    let card_locks = locks.entry(card_id).or_default();
+    card_locks.retain(|_, lock| lock.expires_at > now);
+    if !active {
+        if let Some(lock) = card_locks.get(&object_id) {
+            if lock.user_id != current.id {
+                return DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: lock.user_id, username: lock.username.clone(), active: true, expires_in_ms: lock.expires_at.saturating_duration_since(now).as_millis() as u64 });
+            }
+        }
+        card_locks.remove(&object_id);
+        return DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: current.id, username: account.username.clone(), active: false, expires_in_ms: 0 });
+    }
+    if let Some(lock) = card_locks.get(&object_id) {
+        if lock.user_id != current.id {
+            return DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: lock.user_id, username: lock.username.clone(), active: true, expires_in_ms: lock.expires_at.saturating_duration_since(now).as_millis() as u64 });
+        }
+    }
+    card_locks.insert(object_id.clone(), DiagramObjectLock { user_id: current.id, username: account.username.clone(), expires_at: now + Duration::from_secs(3) });
+    DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: current.id, username: account.username.clone(), active: true, expires_in_ms: 3_000 })
+}
+
+/// Rejects only modifications to objects another editor has actively locked.
+/// Independent edits remain optimistic and merge as before.
+async fn ensure_diagram_object_locks(state: &AppState, card_id: Uuid, current: CurrentUser, base: &Value, incoming: &Value) -> Result<(), ApiError> {
+    let locked_by_others = {
+        let now = Instant::now();
+        let mut locks = state.diagram_locks.lock().await;
+        let card_locks = locks.entry(card_id).or_default();
+        card_locks.retain(|_, lock| lock.expires_at > now);
+        card_locks.iter()
+            .filter(|(_, lock)| lock.user_id != current.id)
+            .map(|(object_id, lock)| (object_id.clone(), lock.username.clone()))
+            .collect::<Vec<_>>()
+    };
+    if locked_by_others.is_empty() { return Ok(()); }
+
+    for key in ["strokes", "elements"] {
+        let base_items = diagram_items(base, key)?;
+        let incoming_items = diagram_items(incoming, key)?;
+        let base_by_id = base_items.iter().map(|item| Ok((diagram_item_id(item)?, item))).collect::<Result<HashMap<_, _>, ApiError>>()?;
+        let incoming_by_id = incoming_items.iter().map(|item| Ok((diagram_item_id(item)?, item))).collect::<Result<HashMap<_, _>, ApiError>>()?;
+        for (object_id, username) in &locked_by_others {
+            if base_by_id.get(object_id) != incoming_by_id.get(object_id) {
+                return Err(ApiError(StatusCode::CONFLICT, "diagram_object_locked", format!("Слой сейчас редактирует @{username}.")));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn diagram_live_event_card_id(event: &DiagramLiveEvent) -> Uuid {
+    match event { DiagramLiveEvent::Merge(event) => event.card_id, DiagramLiveEvent::Cursor(event) => event.card_id, DiagramLiveEvent::ObjectLock(event) => event.card_id }
+}
+
+fn diagram_live_event_payload(event: &DiagramLiveEvent) -> Result<String, serde_json::Error> {
+    match event { DiagramLiveEvent::Merge(event) => serde_json::to_string(event), DiagramLiveEvent::Cursor(event) => serde_json::to_string(event), DiagramLiveEvent::ObjectLock(event) => serde_json::to_string(event) }
 }
 
 async fn get_card_diagram_presence(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<DiagramPresenceEntry>> {
@@ -4808,11 +4926,10 @@ async fn get_card_diagram_presence(State(state): State<AppState>, current: Curre
 }
 
 async fn update_card_diagram_presence(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateDiagramPresenceRequest>) -> ApiResult<Vec<DiagramPresenceEntry>> {
-    if !(0..=20_000).contains(&request.x) || !(0..=20_000).contains(&request.y) {
-        return Err(ApiError::bad_request("Diagram cursor coordinates must be between 0 and 20000."));
-    }
     ensure_card_public_read(database(&state)?, card_id, Some(current.id)).await?;
-    state.diagram_presence.lock().await.entry(card_id).or_default().insert(current.id, DiagramCursorPresence { x: request.x, y: request.y, last_seen: Instant::now() });
+    let account = diagram_live_account(&state, current).await?;
+    let event = record_diagram_cursor(&state, card_id, current, &account, request.x, request.y).await?;
+    let _ = state.diagram_events.send(event);
     card_diagram_presence_snapshot(&state, card_id, current.id).await
 }
 
@@ -4857,6 +4974,7 @@ async fn apply_card_diagram_merge(state: &AppState, current: CurrentUser, card_i
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
     validate_diagram_document(&request.base_document)?;
     validate_diagram_document(&request.document)?;
+    ensure_diagram_object_locks(state, card_id, current, &request.base_document, &request.document).await?;
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
     let previous = sqlx::query_as::<_, DiagramResponse>("SELECT id, card_id, title, document, version FROM card_diagrams WHERE card_id = $1 FOR UPDATE")
         .bind(card_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?;
@@ -4888,33 +5006,47 @@ async fn apply_card_diagram_merge(state: &AppState, current: CurrentUser, card_i
 
 async fn sync_card_diagram(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<DiagramMergeRequest>) -> ApiResult<DiagramResponse> {
     let (diagram, event) = apply_card_diagram_merge(&state, current, card_id, request).await?;
-    if let Some(event) = event { let _ = state.diagram_events.send(event); let _ = state.events.send(()); }
+    if let Some(event) = event { let _ = state.diagram_events.send(DiagramLiveEvent::Merge(event)); let _ = state.events.send(()); }
     Ok(Json(diagram))
 }
 
 async fn card_diagram_websocket(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, upgrade: WebSocketUpgrade) -> Result<Response, ApiError> {
-    ensure_card_public_read(database(&state)?, card_id, Some(current.id)).await?;
-    Ok(upgrade.on_upgrade(move |socket| run_card_diagram_websocket(state, card_id, current, socket)))
+    let pool = database(&state)?;
+    ensure_card_public_read(pool, card_id, Some(current.id)).await?;
+    let can_edit = ensure_card_permission(pool, card_id, current.id, "edit_cards").await.is_ok();
+    let account = diagram_live_account(&state, current).await?;
+    Ok(upgrade.on_upgrade(move |socket| run_card_diagram_websocket(state, card_id, current, account, can_edit, socket)))
 }
 
-async fn run_card_diagram_websocket(state: AppState, card_id: Uuid, current: CurrentUser, socket: WebSocket) {
+async fn run_card_diagram_websocket(state: AppState, card_id: Uuid, current: CurrentUser, account: FreeformLiveAccount, can_edit: bool, socket: WebSocket) {
     let (mut sender, mut receiver) = futures_util::StreamExt::split(socket);
     let mut events = state.diagram_events.subscribe();
     loop {
         tokio::select! {
             incoming = futures_util::StreamExt::next(&mut receiver) => {
                 let Some(Ok(Message::Text(payload))) = incoming else { break; };
-                let Ok(request) = serde_json::from_str::<DiagramMergeRequest>(&payload) else { continue; };
-                match apply_card_diagram_merge(&state, current, card_id, request).await {
-                    Ok((_, Some(event))) => { let _ = state.diagram_events.send(event); let _ = state.events.send(()); }
-                    Ok((_, None)) => {}
-                    Err(_) => break,
+                let Ok(request) = serde_json::from_str::<DiagramSocketRequest>(&payload) else { continue; };
+                match request {
+                    DiagramSocketRequest::Merge(request) => match apply_card_diagram_merge(&state, current, card_id, request).await {
+                        Ok((_, Some(event))) => { let _ = state.diagram_events.send(DiagramLiveEvent::Merge(event)); let _ = state.events.send(()); }
+                        Ok((_, None)) => {}
+                        Err(_) => break,
+                    },
+                    DiagramSocketRequest::Live(DiagramLiveSocketRequest::Cursor { x, y }) => match record_diagram_cursor(&state, card_id, current, &account, x, y).await {
+                        Ok(event) => { let _ = state.diagram_events.send(event); }
+                        Err(_) => break,
+                    },
+                    DiagramSocketRequest::Live(DiagramLiveSocketRequest::ObjectLock { object_id, active }) => {
+                        if !can_edit || object_id.is_empty() || object_id.len() > 160 { continue; }
+                        let event = record_diagram_object_lock(&state, card_id, current, &account, object_id, active).await;
+                        let _ = state.diagram_events.send(event);
+                    }
                 }
             }
             event = events.recv() => {
                 let Ok(event) = event else { continue; };
-                if event.card_id != card_id { continue; }
-                let Ok(payload) = serde_json::to_string(&event) else { continue; };
+                if diagram_live_event_card_id(&event) != card_id { continue; }
+                let Ok(payload) = diagram_live_event_payload(&event) else { continue; };
                 if sender.send(Message::Text(payload.into())).await.is_err() { break; }
             }
         }

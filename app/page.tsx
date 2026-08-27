@@ -118,10 +118,14 @@ type Diagram = { id: string; card_id: string; title: string; document: DiagramDo
 type DiagramTool = 'select' | 'draw' | 'erase' | 'rectangle' | 'ellipse' | 'arrow' | 'text' | 'callout';
 type DiagramSnapshot = { strokes: DiagramStroke[]; elements: DiagramElement[] };
 type DiagramHandle = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'start' | 'end';
-type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean };
-type DiagramPresence = { user_id: string; username: string; x: number; y: number };
+type DiagramInteraction = { kind: 'move' | 'resize'; index: number; handle: DiagramHandle; start: DiagramPoint; initial: DiagramElement; historyStored: boolean; objectId?: string };
+type DiagramPresence = { user_id: string; username: string; avatar_url?: string | null; x: number; y: number };
 type DiagramMergeRequest = { operation_id: string; title: string; base_title: string; base_document: DiagramDocument; document: DiagramDocument };
 type DiagramMergeEvent = DiagramMergeRequest & { type: 'diagram_merge'; card_id: string; actor_id: string };
+type DiagramCursorEvent = { type: 'diagram_cursor'; card_id: string; user_id: string; username: string; avatar_url?: string | null; x: number; y: number };
+type DiagramObjectLockEvent = { type: 'diagram_object_lock'; card_id: string; object_id: string; user_id: string; username: string; active: boolean; expires_in_ms: number };
+type DiagramLiveEvent = DiagramMergeEvent | DiagramCursorEvent | DiagramObjectLockEvent;
+type DiagramObjectLock = { user_id: string; username: string; expires_at: number };
 type CardContextMenu = { card: Card; x: number; y: number };
 type ColumnContextMenu = { column: Column; x: number; y: number };
 type ViewportRect = { left: number; top: number; width: number; height: number };
@@ -1075,6 +1079,27 @@ function drawDiagramSelection(context: CanvasRenderingContext2D, element: Diagra
   context.restore();
 }
 
+function drawDiagramRemoteLock(context: CanvasRenderingContext2D, element: DiagramElement, username: string) {
+  const bounds = diagramBounds(element);
+  const pad = 8;
+  const label = `🔒 @${username}`;
+  context.save();
+  context.setLineDash([6, 4]);
+  context.strokeStyle = '#ff9ab7';
+  context.lineWidth = 1.5;
+  context.strokeRect(bounds.left - pad, bounds.top - pad, bounds.right - bounds.left + pad * 2, bounds.bottom - bounds.top + pad * 2);
+  context.setLineDash([]);
+  context.font = '600 11px Inter, system-ui, sans-serif';
+  const width = context.measureText(label).width + 12;
+  const x = Math.max(0, bounds.left - pad);
+  const y = Math.max(14, bounds.top - pad);
+  context.fillStyle = '#8c3154';
+  context.fillRect(x, y - 14, width, 16);
+  context.fillStyle = '#fff4f7';
+  context.fillText(label, x + 6, y - 3);
+  context.restore();
+}
+
 export default function Home() {
   const [columns, setColumns] = useState(initialColumns);
   const [view, setView] = useState<View>('home');
@@ -1304,6 +1329,7 @@ export default function Home() {
   const [diagramZoom, setDiagramZoom] = useState(.7);
   const [diagramImageRevision, setDiagramImageRevision] = useState(0);
   const [diagramPresence, setDiagramPresence] = useState<DiagramPresence[]>([]);
+  const [diagramObjectLocks, setDiagramObjectLocks] = useState<Record<string, DiagramObjectLock>>({});
   const [editingDiagramTextIndex, setEditingDiagramTextIndex] = useState<number | null>(null);
   const [editingDiagramTextDraft, setEditingDiagramTextDraft] = useState('');
   const [isDiagramSaving, setDiagramSaving] = useState(false);
@@ -1405,6 +1431,7 @@ export default function Home() {
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
   const diagramPanRef = useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
   const diagramPresenceSentAtRef = useRef(0);
+  const diagramLockSentAtRef = useRef<Map<string, number>>(new Map());
   const diagramSavedSnapshotRef = useRef('');
   const diagramBaseDocumentRef = useRef<DiagramDocument>({ strokes: [], elements: [] });
   const diagramInFlightDocumentRef = useRef<DiagramDocument | null>(null);
@@ -1972,8 +1999,13 @@ export default function Home() {
       context.restore();
     });
     if (diagramPreview) drawDiagramElement(context, diagramPreview);
+    Object.entries(diagramObjectLocks).forEach(([objectId, lock]) => {
+      if (lock.user_id === account?.user.id) return;
+      const element = diagramElements.find((item) => item.id === objectId);
+      if (element && !element.hidden) drawDiagramRemoteLock(context, element, lock.username);
+    });
     if (selectedDiagramElement !== null && diagramElements[selectedDiagramElement] && !diagramElements[selectedDiagramElement].hidden) drawDiagramSelection(context, diagramElements[selectedDiagramElement]);
-  }, [diagramElements, diagramImageRevision, diagramPreview, diagramStrokes, isDiagramOpen, selectedDiagramElement]);
+  }, [account?.user.id, diagramElements, diagramImageRevision, diagramObjectLocks, diagramPreview, diagramStrokes, isDiagramOpen, selectedDiagramElement]);
 
   useEffect(() => {
     diagramDocumentRef.current = withDiagramObjectIds({ strokes: diagramStrokes, elements: diagramElements });
@@ -1991,6 +2023,7 @@ export default function Home() {
   useEffect(() => {
     if (!isDiagramOpen || authState !== 'signed-in' || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) {
       setDiagramPresence([]);
+      setDiagramObjectLocks({});
       return;
     }
     let active = true;
@@ -2002,7 +2035,9 @@ export default function Home() {
         .catch(() => undefined);
     };
     refresh();
-    const timer = window.setInterval(refresh, 350);
+    // WebSocket carries cursor motion. This is merely a recovery snapshot for
+    // proxies that drop upgraded connections.
+    const timer = window.setInterval(refresh, 2_000);
     return () => { active = false; window.clearInterval(timer); };
   }, [authState, isDiagramOpen, selected?.id]);
 
@@ -2025,14 +2060,48 @@ export default function Home() {
         setDiagramTitle(event.title);
       }
     };
+    const lockExpiryTimers = new Map<string, number>();
+    const clearLockExpiry = (objectId: string) => {
+      const timer = lockExpiryTimers.get(objectId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      lockExpiryTimers.delete(objectId);
+    };
+    const applyLock = (event: DiagramObjectLockEvent) => {
+      clearLockExpiry(event.object_id);
+      if (!event.active) {
+        setDiagramObjectLocks((current) => {
+          const next = { ...current };
+          delete next[event.object_id];
+          return next;
+        });
+        return;
+      }
+      setDiagramObjectLocks((current) => ({ ...current, [event.object_id]: { user_id: event.user_id, username: event.username, expires_at: Date.now() + event.expires_in_ms } }));
+      lockExpiryTimers.set(event.object_id, window.setTimeout(() => {
+        lockExpiryTimers.delete(event.object_id);
+        if (active) setDiagramObjectLocks((current) => {
+          const lock = current[event.object_id];
+          if (!lock || lock.user_id !== event.user_id || lock.expires_at > Date.now()) return current;
+          const next = { ...current };
+          delete next[event.object_id];
+          return next;
+        });
+      }, event.expires_in_ms + 80));
+    };
+    const applyCursor = (event: DiagramCursorEvent) => {
+      if (event.user_id === account?.user.id) return;
+      setDiagramPresence((current) => [...current.filter((person) => person.user_id !== event.user_id), { user_id: event.user_id, username: event.username, avatar_url: event.avatar_url, x: event.x, y: event.y }]);
+    };
     const connect = () => {
       if (!active || typeof selected?.id !== 'string') return;
       try { socket = new WebSocket(diagramSocketUrl(selected.id)); } catch { reconnectTimer = window.setTimeout(connect, 1_000); return; }
       diagramSocketRef.current = socket;
       socket.onmessage = (message) => {
         try {
-          const event = JSON.parse(String(message.data)) as DiagramMergeEvent;
+          const event = JSON.parse(String(message.data)) as DiagramLiveEvent;
           if (event.type === 'diagram_merge') applyMerge(event);
+          else if (event.type === 'diagram_cursor') applyCursor(event);
+          else if (event.type === 'diagram_object_lock') applyLock(event);
         } catch { /* Ignore malformed diagram events. */ }
       };
       socket.onerror = () => socket?.close();
@@ -2042,8 +2111,8 @@ export default function Home() {
       };
     };
     connect();
-    return () => { active = false; if (reconnectTimer !== null) window.clearTimeout(reconnectTimer); if (diagramSocketRef.current === socket) diagramSocketRef.current = null; socket?.close(); };
-  }, [authState, isDiagramOpen, selected?.id]);
+    return () => { active = false; if (reconnectTimer !== null) window.clearTimeout(reconnectTimer); if (diagramSocketRef.current === socket) diagramSocketRef.current = null; socket?.close(); lockExpiryTimers.forEach((timer) => window.clearTimeout(timer)); lockExpiryTimers.clear(); };
+  }, [account?.user.id, authState, isDiagramOpen, selected?.id]);
 
   useEffect(() => {
     if (!isDiagramOpen || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
@@ -3858,7 +3927,8 @@ export default function Home() {
   }
   function deleteSelectedDiagramElement() {
     if (selectedDiagramElement === null || isSelectedReadOnly) return;
-    if (diagramElements[selectedDiagramElement]?.locked) return;
+    const element = diagramElements[selectedDiagramElement];
+    if (element?.locked || diagramLockedByOther(element)) return;
     rememberDiagramState();
     setDiagramElements((current) => resolveDiagramConnectors(current.filter((_, index) => index !== selectedDiagramElement)));
     setSelectedDiagramElement(null);
@@ -3866,11 +3936,16 @@ export default function Home() {
   }
   function beginDiagramTextEdit(index: number) {
     const element = diagramElements[index];
-    if (!element || element.locked || (element.type !== 'text' && element.type !== 'callout')) return;
+    const lock = diagramLockedByOther(element);
+    if (!element || element.locked || lock || (element.type !== 'text' && element.type !== 'callout')) {
+      if (lock) showToast(`Текст сейчас редактирует @${lock.username}`);
+      return;
+    }
     rememberDiagramState();
     setSelectedDiagramElement(index);
     setEditingDiagramTextIndex(index);
     setEditingDiagramTextDraft(element.text);
+    publishDiagramObjectLock(element.id, true);
   }
   function updateDiagramTextEdit(text: string) {
     if (editingDiagramTextIndex === null) return;
@@ -3878,20 +3953,23 @@ export default function Home() {
     setDiagramElements((current) => current.map((element, index) => index === editingDiagramTextIndex && (element.type === 'text' || element.type === 'callout') ? { ...element, text } : element));
   }
   function finishDiagramTextEdit() {
+    publishDiagramObjectLock(editingDiagramTextIndex === null ? undefined : diagramElements[editingDiagramTextIndex]?.id, false);
     setEditingDiagramTextIndex(null);
   }
   function updateSelectedDiagramTextStyle(patch: Partial<Pick<DiagramText | DiagramCallout, 'color' | 'fontSize' | 'fontFamily' | 'fontWeight'>>) {
     if (selectedDiagramElement === null) return;
-    if (diagramElements[selectedDiagramElement]?.locked) return;
+    if (diagramElements[selectedDiagramElement]?.locked || diagramLockedByOther(diagramElements[selectedDiagramElement])) return;
     setDiagramElements((current) => current.map((element, index) => index === selectedDiagramElement && (element.type === 'text' || element.type === 'callout') ? { ...element, ...patch } : element));
   }
   function setDiagramLayerProperty(index: number, patch: Pick<DiagramObject, 'hidden'> | Pick<DiagramObject, 'locked'>) {
     if (isSelectedReadOnly) return;
+    if (diagramLockedByOther(diagramElements[index])) return;
     rememberDiagramState();
     setDiagramElements((current) => current.map((element, position) => position === index ? { ...element, ...patch } : element));
   }
   function moveDiagramLayer(index: number, direction: -1 | 1) {
     if (isSelectedReadOnly) return;
+    if (diagramLockedByOther(diagramElements[index])) return;
     const target = index + direction;
     if (target < 0 || target >= diagramElements.length) return;
     rememberDiagramState();
@@ -3916,9 +3994,31 @@ export default function Home() {
   function publishDiagramCursor(point: DiagramPoint) {
     if (!isDiagramOpen || authState !== 'signed-in' || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
     const now = Date.now();
-    if (now - diagramPresenceSentAtRef.current < 65) return;
+    const socket = diagramSocketRef.current;
+    const minInterval = socket?.readyState === WebSocket.OPEN ? 28 : 140;
+    if (now - diagramPresenceSentAtRef.current < minInterval) return;
     diagramPresenceSentAtRef.current = now;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'cursor', x: Math.round(point.x), y: Math.round(point.y) }));
+      return;
+    }
     void fetch(`${API_URL}/v1/cards/${selected.id}/diagram/presence`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y) }) }).catch(() => undefined);
+  }
+  function diagramLockedByOther(element: DiagramElement | undefined) {
+    const objectId = element?.id;
+    const lock = objectId ? diagramObjectLocks[objectId] : undefined;
+    return lock && lock.user_id !== account?.user.id ? lock : null;
+  }
+  function publishDiagramObjectLock(objectId: string | undefined, active: boolean) {
+    if (!objectId || authState !== 'signed-in' || isSelectedReadOnly) return;
+    const socket = diagramSocketRef.current;
+    if (socket?.readyState !== WebSocket.OPEN) return;
+    const now = Date.now();
+    const lastSent = diagramLockSentAtRef.current.get(objectId) ?? 0;
+    if (active && now - lastSent < 650) return;
+    diagramLockSentAtRef.current.set(objectId, now);
+    socket.send(JSON.stringify({ type: 'object_lock', object_id: objectId, active }));
+    if (!active) diagramLockSentAtRef.current.delete(objectId);
   }
   function zoomDiagramAt(viewport: HTMLDivElement, clientX: number, clientY: number, deltaY: number) {
     const next = Math.max(.35, Math.min(1.8, Number((diagramZoom + (deltaY > 0 ? -.08 : .08)).toFixed(2))));
@@ -4063,10 +4163,15 @@ export default function Home() {
       const element = diagramElements[index];
       const handle = selectedHandle ?? (selectedDiagramElement === index ? diagramHandleAtPoint(element, point) : null);
       setSelectedDiagramElement(index);
-      if (element.locked) return;
+      const lock = diagramLockedByOther(element);
+      if (element.locked || lock) {
+        if (lock) showToast(`Слой сейчас перемещает @${lock.username}`);
+        return;
+      }
       event.currentTarget.setPointerCapture(event.pointerId);
       isDrawingRef.current = true;
-      diagramInteractionRef.current = { kind: handle ? 'resize' : 'move', index, handle: handle ?? 'move', start: point, initial: element, historyStored: false };
+      diagramInteractionRef.current = { kind: handle ? 'resize' : 'move', index, handle: handle ?? 'move', start: point, initial: element, historyStored: false, objectId: element.id };
+      publishDiagramObjectLock(element.id, true);
       return;
     }
     if (isSelectedReadOnly) return;
@@ -4121,6 +4226,7 @@ export default function Home() {
     if (!isDrawingRef.current) return;
     const interaction = diagramInteractionRef.current;
     if (interaction) {
+      publishDiagramObjectLock(interaction.objectId, true);
       if (!interaction.historyStored && Math.hypot(point.x - interaction.start.x, point.y - interaction.start.y) > 1) { rememberDiagramState(); interaction.historyStored = true; }
       setDiagramElements((current) => {
         let element = interaction.kind === 'move'
@@ -4157,7 +4263,7 @@ export default function Home() {
     }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
-    if (diagramInteractionRef.current) { diagramInteractionRef.current = null; return; }
+    if (diagramInteractionRef.current) { publishDiagramObjectLock(diagramInteractionRef.current.objectId, false); diagramInteractionRef.current = null; return; }
     const start = diagramStartRef.current;
     const point = diagramPoint(event);
     if (diagramTool !== 'draw' && diagramTool !== 'erase' && start && point) {
@@ -5541,7 +5647,7 @@ export default function Home() {
           </article>)}</div> : <p>Добавьте фигуру, текст, стрелку или изображение — они появятся здесь.</p>}
         </section>}
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.4, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .4} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(1.6, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 1.6} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
-        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
+        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(1600 * diagramZoom)}px`, height: `${Math.round(960 * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width="1600" height="960" style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onLostPointerCapture={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
         <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly} title="Ctrl+Z / ⌘Z">↶ Отменить <kbd>Ctrl+Z</kbd></button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button><span className="diagram-autosave-status" aria-live="polite">{isDiagramSaving ? 'Сохраняем…' : 'Сохраняется автоматически'}</span></div>
       </section>
     </div>}
