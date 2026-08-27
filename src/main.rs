@@ -5447,7 +5447,7 @@ async fn download_attachment(State(state): State<AppState>, current: Viewer, Pat
     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment was not found.".to_owned()))?;
     ensure_card_public_read(pool, card_id, current.0.map(|user| user.id)).await?;
     let attachment = sqlx::query_as::<_, AttachmentDownloadRecord>(
-        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id, c.discord_integration_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id WHERE a.id = $1",
+        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, COALESCE(a.discord_message_id, source.discord_message_id) AS discord_message_id, a.discord_attachment_id, COALESCE(c.discord_integration_id, source.discord_integration_id) AS discord_integration_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id LEFT JOIN LATERAL (SELECT cm.discord_integration_id, cm.discord_message_id FROM comments cm WHERE cm.card_id = c.id AND cm.discord_integration_id IS NOT NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' ORDER BY cm.created_at DESC LIMIT 1) source ON TRUE WHERE a.id = $1",
     )
     .bind(attachment_id)
     .fetch_optional(pool)
@@ -5924,7 +5924,7 @@ fn rewrite_discord_outbound_comment_bodies(comments: &mut [CommentResponse]) {
 
 async fn download_discord_card_attachment(State(state): State<AppState>, integration: DiscordIntegration, Path((card_id, attachment_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
     let attachment = sqlx::query_as::<_, AttachmentDownloadRecord>(
-        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, a.discord_message_id, a.discord_attachment_id, c.discord_integration_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN comments cm ON cm.card_id = c.id WHERE a.id = $1 AND c.id = $2 AND c.board_id = $3 AND c.archived_at IS NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' LIMIT 1",
+        "SELECT a.object_key, a.media_type, a.external_url, a.discord_channel_id, COALESCE(a.discord_message_id, source.discord_message_id) AS discord_message_id, a.discord_attachment_id, COALESCE(c.discord_integration_id, source.discord_integration_id) AS discord_integration_id FROM attachments a INNER JOIN cards c ON c.id = a.card_id INNER JOIN LATERAL (SELECT cm.discord_integration_id, cm.discord_message_id FROM comments cm WHERE cm.card_id = c.id AND cm.discord_integration_id IS NOT NULL AND cm.body LIKE '%' || '/v1/attachments/' || a.id::text || '/content' || '%' ORDER BY cm.created_at DESC LIMIT 1) source ON TRUE WHERE a.id = $1 AND c.id = $2 AND c.board_id = $3 AND c.archived_at IS NULL",
     )
     .bind(attachment_id).bind(card_id).bind(integration.board_id)
     .fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
