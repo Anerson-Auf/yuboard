@@ -467,7 +467,8 @@ function LabelChip({ label, asButton = false, onClick }: { label: Label; asButto
 function ProfileRoleChip({ role, compact = false, asButton = false, onClick }: { role: ProfileRole; compact?: boolean; asButton?: boolean; onClick?: ReactMouseEventHandler<HTMLButtonElement> }) {
   const className = `label custom-label profile-role-chip ${compact ? 'compact' : ''}`;
   const content = <><ShapeIcon shape={role.icon_shape} color={role.icon_color ?? role.color} /><span>{role.name}</span></>;
-  return asButton ? <button type="button" className={className} style={{ color: '#F7F8FC', backgroundColor: `${role.color}66` }} onClick={onClick}>{content}</button> : <span className={className} style={{ color: '#F7F8FC', backgroundColor: `${role.color}66` }}>{content}</span>;
+  const style = { color: '#F7F8FC', '--profile-role-color': role.color } as CSSProperties;
+  return asButton ? <button type="button" className={className} style={style} onClick={onClick}>{content}</button> : <span className={className} style={style}>{content}</span>;
 }
 
 function ShapePicker({ value, onChange, label }: { value: RoleShape; onChange: (shape: RoleShape) => void; label: string }) {
