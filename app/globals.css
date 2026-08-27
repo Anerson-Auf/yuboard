@@ -727,3 +727,13 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .changelog-card-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .changelog-card-list small { display: block; margin-top: 2px; color: var(--faint); }
 .changelog-card-list select { height: 30px; padding: 0 5px; }
+
+/* Live readers stay separate from assignees, but occupy the same unobtrusive
+   lower-right area of the card. */
+.card-open-presence { position: absolute; z-index: 7; right: 11px; bottom: 10px; display: inline-flex; align-items: center; padding-left: 3px; color: var(--text); }
+.card-open-presence-dot { width: 6px; height: 6px; flex: 0 0 6px; margin-right: 3px; border-radius: 50%; background: #62d5a6; box-shadow: 0 0 0 2px rgb(98 213 166 / 16%); }
+.card-open-presence img, .card-open-presence b, .card-open-presence em { display: grid; width: 21px; height: 21px; margin-left: -4px; place-items: center; border: 2px solid var(--surface-raised); border-radius: 50%; background: color-mix(in srgb, var(--primary) 78%, var(--surface-raised)); color: var(--primary-ink); font-size: 7px; font-style: normal; font-weight: 800; line-height: 1; object-fit: cover; box-shadow: 0 2px 7px rgb(0 0 0 / 20%); }
+.card-open-presence img:first-of-type, .card-open-presence b:first-of-type { margin-left: 0; }
+.card-open-presence em { background: var(--surface-soft); color: var(--text); font-size: 7px; }
+.task-card:has(.card-open-presence) .card-avatars { margin-right: 62px; }
+.card-drag-preview .card-open-presence { display: none; }

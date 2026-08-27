@@ -1,10 +1,10 @@
 'use client';
 /* eslint-disable @next/next/no-img-element -- self-hosted attachment URLs are served by the Rust API. */
 
-import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, CSSProperties, DragEvent as ReactDragEvent, FormEvent, forwardRef, MouseEvent as ReactMouseEvent, MouseEventHandler, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, createContext, CSSProperties, DragEvent as ReactDragEvent, FormEvent, forwardRef, MouseEvent as ReactMouseEvent, MouseEventHandler, PointerEvent as ReactPointerEvent, ReactNode, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './auth.css';
-import BoardPresence, { CardEditingPresence, useBoardPresence } from './board-presence';
+import BoardPresence, { CardEditingPresence, type Presence, useBoardPresence } from './board-presence';
 import CardCollaborationPanel from './card-collaboration-panel';
 import CardScheduleFields from './card-schedule-fields';
 import CardPollsPanel from './card-polls-panel';
@@ -116,23 +116,26 @@ const DEFAULT_STICKERS = [
   { emoji: '👍', name: 'Одобряю' }, { emoji: '👏', name: 'Аплодисменты' }, { emoji: '🔥', name: 'Огонь' }, { emoji: '💯', name: 'Сто процентов' },
   { emoji: '🎉', name: 'Ура' }, { emoji: '🚀', name: 'Поехали' }, { emoji: '❤️', name: 'Любовь' }, { emoji: '💀', name: 'Умер' },
 ];
+const CardPresenceContext = createContext<{ people: Presence[]; currentUserId?: string }>({ people: [] });
 
 function assetUrl(url: string | null | undefined) {
   if (!url) return '';
   return /^(?:https?:|data:|blob:)/i.test(url) ? url : `${API_URL}${url}`;
 }
 
-function CardCover({ card }: { card: Pick<Card, 'coverUrl' | 'coverMediaType' | 'coverMode' | 'hasUnvotedPolls' | 'frozen'> }) {
+function CardCover({ card }: { card: Pick<Card, 'id' | 'coverUrl' | 'coverMediaType' | 'coverMode' | 'hasUnvotedPolls' | 'frozen'> }) {
   const [loadFailed, setLoadFailed] = useState(false);
+  const { people, currentUserId } = useContext(CardPresenceContext);
   useEffect(() => { setLoadFailed(false); }, [card.coverUrl]);
   const frozenBadge = card.frozen ? <span className="card-frozen-badge" title="Карточка заморожена" aria-label="Карточка заморожена">❄</span> : null;
-  if (!card.coverUrl || loadFailed) return <>{frozenBadge}<CardPollAttention card={card} /></>;
+  const openPresence = <CardOpenPresence people={people} currentUserId={currentUserId} cardId={card.id} />;
+  if (!card.coverUrl || loadFailed) return <>{frozenBadge}<CardPollAttention card={card} />{openPresence}</>;
   const isVideo = card.coverMediaType?.startsWith('video/');
   return <>{frozenBadge}<CardPollAttention card={card} /><div className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
     {isVideo
       ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onError={() => setLoadFailed(true)} onLoadedMetadata={(event) => { event.currentTarget.controls = false; }} />
       : <img src={assetUrl(card.coverUrl)} alt="" onError={() => setLoadFailed(true)} />}
-  </div></>;
+  </div>{openPresence}</>;
 }
 
 function CardWaitingIcon({ waiting, corner = false }: { waiting?: CardWaiting | null; corner?: boolean }) {
@@ -409,6 +412,20 @@ function VisibleAvatars({ members, limit = 3 }: { members: Member[]; limit?: num
   const visible = members.slice(0, limit);
   const hidden = members.slice(limit);
   return <>{visible.map((member) => <Avatar key={member.id} member={member} />)}{hidden.length > 0 && <span className="card-member-overflow" title={hidden.map((member) => `@${member.name}`).join(', ')} aria-label={`Ещё ${hidden.length} исполнителей: ${hidden.map((member) => `@${member.name}`).join(', ')}`}>+{hidden.length}</span>}</>;
+}
+
+function CardOpenPresence({ people, currentUserId, cardId }: { people: Presence[]; currentUserId?: string; cardId: EntityId }) {
+  const viewers = people.filter((person) => person.card_id === String(cardId) && person.user_id !== currentUserId);
+  if (!viewers.length) return null;
+  const visible = viewers.slice(0, 3);
+  const title = `Сейчас в карточке: ${viewers.map((person) => `@${person.username}`).join(', ')}`;
+  return <span className="card-open-presence" title={title} aria-label={title}>
+    <i className="card-open-presence-dot" aria-hidden="true" />
+    {visible.map((person) => person.avatar_url
+      ? <img key={person.user_id} src={assetUrl(person.avatar_url)} alt={`@${person.username}`} />
+      : <b key={person.user_id}>{person.username.slice(0, 1).toUpperCase()}</b>)}
+    {viewers.length > visible.length && <em>+{viewers.length - visible.length}</em>}
+  </span>;
 }
 
 function ProfileAvatar({ account, member, version = 0 }: { account: AuthAccount | null; member: Member; version?: number }) {
@@ -4513,7 +4530,7 @@ export default function Home() {
     return <main className="app-shell dark auth-shell"><section className="auth-card"><button className="brand auth-brand" type="button" onClick={() => setAuthMode('login')}><span className="brand-mark">✓</span><span>Flowboard</span></button><p className="eyebrow">FLOWBOARD</p><h1>{isRegistering ? inviteToken ? 'Активировать аккаунт' : 'Создать первый аккаунт' : 'С возвращением'}</h1><p className="auth-copy">{isRegistering ? inviteToken ? 'Выберите уникальный ник и пароль.' : 'Первый аккаунт станет system owner.' : 'Войдите по нику, чтобы продолжить.'}</p><form className="auth-form" onSubmit={submitAuth}><label>Ник<input value={authName} onChange={(event) => setAuthName(event.target.value)} maxLength={32} required autoComplete="username" placeholder="your_nick" /></label><label>Пароль<input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} minLength={10} maxLength={256} required autoComplete={isRegistering ? 'new-password' : 'current-password'} /></label>{authError && <p className="auth-error">{authError}</p>}<button className="create-button auth-submit" type="submit" disabled={isAuthorizing}>{isAuthorizing ? 'Подключаем…' : isRegistering ? inviteToken ? 'Активировать' : 'Создать аккаунт' : 'Войти'}</button></form></section><ReleaseHistoryWidget /></main>;
   }
 
-  return <main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
+  return <CardPresenceContext.Provider value={{ people: boardPresence, currentUserId: account?.user.id }}><main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
     <header className="topbar">
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
       <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам" aria-label="Поиск по задачам" /></label>
@@ -4753,5 +4770,5 @@ export default function Home() {
       filters={{ disabled: view !== 'board', onSelect: () => setFilterOpen(true) }}
     />
     {!isPublicViewer && <ReleaseHistoryWidget />}
-  </main>;
+  </main></CardPresenceContext.Provider>;
 }
