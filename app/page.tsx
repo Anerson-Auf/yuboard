@@ -61,6 +61,17 @@ type CardSort = 'manual' | 'priority' | 'activity';
 type BoardViewMode = 'standard' | 'freeform' | 'dependencies';
 type BoardContentMode = 'columns' | 'members' | 'schedule';
 type BoardUiScale = 'compact' | 'normal' | 'roomy';
+type BoardLocalPreferences = {
+  version: 1;
+  boardUiScale: BoardUiScale;
+  filterMode: FilterMode;
+  labelFilterIds: string[];
+  milestoneFilterId: string | null;
+  cardSort: CardSort;
+  boardContentMode: BoardContentMode;
+  labelsCollapsed: boolean;
+  hideCompletedChecklistItems: boolean;
+};
 const boardContentToggleOptions = [{ value: 'columns', label: 'Колонки' }, { value: 'members', label: 'По людям' }, { value: 'schedule', label: 'Календарь' }] as const;
 const boardViewToggleOptions = [{ value: 'standard', label: 'Ряд' }, { value: 'freeform', label: 'Свободно', title: 'Колонки можно свободно двигать; Shift включает привязку к сетке' }, { value: 'dependencies', label: 'Зависимости', title: 'Дерево связей между карточками' }] as const;
 type MemberDragState = { card: Card; sourceMemberId: string | null };
@@ -1039,6 +1050,7 @@ export default function Home() {
   const [isBoardMenuOpen, setBoardMenuOpen] = useState(false);
   const [isBoardScaleOpen, setBoardScaleOpen] = useState(false);
   const [boardUiScale, setBoardUiScale] = useState<BoardUiScale>('normal');
+  const [boardPreferencesLoadedKey, setBoardPreferencesLoadedKey] = useState<string | null>(null);
   const [isDiscordIntegrationOpen, setDiscordIntegrationOpen] = useState(false);
   const [discordIntegrations, setDiscordIntegrations] = useState<DiscordIntegration[]>([]);
   const [discordIntegrationName, setDiscordIntegrationName] = useState('Предложки Discord');
@@ -1206,6 +1218,7 @@ export default function Home() {
 
   const pinnedCardsStorageKey = account && boardId ? `flowboard.pinned-cards.${account.user.id}.${boardId}` : null;
   const boardUiScaleStorageKey = boardId ? `flowboard.board-ui-scale.${account?.user.id ?? 'guest'}.${boardId}` : null;
+  const boardPreferencesStorageKey = boardId ? `flowboard.board-preferences.${account?.user.id ?? 'guest'}.${boardId}` : null;
 
   useEffect(() => {
     if (!pinnedCardsStorageKey) { setPinnedCardIds([]); return; }
@@ -1216,15 +1229,44 @@ export default function Home() {
   }, [pinnedCardsStorageKey]);
 
   useEffect(() => {
-    if (!boardUiScaleStorageKey) { setBoardUiScale('normal'); return; }
-    const stored = localStorage.getItem(boardUiScaleStorageKey);
-    setBoardUiScale(stored === 'compact' || stored === 'roomy' ? stored : 'normal');
-  }, [boardUiScaleStorageKey]);
+    if (!boardPreferencesStorageKey) {
+      setBoardPreferencesLoadedKey(null);
+      setBoardUiScale('normal');
+      setFilterMode('all');
+      setLabelFilterIds([]);
+      setMilestoneFilterId(null);
+      setCardSort('manual');
+      setBoardContentMode('columns');
+      setLabelsCollapsed(false);
+      setHideCompletedChecklistItems(false);
+      return;
+    }
+    let stored: Partial<BoardLocalPreferences> = {};
+    try {
+      const parsed = JSON.parse(localStorage.getItem(boardPreferencesStorageKey) ?? 'null');
+      if (parsed && typeof parsed === 'object') stored = parsed as Partial<BoardLocalPreferences>;
+    } catch { /* A malformed local preference must never block the board. */ }
+    const legacyScale = localStorage.getItem(boardUiScaleStorageKey ?? '');
+    setBoardUiScale(stored.boardUiScale === 'compact' || stored.boardUiScale === 'roomy' || stored.boardUiScale === 'normal'
+      ? stored.boardUiScale
+      : legacyScale === 'compact' || legacyScale === 'roomy' ? legacyScale : 'normal');
+    setFilterMode(stored.filterMode === 'assigned' || stored.filterMode === 'my_roles' || stored.filterMode === 'due' || stored.filterMode === 'overdue' || stored.filterMode === 'unread' || stored.filterMode === 'all' ? stored.filterMode : 'all');
+    setLabelFilterIds(Array.isArray(stored.labelFilterIds) ? stored.labelFilterIds.filter((value): value is string => typeof value === 'string') : []);
+    setMilestoneFilterId(typeof stored.milestoneFilterId === 'string' ? stored.milestoneFilterId : null);
+    setCardSort(stored.cardSort === 'priority' || stored.cardSort === 'activity' || stored.cardSort === 'manual' ? stored.cardSort : 'manual');
+    setBoardContentMode(stored.boardContentMode === 'members' || stored.boardContentMode === 'schedule' || stored.boardContentMode === 'columns' ? stored.boardContentMode : 'columns');
+    setLabelsCollapsed(Boolean(stored.labelsCollapsed));
+    setHideCompletedChecklistItems(Boolean(stored.hideCompletedChecklistItems));
+    setBoardPreferencesLoadedKey(boardPreferencesStorageKey);
+  }, [boardPreferencesStorageKey, boardUiScaleStorageKey]);
 
-  function changeBoardUiScale(next: BoardUiScale) {
-    setBoardUiScale(next);
-    if (boardUiScaleStorageKey) localStorage.setItem(boardUiScaleStorageKey, next);
-  }
+  useEffect(() => {
+    if (!boardPreferencesStorageKey || boardPreferencesLoadedKey !== boardPreferencesStorageKey) return;
+    const preferences: BoardLocalPreferences = { version: 1, boardUiScale, filterMode, labelFilterIds, milestoneFilterId, cardSort, boardContentMode, labelsCollapsed, hideCompletedChecklistItems };
+    try { localStorage.setItem(boardPreferencesStorageKey, JSON.stringify(preferences)); } catch { /* Local storage can be disabled or full. */ }
+  }, [boardContentMode, boardPreferencesLoadedKey, boardPreferencesStorageKey, boardUiScale, cardSort, filterMode, hideCompletedChecklistItems, labelFilterIds, labelsCollapsed, milestoneFilterId]);
+
+  function changeBoardUiScale(next: BoardUiScale) { setBoardUiScale(next); }
 
   useEffect(() => { columnsRef.current = columns; }, [columns]);
   const selectedParkingCard = selectedParkingCardId ? parkingCards.find((card) => card.id === selectedParkingCardId) ?? null : null;
