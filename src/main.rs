@@ -1213,6 +1213,18 @@ struct ArchivedCardRow {
     archived_at: String,
 }
 
+#[derive(Deserialize)]
+struct ArchivedCardsQuery {
+    cursor: Option<Uuid>,
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct ArchivedCardsPageResponse {
+    items: Vec<ArchivedCardResponse>,
+    next_cursor: Option<Uuid>,
+}
+
 #[derive(Clone, FromRow)]
 struct BoardCardRow {
     id: Uuid,
@@ -6815,15 +6827,21 @@ async fn restore_card(State(state): State<AppState>, current: CurrentUser, Path(
     Ok(Json(card))
 }
 
-async fn list_archived_cards(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>) -> ApiResult<Vec<ArchivedCardResponse>> {
-    let cards = sqlx::query_as::<_, ArchivedCardRow>(
-        "SELECT c.id, c.list_id, c.title, c.description, c.priority, c.completed_at::text AS completed_at, c.archived_at::text AS archived_at FROM cards c INNER JOIN lists l ON l.id = c.list_id INNER JOIN boards b ON b.id = c.board_id WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND ($2::uuid IS NOT NULL OR l.is_public) AND ((b.visibility = 'public' AND c.is_public) OR ($2::uuid IS NOT NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS (SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END)))) ORDER BY c.archived_at DESC",
+async fn list_archived_cards(State(state): State<AppState>, current: Viewer, Path(board_id): Path<Uuid>, Query(query): Query<ArchivedCardsQuery>) -> ApiResult<ArchivedCardsPageResponse> {
+    let page_size = query.limit.unwrap_or(50).clamp(1, 100);
+    let mut cards = sqlx::query_as::<_, ArchivedCardRow>(
+        "SELECT c.id, c.list_id, c.title, c.description, c.priority, c.completed_at::text AS completed_at, c.archived_at::text AS archived_at FROM cards c INNER JOIN lists l ON l.id = c.list_id INNER JOIN boards b ON b.id = c.board_id WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND ($2::uuid IS NOT NULL OR l.is_public) AND ((b.visibility = 'public' AND c.is_public) OR ($2::uuid IS NOT NULL AND (EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_system_owner AND u.disabled_at IS NULL) OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2 AND wm.role IN ('owner', 'full_access')) OR EXISTS (SELECT 1 FROM board_members bm INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id WHERE bm.board_id = b.id AND bm.user_id = $2 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END)))) AND ($3::uuid IS NULL OR (c.archived_at, c.id) < (SELECT cursor.archived_at, cursor.id FROM cards cursor WHERE cursor.id = $3 AND cursor.board_id = $1 AND cursor.archived_at IS NOT NULL)) ORDER BY c.archived_at DESC, c.id DESC LIMIT $4",
     )
     .bind(board_id)
     .bind(current.0.map(|user| user.id))
+    .bind(query.cursor)
+    .bind(page_size + 1)
     .fetch_all(database(&state)?)
     .await
     .map_err(ApiError::internal)?;
+    let has_more = cards.len() > page_size as usize;
+    cards.truncate(page_size as usize);
+    let next_cursor = has_more.then(|| cards.last().map(|card| card.id)).flatten();
     let card_ids: Vec<Uuid> = cards.iter().map(|card| card.id).collect();
     let card_labels = sqlx::query_as::<_, CardLabelRow>("SELECT cl.card_id, l.id, l.name, l.color, l.icon_shape, l.icon_color FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = ANY($1) ORDER BY l.name")
         .bind(&card_ids).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
@@ -6836,7 +6854,7 @@ async fn list_archived_cards(State(state): State<AppState>, current: Viewer, Pat
             if assignee.avatar_url.is_some() { assignee.avatar_url = Some(format!("/v1/public/boards/{board_id}/avatars/{}", assignee.id)); }
         }
     }
-    Ok(Json(cards.into_iter().map(|card| ArchivedCardResponse {
+    let items = cards.into_iter().map(|card| ArchivedCardResponse {
         id: card.id,
         list_id: card.list_id,
         title: card.title,
@@ -6847,7 +6865,8 @@ async fn list_archived_cards(State(state): State<AppState>, current: Viewer, Pat
         labels: card_labels.iter().filter(|label| label.card_id == card.id).map(|label| LabelResponse { id: label.id, name: label.name.clone(), color: label.color.clone(), icon_shape: label.icon_shape.clone(), icon_color: label.icon_color.clone() }).collect(),
         roles: card_roles.iter().filter(|role| role.card_id == card.id).map(|role| ProfileRoleResponse { id: role.id, name: role.name.clone(), color: role.color.clone(), icon_shape: role.icon_shape.clone(), icon_color: role.icon_color.clone() }).collect(),
         assignees: card_assignees.iter().filter(|member| member.card_id == card.id).map(|member| MemberResponse { id: member.id, display_name: member.display_name.clone(), avatar_url: member.avatar_url.clone() }).collect(),
-    }).collect()))
+    }).collect();
+    Ok(Json(ArchivedCardsPageResponse { items, next_cursor }))
 }
 
 async fn move_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<MoveCardRequest>) -> ApiResult<CardResponse> {

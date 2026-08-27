@@ -690,6 +690,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-frozen-badge { position: absolute; z-index: 5; top: 10px; right: 42px; display: grid; width: 21px; height: 21px; place-items: center; border: 1px solid rgb(132 220 255 / 42%); border-radius: 7px; background: rgb(47 117 144 / 24%); color: #b5edff; font-size: 13px; line-height: 1; text-shadow: 0 0 8px rgb(146 229 255 / 80%); }
 .archive-list .archive-card-entry { cursor: pointer; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
 .archive-list .archive-card-entry:hover, .archive-list .archive-card-entry:focus-visible { border-color: color-mix(in srgb, var(--primary) 55%, var(--line)); background: color-mix(in srgb, var(--primary) 7%, var(--surface-raised)); outline: 0; transform: translateY(-1px); }
+.archive-load-more { display: block; width: 100%; min-height: 36px; margin-top: 12px; border: 1px solid color-mix(in srgb, var(--primary) 46%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--primary) 8%, transparent); color: var(--primary); font-size: 11px; font-weight: 800; cursor: pointer; }.archive-load-more:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 16%, transparent); }.archive-load-more:disabled { opacity: .58; cursor: wait; }
 .task-card:not(:has(.card-priority-corner)) .card-frozen-badge { right: 10px; }
 .task-card:has(.card-poll-attention) .card-frozen-badge { top: 38px; }
 .column-limit-exceeded { color: #ff8585 !important; }
