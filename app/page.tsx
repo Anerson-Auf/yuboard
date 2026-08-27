@@ -1307,7 +1307,6 @@ export default function Home() {
   const diagramTitleRef = useRef('Схема');
   const diagramSocketRef = useRef<WebSocket | null>(null);
   const diagramInlineTextEditorRef = useRef<HTMLTextAreaElement | null>(null);
-  const diagramLastSyncAtRef = useRef(0);
   // WebSocket makes remote edits immediate. The version is also polled as a
   // fallback: reverse proxies can silently drop an upgraded connection.
   const diagramServerVersionRef = useRef(-1);
@@ -2003,11 +2002,9 @@ export default function Home() {
     if (!isDiagramOpen || isDiagramSaving || !selected || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     const snapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
     if (!diagramTitle.trim() || snapshot === diagramSavedSnapshotRef.current) return;
-    // This is a throttle rather than a debounce. Long freehand strokes and a
-    // resize therefore become visible to collaborators before the pointer is
-    // released, while the API still receives a bounded number of requests.
-    const delay = Math.max(0, 160 - (Date.now() - diagramLastSyncAtRef.current));
-    const timer = window.setTimeout(() => saveDiagram(false), delay);
+    // A freehand stroke is saved as one completed object. Sending intermediate
+    // snapshots changes its point set while another client is rendering it.
+    const timer = window.setTimeout(() => saveDiagram(false), 220);
     return () => window.clearTimeout(timer);
   }, [diagramElements, diagramStrokes, diagramTitle, isDiagramOpen, isDiagramSaving, selected?.id]);
 
@@ -4041,7 +4038,6 @@ export default function Home() {
     const baseTitle = diagramBaseTitleRef.current;
     const snapshot = JSON.stringify({ title, document });
     const request: DiagramMergeRequest = { operation_id: crypto.randomUUID(), title, base_title: baseTitle, base_document: baseDocument, document };
-    diagramLastSyncAtRef.current = Date.now();
     diagramInFlightDocumentRef.current = document;
     setDiagramSaving(true);
     void fetch(`${API_URL}/v1/cards/${selected.id}/diagram/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })
