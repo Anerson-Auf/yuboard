@@ -3834,23 +3834,51 @@ export default function Home() {
   }
   function eraseDiagramStrokeAt(point: DiagramPoint, radius = 15) {
     const split = (stroke: DiagramStroke): DiagramStroke[] => {
-      if (stroke.points.length < 2) return stroke.points.some((item) => Math.hypot(item.x - point.x, item.y - point.y) <= radius) ? [] : [stroke];
+      const eraseRadius = radius + (stroke.width ?? 3) / 2;
+      if (stroke.points.length < 2) return stroke.points.some((item) => Math.hypot(item.x - point.x, item.y - point.y) <= eraseRadius) ? [] : [stroke];
       const fragments: DiagramPoint[][] = [];
       let fragment: DiagramPoint[] = [];
+      let erased = false;
+      const add = (item: DiagramPoint) => {
+        const previous = fragment.at(-1);
+        if (!previous || Math.hypot(previous.x - item.x, previous.y - item.y) > .01) fragment.push(item);
+      };
       const commit = () => { if (fragment.length > 1) fragments.push(fragment); fragment = []; };
       for (let index = 1; index < stroke.points.length; index += 1) {
         const from = stroke.points[index - 1];
         const to = stroke.points[index];
-        const distance = Math.hypot(to.x - from.x, to.y - from.y);
-        const steps = Math.max(1, Math.min(48, Math.ceil(distance / 3)));
-        for (let step = 0; step <= steps; step += 1) {
-          const ratio = step / steps;
-          const sample = { x: from.x + (to.x - from.x) * ratio, y: from.y + (to.y - from.y) * ratio };
-          if (Math.hypot(sample.x - point.x, sample.y - point.y) <= radius + (stroke.width ?? 3) / 2) commit();
-          else if (!fragment.length || Math.hypot(fragment.at(-1)!.x - sample.x, fragment.at(-1)!.y - sample.y) > .5) fragment.push(sample);
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const lengthSquared = dx * dx + dy * dy;
+        const startX = from.x - point.x;
+        const startY = from.y - point.y;
+        const boundaries = [0, 1];
+        if (lengthSquared > .000001) {
+          const b = 2 * (startX * dx + startY * dy);
+          const c = startX * startX + startY * startY - eraseRadius * eraseRadius;
+          const discriminant = b * b - 4 * lengthSquared * c;
+          if (discriminant > .000001) {
+            const root = Math.sqrt(discriminant);
+            const first = (-b - root) / (2 * lengthSquared);
+            const second = (-b + root) / (2 * lengthSquared);
+            if (first > 0 && first < 1) boundaries.push(first);
+            if (second > 0 && second < 1) boundaries.push(second);
+          }
+        }
+        boundaries.sort((left, right) => left - right);
+        for (let boundary = 1; boundary < boundaries.length; boundary += 1) {
+          const start = boundaries[boundary - 1];
+          const end = boundaries[boundary];
+          const middle = (start + end) / 2;
+          const middlePoint = { x: from.x + dx * middle, y: from.y + dy * middle };
+          const isErased = Math.hypot(middlePoint.x - point.x, middlePoint.y - point.y) <= eraseRadius;
+          if (isErased) { erased = true; commit(); continue; }
+          add({ x: from.x + dx * start, y: from.y + dy * start });
+          add({ x: from.x + dx * end, y: from.y + dy * end });
         }
       }
       commit();
+      if (!erased) return [stroke];
       return fragments.map((points) => ({ ...stroke, id: crypto.randomUUID(), points }));
     };
     setDiagramStrokes((current) => current.flatMap(split));
