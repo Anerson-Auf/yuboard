@@ -999,6 +999,17 @@ struct DiscordCardSyncQuery {
     limit: Option<u16>,
 }
 
+// This is deliberately a monotonically increasing cursor rather than a
+// destructive queue. A Discord worker may safely retry an event after a crash:
+// it advances `after` only once it has completed its own side effect.
+#[derive(Deserialize)]
+struct DiscordOutboxQuery {
+    #[serde(default)]
+    after: Option<i64>,
+    #[serde(default)]
+    limit: Option<u16>,
+}
+
 #[derive(Clone, Serialize, FromRow)]
 struct CardResponse {
     id: Uuid,
@@ -1165,6 +1176,31 @@ struct DiscordCardSyncEventResponse {
     is_completed: bool,
     completed_at: Option<String>,
     thread_id: String,
+}
+
+#[derive(FromRow)]
+struct DiscordOutboxEventRow {
+    id: i64,
+    event_type: String,
+    card_id: Uuid,
+    payload: SqlJson<Value>,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct DiscordOutboxEventResponse {
+    id: i64,
+    #[serde(rename = "type")]
+    event_type: String,
+    card_id: Uuid,
+    payload: Value,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct DiscordOutboxResponse {
+    events: Vec<DiscordOutboxEventResponse>,
+    next_after: i64,
 }
 
 #[derive(Serialize, FromRow)]
@@ -1712,6 +1748,7 @@ async fn main() {
         .route("/v1/integrations/discord/labels", get(list_discord_labels).post(create_discord_label))
         .route("/v1/integrations/discord/labels/{label_id}", patch(update_discord_label).delete(delete_discord_label))
         .route("/v1/integrations/discord/cards/sync", get(list_discord_card_sync_events))
+        .route("/v1/integrations/discord/events", get(list_discord_outbox_events))
         .route("/v1/integrations/discord/threads/{thread_id}/card", get(get_discord_thread_card))
         .route("/v1/integrations/discord/cards", get(list_discord_board_cards).post(create_discord_card))
         .route("/v1/integrations/discord/cards/{card_id}", get(get_discord_card).delete(archive_discord_card))
@@ -4186,6 +4223,81 @@ async fn record_card_activity(pool: &PgPool, card_id: Uuid, actor_id: Uuid, acti
         tracing::error!(?error, card_id = %card_id, "card activity insert failed");
     }
     notify_card_watchers(pool, card_id, Some(actor_id), action, detail).await;
+    if let Some(event_type) = discord_outbox_event_type(action, detail) {
+        record_discord_outbox_event(pool, card_id, actor_id, event_type, action, detail, None).await;
+    }
+}
+
+// Only user-originated actions are written here. Discord-originated actions
+// use `record_external_card_activity`, intentionally preventing a bot from
+// receiving and replaying its own writes forever.
+fn discord_outbox_event_type(action: &str, detail: &str) -> Option<&'static str> {
+    match action {
+        "Задача выполнена" | "Задача возвращена в работу" => Some("card.completion_changed"),
+        "Задача архивирована" => Some("card.archived"),
+        "Задача восстановлена" => Some("card.restored"),
+        "Обновлены метки карточки" => Some("card.labels_changed"),
+        "Обновлены роли карточки" => Some("card.roles_changed"),
+        "Присоединился к задаче" | "Отказался от задачи" | "Изменены исполнители" => Some("card.assignees_changed"),
+        "Ожидается действие" | "Ожидание снято" => Some("card.waiting_changed"),
+        "Добавлена связь карточек" => Some("card.relation_created"),
+        "Изменено пояснение связи" => Some("card.relation_updated"),
+        "Удалена связь карточек" => Some("card.relation_deleted"),
+        "Изменён статус проверки" => Some("card.review_changed"),
+        "Карточка заморожена" | "Карточка разморожена" => Some("card.freeze_changed"),
+        "Изменена задача" if detail.starts_with("Приоритет:") || detail == "Приоритет снят" => Some("card.priority_changed"),
+        _ => None,
+    }
+}
+
+async fn record_discord_outbox_event(pool: &PgPool, card_id: Uuid, actor_id: Uuid, event_type: &str, action: &str, detail: &str, comment_id: Option<Uuid>) {
+    // Each active integration on the board gets its own stream. The payload is
+    // a snapshot of the fields a bridge needs for the listed actions, so it
+    // never has to scan every card to discover what changed.
+    let result = sqlx::query(
+        "INSERT INTO discord_outbox_events (integration_id, card_id, event_type, payload) \
+         SELECT di.id, c.id, $2, jsonb_build_object( \
+           'action', $3, \
+           'detail', $4, \
+           'actor', jsonb_build_object('id', $5::text, 'username', COALESCE(actor.display_name, actor.username, 'Unknown')), \
+           'card', jsonb_build_object( \
+             'id', c.id::text, 'board_id', c.board_id::text, 'list_id', c.list_id::text, \
+             'title', c.title, 'priority', c.priority, 'is_completed', c.completed_at IS NOT NULL, \
+             'is_archived', c.archived_at IS NOT NULL, 'is_frozen', c.is_frozen \
+           ), \
+           'labels', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', l.id::text, 'name', l.name, 'color', l.color) ORDER BY l.name) FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = c.id), '[]'::jsonb), \
+           'roles', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', pr.id::text, 'name', pr.name, 'color', pr.color) ORDER BY pr.name) FROM card_profile_roles cpr INNER JOIN profile_roles pr ON pr.id = cpr.role_id WHERE cpr.card_id = c.id), '[]'::jsonb), \
+           'assignees', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', u.id::text, 'username', COALESCE(u.display_name, u.username)) ORDER BY COALESCE(u.display_name, u.username)) FROM card_assignees ca INNER JOIN users u ON u.id = ca.user_id WHERE ca.card_id = c.id), '[]'::jsonb), \
+           'waiting', (SELECT jsonb_build_object('user_id', cw.user_id::text, 'role_id', cw.role_id::text, 'note', cw.note) FROM card_waiting_for cw WHERE cw.card_id = c.id), \
+           'review', jsonb_build_object( \
+             'status', COALESCE((SELECT cr.status FROM card_reviews cr WHERE cr.card_id = c.id), 'none'), \
+             'reviewer_ids', COALESCE((SELECT jsonb_agg(reviewer.user_id::text ORDER BY reviewer.user_id) FROM card_reviewers reviewer WHERE reviewer.card_id = c.id), '[]'::jsonb) \
+           ), \
+           'comment', CASE WHEN $6::uuid IS NULL THEN NULL ELSE ( \
+             SELECT jsonb_build_object( \
+               'id', cm.id::text, 'body', cm.body, 'author_id', cm.author_id::text, \
+               'author_name', COALESCE(comment_author.display_name, comment_author.username, 'Unknown'), \
+               'created_at', cm.created_at::text \
+             ) FROM comments cm LEFT JOIN users comment_author ON comment_author.id = cm.author_id \
+             WHERE cm.id = $6 AND cm.card_id = c.id AND cm.parent_comment_id IS NULL \
+           ) END \
+         ) \
+         FROM cards c \
+         INNER JOIN discord_integrations di ON di.board_id = c.board_id AND di.revoked_at IS NULL \
+         LEFT JOIN users actor ON actor.id = $5 \
+         WHERE c.id = $1",
+    )
+    .bind(card_id)
+    .bind(event_type)
+    .bind(action)
+    .bind(detail)
+    .bind(actor_id)
+    .bind(comment_id)
+    .execute(pool)
+    .await;
+    if let Err(error) = result {
+        tracing::error!(?error, card_id = %card_id, event_type, "discord outbox event insert failed");
+    }
 }
 
 // Text fields are autosaved. A person pausing to think must not turn one edit
@@ -4792,6 +4904,9 @@ async fn create_comment(State(state): State<AppState>, current: CurrentUser, Pat
     let comment = load_card_comments(pool, card_id, Some(actor_id)).await?.into_iter().find(|item| item.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Comment could not be loaded."))?;
     record_card_activity(pool, card_id, actor_id, if comment.parent_comment_id.is_some() { "Добавлено сообщение в тред" } else { "Добавлен комментарий" }, "").await;
+    if comment.parent_comment_id.is_none() {
+        record_discord_outbox_event(pool, card_id, actor_id, "comment.created", "Добавлен комментарий", "", Some(comment.id)).await;
+    }
     let _ = state.events.send(());
     Ok(Json(comment))
 }
@@ -5054,6 +5169,32 @@ async fn list_discord_card_sync_events(State(state): State<AppState>, integratio
     .await
     .map_err(ApiError::internal)?;
     Ok(Json(events))
+}
+
+async fn list_discord_outbox_events(State(state): State<AppState>, integration: DiscordIntegration, Query(query): Query<DiscordOutboxQuery>) -> ApiResult<DiscordOutboxResponse> {
+    let after = query.after.unwrap_or(0).max(0);
+    let limit = i64::from(query.limit.unwrap_or(100).clamp(1, 200));
+    let rows = sqlx::query_as::<_, DiscordOutboxEventRow>(
+        "SELECT id, event_type, card_id, payload, created_at::text AS created_at \
+         FROM discord_outbox_events \
+         WHERE integration_id = $1 AND id > $2 \
+         ORDER BY id ASC LIMIT $3",
+    )
+    .bind(integration.id)
+    .bind(after)
+    .bind(limit)
+    .fetch_all(database(&state)?)
+    .await
+    .map_err(ApiError::internal)?;
+    let next_after = rows.last().map(|event| event.id).unwrap_or(after);
+    let events = rows.into_iter().map(|event| DiscordOutboxEventResponse {
+        id: event.id,
+        event_type: event.event_type,
+        card_id: event.card_id,
+        payload: event.payload.0,
+        created_at: event.created_at,
+    }).collect();
+    Ok(Json(DiscordOutboxResponse { events, next_after }))
 }
 
 async fn load_discord_card_status(pool: &PgPool, integration: DiscordIntegration, card_id: Uuid) -> Result<DiscordCardStatusResponse, ApiError> {
@@ -6736,6 +6877,16 @@ mod tests {
 
         assert_eq!(request_source_ip(&headers, peer, false), peer.ip());
         assert_eq!(request_source_ip(&headers, peer, true), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)));
+    }
+
+    #[test]
+    fn discord_outbox_covers_only_the_requested_user_actions() {
+        assert_eq!(discord_outbox_event_type("Задача выполнена", ""), Some("card.completion_changed"));
+        assert_eq!(discord_outbox_event_type("Изменена задача", "Приоритет: 4/5"), Some("card.priority_changed"));
+        assert_eq!(discord_outbox_event_type("Обновлены метки карточки", "+важно"), Some("card.labels_changed"));
+        assert_eq!(discord_outbox_event_type("Изменён статус проверки", "requested"), Some("card.review_changed"));
+        assert_eq!(discord_outbox_event_type("Изменена задача", "Описание карточки"), None);
+        assert_eq!(discord_outbox_event_type("Добавлено сообщение в тред", ""), None);
     }
 
     #[test]
