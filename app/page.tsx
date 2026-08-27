@@ -1822,6 +1822,35 @@ export default function Home() {
   }, [authState, isDiagramOpen, selected?.id]);
 
   useEffect(() => {
+    if (!isDiagramOpen || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
+    let active = true;
+    const cardId = selected.id;
+    const refresh = () => {
+      void fetch(`${API_URL}/v1/cards/${cardId}/diagram`)
+        .then(async (response) => { if (!response.ok) throw new Error('diagram refresh failed'); return response.json() as Promise<Diagram | null>; })
+        .then((remote) => {
+          if (!active || !remote || remote.version <= (diagram?.version ?? -1)) return;
+          const localSnapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
+          // Never discard a stroke the person is still working on. The normal
+          // version check will surface a conflict instead of silently choosing
+          // a winner when two people edit the same document at once.
+          if (localSnapshot !== diagramSavedSnapshotRef.current) return;
+          setDiagram(remote);
+          setDiagramTitle(remote.title);
+          setDiagramStrokes(remote.document?.strokes ?? []);
+          setDiagramElements(remote.document?.elements ?? []);
+          setDiagramHistory([]);
+          setSelectedDiagramElement(null);
+          setEditingDiagramTextIndex(null);
+          diagramSavedSnapshotRef.current = JSON.stringify({ title: remote.title, document: { strokes: remote.document?.strokes ?? [], elements: remote.document?.elements ?? [] } });
+        })
+        .catch(() => undefined);
+    };
+    const timer = window.setInterval(refresh, 650);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [diagram?.version, diagramElements, diagramStrokes, diagramTitle, isDiagramOpen, selected?.id]);
+
+  useEffect(() => {
     const viewport = diagramViewportRef.current;
     if (!isDiagramOpen || !viewport) return;
     const onWheel = (event: WheelEvent) => {
