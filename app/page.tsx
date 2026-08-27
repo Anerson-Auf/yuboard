@@ -106,9 +106,11 @@ type DiagramPoint = { x: number; y: number };
 type DiagramObject = { id?: string };
 type DiagramStroke = DiagramObject & { points: DiagramPoint[]; color?: string; width?: number };
 type DiagramRectangle = DiagramObject & { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number };
-type DiagramArrow = DiagramObject & { type: 'arrow'; x: number; y: number; x2: number; y2: number; color: string; lineWidth: number };
+type DiagramConnectorSide = 'top' | 'right' | 'bottom' | 'left';
+type DiagramConnectorAnchor = { element_id: string; side: DiagramConnectorSide; offset: number };
+type DiagramArrow = DiagramObject & { type: 'arrow'; x: number; y: number; x2: number; y2: number; color: string; lineWidth: number; start_anchor?: DiagramConnectorAnchor; end_anchor?: DiagramConnectorAnchor };
 type DiagramText = DiagramObject & { type: 'text'; x: number; y: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
-type DiagramCallout = DiagramObject & { type: 'callout'; x: number; y: number; x2: number; y2: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold' };
+type DiagramCallout = DiagramObject & { type: 'callout'; x: number; y: number; x2: number; y2: number; text: string; color: string; fontSize: number; fontFamily: string; fontWeight: 'normal' | 'bold'; start_anchor?: DiagramConnectorAnchor; end_anchor?: DiagramConnectorAnchor };
 type DiagramImage = DiagramObject & { type: 'image'; x: number; y: number; width: number; height: number; src: string; name?: string };
 type DiagramElement = DiagramRectangle | DiagramArrow | DiagramText | DiagramCallout | DiagramImage;
 type DiagramDocument = { strokes: DiagramStroke[]; elements?: DiagramElement[] };
@@ -906,6 +908,93 @@ function diagramBounds(element: DiagramElement) {
   }
   if (element.type === 'image') return { left: element.x, top: element.y, right: element.x + element.width, bottom: element.y + element.height };
   return { left: Math.min(element.x, element.x + element.width), top: Math.min(element.y, element.y + element.height), right: Math.max(element.x, element.x + element.width), bottom: Math.max(element.y, element.y + element.height) };
+}
+
+const DIAGRAM_SNAP_DISTANCE = 14;
+const DIAGRAM_CONNECT_DISTANCE = 20;
+
+function isDiagramConnector(element: DiagramElement): element is DiagramArrow | DiagramCallout {
+  return element.type === 'arrow' || element.type === 'callout';
+}
+
+function isDiagramConnectable(element: DiagramElement) {
+  return !isDiagramConnector(element);
+}
+
+function clampDiagramValue(value: number, minimum: number, maximum: number) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function diagramAnchorCandidates(element: DiagramElement) {
+  const bounds = diagramBounds(element);
+  const width = Math.max(1, bounds.right - bounds.left);
+  const height = Math.max(1, bounds.bottom - bounds.top);
+  return (point: DiagramPoint) => [
+    { point: { x: clampDiagramValue(point.x, bounds.left, bounds.right), y: bounds.top }, anchor: { element_id: String(element.id), side: 'top' as const, offset: clampDiagramValue((point.x - bounds.left) / width, 0, 1) } },
+    { point: { x: bounds.right, y: clampDiagramValue(point.y, bounds.top, bounds.bottom) }, anchor: { element_id: String(element.id), side: 'right' as const, offset: clampDiagramValue((point.y - bounds.top) / height, 0, 1) } },
+    { point: { x: clampDiagramValue(point.x, bounds.left, bounds.right), y: bounds.bottom }, anchor: { element_id: String(element.id), side: 'bottom' as const, offset: clampDiagramValue((point.x - bounds.left) / width, 0, 1) } },
+    { point: { x: bounds.left, y: clampDiagramValue(point.y, bounds.top, bounds.bottom) }, anchor: { element_id: String(element.id), side: 'left' as const, offset: clampDiagramValue((point.y - bounds.top) / height, 0, 1) } },
+  ];
+}
+
+function diagramConnectorEndpoint(point: DiagramPoint, elements: DiagramElement[], excludedElementId?: string) {
+  const candidates = elements
+    .filter((element) => isDiagramConnectable(element) && element.id && element.id !== excludedElementId)
+    .flatMap((element) => diagramAnchorCandidates(element)(point));
+  const closest = candidates.reduce<typeof candidates[number] | null>((best, candidate) => {
+    if (!best) return candidate;
+    return Math.hypot(candidate.point.x - point.x, candidate.point.y - point.y) < Math.hypot(best.point.x - point.x, best.point.y - point.y) ? candidate : best;
+  }, null);
+  return closest && Math.hypot(closest.point.x - point.x, closest.point.y - point.y) <= DIAGRAM_CONNECT_DISTANCE ? closest : { point, anchor: undefined };
+}
+
+function resolveDiagramAnchor(anchor: DiagramConnectorAnchor, elements: DiagramElement[]) {
+  const element = elements.find((candidate) => candidate.id === anchor.element_id && isDiagramConnectable(candidate));
+  if (!element) return null;
+  const bounds = diagramBounds(element);
+  const x = bounds.left + (bounds.right - bounds.left) * anchor.offset;
+  const y = bounds.top + (bounds.bottom - bounds.top) * anchor.offset;
+  if (anchor.side === 'top') return { x, y: bounds.top };
+  if (anchor.side === 'right') return { x: bounds.right, y };
+  if (anchor.side === 'bottom') return { x, y: bounds.bottom };
+  return { x: bounds.left, y };
+}
+
+function resolveDiagramConnectors(elements: DiagramElement[]) {
+  return elements.map((element) => {
+    if (!isDiagramConnector(element)) return element;
+    const start = element.start_anchor ? resolveDiagramAnchor(element.start_anchor, elements) : null;
+    const end = element.end_anchor ? resolveDiagramAnchor(element.end_anchor, elements) : null;
+    return {
+      ...element,
+      ...(start ? { x: start.x, y: start.y } : element.start_anchor ? { start_anchor: undefined } : {}),
+      ...(end ? { x2: end.x, y2: end.y } : element.end_anchor ? { end_anchor: undefined } : {}),
+    };
+  });
+}
+
+function snapDiagramElementToNeighbors(element: DiagramElement, elements: DiagramElement[], excludedElementId?: string) {
+  if (isDiagramConnector(element)) return element;
+  const bounds = diagramBounds(element);
+  const sourceX = [bounds.left, (bounds.left + bounds.right) / 2, bounds.right];
+  const sourceY = [bounds.top, (bounds.top + bounds.bottom) / 2, bounds.bottom];
+  let snapX: number | null = null;
+  let snapY: number | null = null;
+  for (const target of elements) {
+    if (!isDiagramConnectable(target) || !target.id || target.id === excludedElementId) continue;
+    const targetBounds = diagramBounds(target);
+    for (const source of sourceX) for (const targetPosition of [targetBounds.left, (targetBounds.left + targetBounds.right) / 2, targetBounds.right]) {
+      const offset = targetPosition - source;
+      if (Math.abs(offset) <= DIAGRAM_SNAP_DISTANCE && (snapX === null || Math.abs(offset) < Math.abs(snapX))) snapX = offset;
+    }
+    for (const source of sourceY) for (const targetPosition of [targetBounds.top, (targetBounds.top + targetBounds.bottom) / 2, targetBounds.bottom]) {
+      const offset = targetPosition - source;
+      if (Math.abs(offset) <= DIAGRAM_SNAP_DISTANCE && (snapY === null || Math.abs(offset) < Math.abs(snapY))) snapY = offset;
+    }
+  }
+  if (snapX === null && snapY === null) return element;
+  if (element.type === 'text' || element.type === 'image' || element.type === 'rectangle' || element.type === 'ellipse') return { ...element, x: element.x + (snapX ?? 0), y: element.y + (snapY ?? 0) };
+  return element;
 }
 
 function stableDiagramId(kind: string, index: number, object: DiagramObject) {
@@ -3756,7 +3845,7 @@ export default function Home() {
   function deleteSelectedDiagramElement() {
     if (selectedDiagramElement === null || isSelectedReadOnly) return;
     rememberDiagramState();
-    setDiagramElements((current) => current.filter((_, index) => index !== selectedDiagramElement));
+    setDiagramElements((current) => resolveDiagramConnectors(current.filter((_, index) => index !== selectedDiagramElement)));
     setSelectedDiagramElement(null);
     setEditingDiagramTextIndex(null);
   }
@@ -3972,9 +4061,13 @@ export default function Home() {
   }
 
   function diagramElementFromDrag(tool: Exclude<DiagramTool, 'select' | 'draw' | 'erase' | 'text'>, start: DiagramPoint, end: DiagramPoint): DiagramElement {
-    if (tool === 'arrow') return { id: crypto.randomUUID(), type: 'arrow', x: start.x, y: start.y, x2: end.x, y2: end.y, color: diagramColor, lineWidth: diagramLineWidth };
-    if (tool === 'callout') return { id: crypto.randomUUID(), type: 'callout', x: start.x, y: start.y, x2: end.x, y2: end.y, text: '', color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight };
-    return { id: crypto.randomUUID(), type: tool, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), color: diagramColor, lineWidth: diagramLineWidth };
+    if (tool === 'arrow' || tool === 'callout') {
+      const connectorStart = diagramConnectorEndpoint(start, diagramElements);
+      const connectorEnd = diagramConnectorEndpoint(end, diagramElements);
+      if (tool === 'arrow') return { id: crypto.randomUUID(), type: 'arrow', x: connectorStart.point.x, y: connectorStart.point.y, x2: connectorEnd.point.x, y2: connectorEnd.point.y, color: diagramColor, lineWidth: diagramLineWidth, ...(connectorStart.anchor ? { start_anchor: connectorStart.anchor } : {}), ...(connectorEnd.anchor ? { end_anchor: connectorEnd.anchor } : {}) };
+      return { id: crypto.randomUUID(), type: 'callout', x: connectorStart.point.x, y: connectorStart.point.y, x2: connectorEnd.point.x, y2: connectorEnd.point.y, text: '', color: diagramColor, fontSize: diagramFontSize, fontFamily: diagramFontFamily, fontWeight: diagramFontWeight, ...(connectorStart.anchor ? { start_anchor: connectorStart.anchor } : {}), ...(connectorEnd.anchor ? { end_anchor: connectorEnd.anchor } : {}) };
+    }
+    return snapDiagramElementToNeighbors({ id: crypto.randomUUID(), type: tool, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y), color: diagramColor, lineWidth: diagramLineWidth }, diagramElements);
   }
 
   function continueDiagramStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -3994,8 +4087,22 @@ export default function Home() {
     const interaction = diagramInteractionRef.current;
     if (interaction) {
       if (!interaction.historyStored && Math.hypot(point.x - interaction.start.x, point.y - interaction.start.y) > 1) { rememberDiagramState(); interaction.historyStored = true; }
-      const element = interaction.kind === 'move' ? moveDiagramElement(interaction.initial, point.x - interaction.start.x, point.y - interaction.start.y) : resizeDiagramElement(interaction.initial, interaction.handle, point);
-      setDiagramElements((current) => current.map((item, index) => index === interaction.index ? element : item));
+      setDiagramElements((current) => {
+        let element = interaction.kind === 'move'
+          ? moveDiagramElement(interaction.initial, point.x - interaction.start.x, point.y - interaction.start.y)
+          : resizeDiagramElement(interaction.initial, interaction.handle, point);
+        if (interaction.kind === 'move') {
+          element = isDiagramConnector(element)
+            ? { ...element, start_anchor: undefined, end_anchor: undefined }
+            : snapDiagramElementToNeighbors(element, current, interaction.initial.id);
+        } else if (isDiagramConnector(element) && (interaction.handle === 'start' || interaction.handle === 'end')) {
+          const endpoint = diagramConnectorEndpoint(point, current, interaction.initial.id);
+          element = interaction.handle === 'start'
+            ? { ...element, x: endpoint.point.x, y: endpoint.point.y, ...(endpoint.anchor ? { start_anchor: endpoint.anchor } : { start_anchor: undefined }) }
+            : { ...element, x2: endpoint.point.x, y2: endpoint.point.y, ...(endpoint.anchor ? { end_anchor: endpoint.anchor } : { end_anchor: undefined }) };
+        }
+        return resolveDiagramConnectors(current.map((item, index) => index === interaction.index ? element : item));
+      });
       return;
     }
     if (diagramTool === 'draw') {
@@ -5365,7 +5472,7 @@ export default function Home() {
         <button className="modal-close" onClick={closeDiagram} aria-label="Закрыть">×</button>
         <p className="eyebrow">CANVAS</p>
         <input className="diagram-title" value={diagramTitle} onChange={(event) => setDiagramTitle(event.target.value)} maxLength={120} aria-label="Название схемы" />
-        <p className="diagram-hint">В «Схватить» тяните пустое место ЛКМ, чтобы двигать полотно. Колесо масштабирует к курсору, двойной клик по тексту открывает редактор.</p>
+        <p className="diagram-hint">В «Схватить» тяните пустое место ЛКМ, чтобы двигать полотно. Фигуры магнитятся к краям и центрам, а стрелки цепляются за границу фигуры и следуют за ней. Колесо масштабирует к курсору.</p>
         <div className="diagram-toolbar" role="toolbar" aria-label="Инструменты схемы">
           <div className="diagram-tool-group">
             {([
