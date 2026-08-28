@@ -162,6 +162,7 @@ const DEFAULT_STICKERS = [
   { emoji: '🎉', name: 'Ура' }, { emoji: '🚀', name: 'Поехали' }, { emoji: '❤️', name: 'Любовь' }, { emoji: '💀', name: 'Умер' },
 ];
 const CardPresenceContext = createContext<{ people: Presence[]; currentUserId?: string }>({ people: [] });
+const MentionRolesContext = createContext<ProfileRole[]>([]);
 
 function assetUrl(url: string | null | undefined) {
   if (!url) return '';
@@ -602,6 +603,8 @@ type MentionTextareaProps = {
 
 function MentionTextarea({ value, onValueChange, members, roles = [], className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }: MentionTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const boardRoles = useContext(MentionRolesContext);
+  const availableRoles = roles.length ? roles : boardRoles;
   const [query, setQuery] = useState<string | null>(null);
   const [commandQuery, setCommandQuery] = useState<string | null>(null);
   const isChecklistDescription = ariaLabel.startsWith('Описание пункта ');
@@ -617,7 +620,7 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
     setCommandQuery(commandMatch ? commandMatch[1].toLowerCase() : null);
   };
   const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().includes(query));
-  const roleSuggestions = query === null ? [] : roles.filter((role) => role.name.toLowerCase().includes(query));
+  const roleSuggestions = query === null ? [] : availableRoles.filter((role) => role.name.toLowerCase().includes(query));
   const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
   const insertMention = (member: Member) => {
     const textarea = textareaRef.current;
@@ -755,6 +758,8 @@ function renderComposerText(root: HTMLElement, value: string) {
 
 const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStickerComposerProps>(function InlineStickerComposer({ value, onValueChange, members, roles = [], className, placeholder, ariaLabel, disabled, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }, ref) {
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const boardRoles = useContext(MentionRolesContext);
+  const availableRoles = roles.length ? roles : boardRoles;
   const pendingCaret = useRef<number | null>(null);
   const localValueRef = useRef(value);
   const delayedValueTimerRef = useRef<number | null>(null);
@@ -768,7 +773,7 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     setCommandQuery(command ? command[1].toLowerCase() : null);
   };
   const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().includes(query));
-  const roleSuggestions = query === null ? [] : roles.filter((role) => role.name.toLowerCase().includes(query));
+  const roleSuggestions = query === null ? [] : availableRoles.filter((role) => role.name.toLowerCase().includes(query));
   const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
   const flushValue = () => {
     if (delayedValueTimerRef.current !== null) {
@@ -5896,7 +5901,7 @@ export default function Home() {
     return <main className="app-shell dark auth-shell"><section className="auth-card"><button className="brand auth-brand" type="button" onClick={() => setAuthMode('login')}><span className="brand-mark">✓</span><span>Flowboard</span></button><p className="eyebrow">FLOWBOARD</p><h1>{isRegistering ? inviteToken ? 'Активировать аккаунт' : 'Создать первый аккаунт' : 'С возвращением'}</h1><p className="auth-copy">{isRegistering ? inviteToken ? 'Выберите уникальный ник и пароль.' : 'Первый аккаунт станет system owner.' : 'Войдите по нику, чтобы продолжить.'}</p><form className="auth-form" onSubmit={submitAuth}><label>Ник<input value={authName} onChange={(event) => setAuthName(event.target.value)} maxLength={32} required autoComplete="username" placeholder="your_nick" /></label><label>Пароль<input type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} minLength={10} maxLength={256} required autoComplete={isRegistering ? 'new-password' : 'current-password'} /></label>{authError && <p className="auth-error">{authError}</p>}<button className="create-button auth-submit" type="submit" disabled={isAuthorizing}>{isAuthorizing ? 'Подключаем…' : isRegistering ? inviteToken ? 'Активировать' : 'Создать аккаунт' : 'Войти'}</button></form></section><BuildUpdateNotice /><ReleaseHistoryWidget /></main>;
   }
 
-  return <CardPresenceContext.Provider value={{ people: boardPresence, currentUserId: account?.user.id }}><main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${view === 'board' ? `board-ui-scale-${boardUiScale}` : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
+  return <MentionRolesContext.Provider value={profileRoles}><CardPresenceContext.Provider value={{ people: boardPresence, currentUserId: account?.user.id }}><main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${view === 'board' ? `board-ui-scale-${boardUiScale}` : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
     <header className="topbar">
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
       <label className={`search ${isContentSearchLoading ? 'searching' : ''}`}><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам и содержимому" aria-label="Поиск по задачам и содержимому" aria-busy={isContentSearchLoading} />{isContentSearchLoading && <i aria-label="Ищем по содержимому" />}</label>
@@ -6191,5 +6196,5 @@ export default function Home() {
     />
     <BuildUpdateNotice />
     {!isPublicViewer && <ReleaseHistoryWidget />}
-  </main></CardPresenceContext.Provider>;
+  </main></CardPresenceContext.Provider></MentionRolesContext.Provider>;
 }
