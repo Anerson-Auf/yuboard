@@ -3,7 +3,7 @@
 import { PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import './dependency-graph.css';
 
-type RelationType = 'blocks' | 'depends_on' | 'duplicate' | 'related';
+type RelationType = 'blocks' | 'depends_on' | 'duplicate' | 'related' | 'part_of';
 export type DependencyGraphNode = { id: string; title: string; listTitle: string; completed: boolean; priority?: number };
 type Relation = { id: string; source_card_id: string; target_card_id: string; relation_type: RelationType; note: string };
 type Point = { x: number; y: number };
@@ -15,6 +15,7 @@ const meta: Record<RelationType, { label: string; className: string; directed: b
   depends_on: { label: 'Зависит от', className: 'depends-on', directed: true },
   related: { label: 'Связана с', className: 'related', directed: false },
   duplicate: { label: 'Дубликат', className: 'duplicate', directed: false },
+  part_of: { label: 'Является частью', className: 'part-of', directed: true },
 };
 const TYPE_LIST = Object.keys(meta) as RelationType[];
 const NODE_WIDTH = 238;

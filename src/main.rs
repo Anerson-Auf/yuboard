@@ -6780,6 +6780,7 @@ fn card_relation_type_label(relation_type: &str) -> &'static str {
         "depends_on" => "Зависит от",
         "duplicate" => "Дубликат",
         "related" => "Связана с",
+        "part_of" => "Является частью",
         _ => "Связь",
     }
 }
@@ -6798,6 +6799,20 @@ async fn dependency_cycle_path(pool: &PgPool, prerequisite_card_id: Uuid, depend
     )
     .bind(dependent_card_id)
     .bind(prerequisite_card_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)
+}
+
+// `source_card_id` is the implementation card and `target_card_id` is its
+// parent. Keep that hierarchy acyclic independently from blocking relations:
+// being part of a patch note must never block a card from being completed.
+async fn part_of_cycle_path(pool: &PgPool, parent_card_id: Uuid, child_card_id: Uuid) -> Result<Option<Vec<Uuid>>, ApiError> {
+    sqlx::query_scalar::<_, Vec<Uuid>>(
+        "WITH RECURSIVE walk(card_id, path) AS (SELECT r.target_card_id, ARRAY[r.source_card_id, r.target_card_id] FROM card_relations r WHERE r.source_card_id = $1 AND r.relation_type = 'part_of' UNION ALL SELECT r.target_card_id, w.path || r.target_card_id FROM card_relations r INNER JOIN walk w ON r.source_card_id = w.card_id WHERE r.relation_type = 'part_of' AND NOT r.target_card_id = ANY(w.path)) SELECT path FROM walk WHERE card_id = $2 LIMIT 1",
+    )
+    .bind(parent_card_id)
+    .bind(child_card_id)
     .fetch_optional(pool)
     .await
     .map_err(ApiError::internal)
@@ -6831,8 +6846,8 @@ async fn list_board_relations(State(state): State<AppState>, current: CurrentUse
 
 async fn create_card_relation(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<CreateCardRelationRequest>) -> ApiResult<CardRelationResponse> {
     if card_id == request.target_card_id { return Err(ApiError::bad_request("A card cannot be related to itself.")); }
-    if !matches!(request.relation_type.as_str(), "blocks" | "depends_on" | "duplicate" | "related") {
-        return Err(ApiError::bad_request("relation_type must be blocks, depends_on, duplicate, or related."));
+    if !matches!(request.relation_type.as_str(), "blocks" | "depends_on" | "duplicate" | "related" | "part_of") {
+        return Err(ApiError::bad_request("relation_type must be blocks, depends_on, duplicate, related, or part_of."));
     }
     let note = request.note.trim();
     if note.chars().count() > 500 { return Err(ApiError::bad_request("relation note must contain at most 500 characters.")); }
@@ -6849,6 +6864,17 @@ async fn create_card_relation(State(state): State<AppState>, current: CurrentUse
             if let Some(first) = loop_titles.first().cloned() { loop_titles.push(first); }
             let detail = if loop_titles.len() >= 2 { format!(": {}", loop_titles.join(" → ")) } else { String::new() };
             return Err(ApiError::bad_request(format!("Нельзя создать связь: она замкнёт цикл зависимостей{detail}.")));
+        }
+    }
+    if request.relation_type == "part_of" {
+        if let Some(path) = part_of_cycle_path(pool, request.target_card_id, card_id).await? {
+            let titles = sqlx::query_as::<_, (Uuid, String)>("SELECT id, title FROM cards WHERE id = ANY($1)")
+                .bind(&path).fetch_all(pool).await.map_err(ApiError::internal)?;
+            let title_by_id: HashMap<Uuid, String> = titles.into_iter().collect();
+            let mut loop_titles = path.iter().filter_map(|id| title_by_id.get(id).cloned()).collect::<Vec<_>>();
+            if let Some(first) = loop_titles.first().cloned() { loop_titles.push(first); }
+            let detail = if loop_titles.len() >= 2 { format!(": {}", loop_titles.join(" → ")) } else { String::new() };
+            return Err(ApiError::bad_request(format!("Нельзя создать связь: она замкнёт цикл вложенности{detail}.")));
         }
     }
     let relation = sqlx::query_as::<_, CardRelationResponse>(
