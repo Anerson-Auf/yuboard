@@ -372,8 +372,21 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .diagram-presence-cursor span { display: block; text-shadow: 0 1px 3px rgb(0 0 0 / 70%); }
 .diagram-presence-cursor b { margin-top: 11px; padding: 3px 5px; border-radius: 5px; background: #ff4f8a; color: #fff; box-shadow: 0 2px 7px rgb(0 0 0 / 38%); font-size: 10px; line-height: 1; white-space: nowrap; }
 .diagram-backdrop-fullscreen { padding: 0; }
-.diagram-modal.fullscreen { width: 100vw; height: 100vh; max-height: none; padding: 16px 20px; border: 0; border-radius: 0; }
-.diagram-modal.fullscreen .diagram-viewport { max-height: calc(100vh - 260px); }
+.diagram-modal.fullscreen { width: 100vw; height: 100vh; max-height: none; padding: 12px; border: 0; border-radius: 0; }
+/* Fullscreen behaves like a real editor: controls float above the canvas instead
+   of permanently taking away a large strip from its top and bottom. */
+.diagram-modal.fullscreen > .eyebrow, .diagram-modal.fullscreen .diagram-hint { display: none; }
+.diagram-modal.fullscreen .diagram-title { position: fixed; z-index: 110; top: 14px; left: 18px; width: min(330px, calc(100vw - 430px)); margin: 0; padding: 7px 10px; border: 1px solid rgb(101 113 132 / 42%); border-radius: 9px; background: rgb(20 23 30 / 62%); box-shadow: 0 7px 22px rgb(0 0 0 / 20%); backdrop-filter: blur(15px); }
+.diagram-modal.fullscreen .diagram-toolbar { position: fixed; z-index: 110; bottom: 16px; left: 50%; display: flex; flex-wrap: nowrap; align-items: flex-end; width: max-content; max-width: calc(100vw - 28px); margin: 0; overflow-x: auto; overscroll-behavior: contain; padding: 7px 9px; border-color: rgb(110 122 143 / 42%); background: rgb(24 27 34 / 64%); box-shadow: 0 12px 34px rgb(0 0 0 / 34%); backdrop-filter: blur(18px) saturate(1.1); transform: translateX(-50%); scrollbar-width: none; }
+.diagram-modal.fullscreen .diagram-toolbar::-webkit-scrollbar { display: none; }
+.diagram-modal.fullscreen .diagram-toolbar .diagram-tool-group { flex: 0 0 auto; }
+.diagram-modal.fullscreen .diagram-toolbar .diagram-control, .diagram-modal.fullscreen .diagram-toolbar .diagram-width-picker, .diagram-modal.fullscreen .diagram-toolbar .diagram-sticker-picker { flex: 0 0 auto; }
+.diagram-modal.fullscreen .diagram-zoom { position: fixed; z-index: 111; bottom: 68px; left: 50%; margin: 0; padding: 5px 7px; border: 1px solid rgb(110 122 143 / 36%); border-radius: 9px; background: rgb(24 27 34 / 55%); box-shadow: 0 7px 20px rgb(0 0 0 / 26%); backdrop-filter: blur(14px); transform: translateX(-50%); }
+.diagram-modal.fullscreen .diagram-zoom output { background: rgb(17 19 25 / 70%); }
+.diagram-modal.fullscreen .diagram-actions { position: fixed; z-index: 111; top: 14px; right: 94px; margin: 0; padding: 4px 6px; border: 1px solid rgb(110 122 143 / 34%); border-radius: 9px; background: rgb(24 27 34 / 52%); box-shadow: 0 7px 20px rgb(0 0 0 / 22%); backdrop-filter: blur(14px); }
+.diagram-modal.fullscreen .diagram-actions .secondary-button { min-height: 29px; padding: 0 7px; font-size: 10px; }
+.diagram-modal.fullscreen .diagram-autosave-status { font-size: 10px; }
+.diagram-modal.fullscreen .diagram-viewport { height: calc(100vh - 24px); max-height: none; padding: 0; border-radius: 10px; }
 .diagram-fullscreen-toggle { position: absolute; z-index: 1; top: 15px; right: 52px; display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--muted); font-size: 17px; line-height: 1; }
 .diagram-fullscreen-toggle:hover { color: var(--text); border-color: var(--primary); }
 .diagram-sticker-picker { display: flex; align-items: end; gap: 3px; min-height: 42px; }
@@ -408,7 +421,7 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .diagram-note-thread form { display: flex; gap: 6px; }.diagram-note-thread textarea, .diagram-note-composer textarea { width: 100%; min-height: 38px; padding: 7px; border: 1px solid #50555c; border-radius: 7px; outline: 0; resize: vertical; background: #1d1f22; color: #f4f6fa; font: inherit; font-size: 11px; }.diagram-note-thread textarea:focus, .diagram-note-composer textarea:focus { border-color: var(--primary); }.diagram-note-thread form button { width: 28px; border: 0; border-radius: 7px; background: #536dca; color: #fff; font-weight: 900; }.diagram-note-thread form button:disabled { opacity: .45; }
 .diagram-note-composer { z-index: 9; transform: translate(12px, 12px); display: grid; gap: 7px; }.diagram-note-composer b { font-size: 12px; }.diagram-note-composer > span { display: flex; justify-content: flex-end; gap: 6px; }.diagram-note-composer > span button { min-height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: #b6bfcb; font-size: 11px; }.diagram-note-composer > span .create-button { background: #536dca; color: #fff; }.diagram-note-composer > span .create-button:disabled { opacity: .45; }
 .diagram-note-context-menu { z-index: 115; min-width: 176px; }
-@media (max-width: 760px) { .diagram-shape-inspector { top: 56px; right: 12px; width: calc(100vw - 24px); grid-template-columns: 1fr; }.diagram-shape-text-editor { grid-column: auto; }.diagram-modal.fullscreen { padding: 12px; }.diagram-modal.fullscreen .diagram-viewport { max-height: calc(100vh - 305px); } }
+@media (max-width: 760px) { .diagram-shape-inspector { top: 56px; right: 12px; width: calc(100vw - 24px); grid-template-columns: 1fr; }.diagram-shape-text-editor { grid-column: auto; }.diagram-modal.fullscreen { padding: 8px; }.diagram-modal.fullscreen .diagram-title { top: 10px; left: 10px; width: min(250px, calc(100vw - 118px)); }.diagram-modal.fullscreen .diagram-actions { top: 50px; right: 10px; }.diagram-modal.fullscreen .diagram-toolbar { max-width: calc(100vw - 16px); bottom: 8px; }.diagram-modal.fullscreen .diagram-toolbar .diagram-tool-group { width: auto; padding: 0 8px 0 0; border-right: 1px solid #3f4448; border-bottom: 0; }.diagram-modal.fullscreen .diagram-zoom { bottom: 60px; }.diagram-modal.fullscreen .diagram-viewport { height: calc(100vh - 16px); max-height: none; } }
 .board-background-upload { display: flex; justify-content: flex-end; margin: -4px 34px 8px; }
 .board-background-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .public-board-notice { margin: 0 34px 12px; color: #cecfd2; font-size: 12px; font-weight: 700; }
