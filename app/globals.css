@@ -476,6 +476,8 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
 .mention-suggestions button > b + span { color: var(--muted); font-size: 11px; font-weight: 650; }
 .mention-highlight { border-radius: 4px; background: color-mix(in srgb, #ef5b68 28%, transparent); color: var(--text); padding: 1px 3px; font-weight: 750; }
 textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--surface-raised)); box-shadow: inset 2px 0 0 #ef5b68; }
+.mention-target { animation: mention-target-flash 3.2s ease-out both; }
+@keyframes mention-target-flash { 0% { box-shadow: 0 0 0 2px color-mix(in srgb, #ef5b68 88%, transparent), 0 0 26px color-mix(in srgb, #ef5b68 42%, transparent); } 100% { box-shadow: 0 0 0 0 transparent, 0 0 0 transparent; } }
 
 .filter-control, .board-labels-control, .board-menu-control { position: relative; z-index: 32; flex: 0 0 auto; }
 .board-icon-button { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }

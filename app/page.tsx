@@ -53,7 +53,8 @@ type Activity = { id: string; action: string; detail: string; actor_id?: string 
 type BoardActivityItem = { id: string; card_id: string; card_title: string; action: string; detail: string; actor_id: string | null; actor_name: string; actor_avatar_url: string | null; created_at: string; count: number };
 type BoardActivityPage = { items: BoardActivityItem[]; page: number; per_page: number; total: number };
 type CardDetail = { checklists: Checklist[]; comments: Comment[]; attachments: Attachment[]; activity: Activity[]; cover_attachment_id: string | null; cover_mode: 'full' | 'top'; background_image_url: string | null; unread_mention_source_ids: string[]; watching: boolean };
-type CardNotification = { id: string; card_id: string; board_id: string; card_title: string; board_title: string; actor_name: string | null; action: string; detail: string; is_read: boolean; created_at: string };
+type CardNotification = { id: string; card_id: string; board_id: string; card_title: string; board_title: string; actor_name: string | null; action: string; detail: string; is_read: boolean; created_at: string; source_kind?: string | null; source_id?: string | null };
+type NotificationTarget = { cardId: string; sourceKind: 'comment_mention' | 'checklist_item_mention'; sourceId: string };
 type AuthAccount = { user: { id: string; username: string; avatar_url: string | null; is_system_owner: boolean } };
 type AuthState = 'checking' | 'signed-out' | 'signed-in' | 'public';
 type Workspace = { id: string; name: string; background_image_url?: string | null; can_manage?: boolean };
@@ -1424,6 +1425,8 @@ export default function Home() {
   const [isNotificationsLoading, setNotificationsLoading] = useState(false);
   const [pendingNotificationCardId, setPendingNotificationCardId] = useState<string | null>(null);
   const [pendingNotification, setPendingNotification] = useState<CardNotification | null>(null);
+  const [pendingNotificationTarget, setPendingNotificationTarget] = useState<NotificationTarget | null>(null);
+  const [focusedMentionSourceId, setFocusedMentionSourceId] = useState<string | null>(null);
   const [availableAccounts, setAvailableAccounts] = useState<ApiMember[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
@@ -2081,6 +2084,39 @@ export default function Home() {
   }, [boardId, columns, pendingNotification]);
 
   useEffect(() => {
+    if (!pendingNotificationTarget || String(selected?.id) !== pendingNotificationTarget.cardId || isDetailsLoading) return;
+    const target = pendingNotificationTarget;
+    const focus = () => {
+      setFocusedMentionSourceId(target.sourceId);
+      window.setTimeout(() => setFocusedMentionSourceId((current) => current === target.sourceId ? null : current), 3_200);
+    };
+    if (target.sourceKind === 'checklist_item_mention') {
+      const checklist = checklists.find((item) => item.items.some((entry) => String(entry.id) === target.sourceId));
+      setPendingNotificationTarget(null);
+      if (!checklist) { showToast('Пункт чек-листа больше недоступен'); return; }
+      setCollapsedChecklistIds((current) => current.filter((id) => id !== checklist.id));
+      setExpandedChecklistItemIds((current) => current.includes(target.sourceId) ? current : [...current, target.sourceId]);
+      focus();
+      window.setTimeout(() => document.getElementById(`checklist-item-${target.sourceId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0);
+      return;
+    }
+    const mentionedComment = comments.find((comment) => String(comment.id) === target.sourceId);
+    setPendingNotificationTarget(null);
+    if (!mentionedComment) { showToast('Сообщение больше недоступно'); return; }
+    setConversationTab('comments');
+    focus();
+    const root = mentionedComment.parent_comment_id
+      ? comments.find((comment) => String(comment.id) === mentionedComment.parent_comment_id)
+      : mentionedComment;
+    if (!root) { showToast('Тред сообщения больше недоступен'); return; }
+    if (mentionedComment.parent_comment_id) {
+      openCommentThread(root);
+      return;
+    }
+    window.requestAnimationFrame(() => document.getElementById(`comment-${target.sourceId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  }, [checklists, comments, isDetailsLoading, pendingNotificationTarget, selected?.id]);
+
+  useEffect(() => {
     if (!sharedCardId || !boardId) return;
     const card = columns.flatMap((column) => column.cards).find((item) => String(item.id) === sharedCardId);
     if (!card) return;
@@ -2154,6 +2190,11 @@ export default function Home() {
       .filter((comment) => comment.parent_comment_id === String(freshRoot.id))
       .sort((left, right) => String(left.created_at ?? '').localeCompare(String(right.created_at ?? ''))));
   }, [comments, threadRoot?.id]);
+
+  useEffect(() => {
+    if (!focusedMentionSourceId || !threadRoot || !threadComments.some((comment) => String(comment.id) === focusedMentionSourceId)) return;
+    window.requestAnimationFrame(() => document.querySelector<HTMLElement>(`.thread-window #comment-${CSS.escape(focusedMentionSourceId)}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  }, [focusedMentionSourceId, threadComments, threadRoot?.id]);
 
   useEffect(() => {
     const items = checklists.flatMap((checklist) => checklist.items);
@@ -2868,7 +2909,7 @@ export default function Home() {
               {checklist.items.filter((item) => !hideCompletedChecklistItems || !item.is_completed).map((item) => {
                 const itemId = String(item.id);
                 const isExpanded = expandedChecklistItemIds.includes(itemId);
-                return <div className="checklist-item" key={item.id}>
+                return <div className={`checklist-item ${focusedMentionSourceId === itemId ? 'mention-target' : ''}`} id={`checklist-item-${itemId}`} key={item.id}>
                   <div className="check-row">{isSelectedReadOnly ? <span className={`check-item check-item-completion ${item.is_completed ? 'done' : ''}`}><span className="check-control">{item.is_completed && '✓'}</span></span> : <button className={`check-item check-item-completion ${item.is_completed ? 'done' : ''}`} onClick={() => toggleChecklistItem(checklist.id, item)} aria-label={item.is_completed ? 'Снять отметку' : 'Отметить выполненным'} aria-pressed={item.is_completed}><span className="check-control">{item.is_completed && '✓'}</span></button>}{editingChecklistItemTitleId === itemId ? <InlineTitleEditor value={item.title} className={`check-item-title-editor ${item.is_completed ? 'done' : ''}`} ariaLabel="Название пункта чек-листа" maxLength={500} onSave={(title) => renameChecklistItem(checklist, item, title)} onCancel={() => setEditingChecklistItemTitleId(null)} /> : isSelectedReadOnly ? <span className={`check-item-title ${item.is_completed ? 'done' : ''}`}>{item.title}</span> : <button type="button" className={`check-item-title ${item.is_completed ? 'done' : ''}`} title="Изменить название пункта" onClick={() => setEditingChecklistItemTitleId(itemId)}>{item.title}</button>}<button className={`check-item-toggle ${isExpanded ? 'open' : ''}`} type="button" title={isExpanded ? 'Скрыть детали пункта' : 'Раскрыть детали пункта'} aria-expanded={isExpanded} onClick={() => setExpandedChecklistItemIds((current) => current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId])}>⌄</button>{!isSelectedReadOnly && <button className="remove-check" onClick={() => removeChecklistItem(checklist.id, item)} aria-label={`Удалить пункт ${item.title}`}>×</button>}</div>
                   {isExpanded && <div className="check-item-detail"><MentionTextarea className={unreadMentionSourceIds.includes(itemId) ? 'mention-highlight' : undefined} value={checklistItemDescriptionDrafts[itemId] ?? item.description} onValueChange={(value) => setChecklistItemDescriptionDrafts((current) => ({ ...current, [itemId]: value }))} onBlur={() => saveChecklistItemDescription(checklist.id, item)} members={account ? workspaceMembers : []} maxLength={4000} placeholder="Описание пункта…" ariaLabel={`Описание пункта ${item.title}`} /><label className="check-item-upload">{isUploadingChecklistItemAttachment ? 'Загружаем…' : '＋ Картинка или видео'}<input type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime" multiple disabled={isUploadingChecklistItemAttachment} onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ''; void uploadChecklistItemAttachments(checklist.id, item, files); }} /></label>{item.attachments.length > 0 && <div className="check-item-attachments">{item.attachments.map((attachment) => <figure key={attachment.id}>{attachment.media_type.startsWith('image/') ? <button className="check-item-image" type="button" onClick={() => setImagePreview({ url: assetUrl(attachment.url), name: attachment.original_name })}><img src={assetUrl(attachment.url)} alt={attachment.original_name} /></button> : attachment.media_type.startsWith('video/') ? <video controls preload="metadata" src={assetUrl(attachment.url)} /> : <a href={assetUrl(attachment.url)} target="_blank" rel="noreferrer">{attachment.original_name}</a>}<figcaption><span>{attachment.original_name}</span><button type="button" onClick={() => deleteChecklistItemAttachment(checklist.id, item, attachment)} aria-label={`Удалить ${attachment.original_name}`}>×</button></figcaption></figure>)}</div>}</div>}
                 </div>;
@@ -3915,6 +3956,15 @@ export default function Home() {
     setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, is_read: true } : item));
     setNotificationsOpen(false);
     if (!notification.is_read) void fetch(`${API_URL}/v1/notifications/${notification.id}/read`, { method: 'POST' }).catch(() => undefined);
+    if ((notification.source_kind === 'comment_mention' || notification.source_kind === 'checklist_item_mention') && notification.source_id) {
+      setPendingNotificationTarget({ cardId: notification.card_id, sourceKind: notification.source_kind, sourceId: notification.source_id });
+    } else {
+      setPendingNotificationTarget(null);
+    }
+    if (String(selected?.id) === notification.card_id) {
+      setDetailsLoading(true);
+      setCardDetailRevision((current) => current + 1);
+    }
     setPendingNotification(notification);
     if (notification.board_id !== boardId) void selectBoard(notification.board_id);
   }
@@ -5186,7 +5236,7 @@ export default function Home() {
   }
   function renderCommentMessage(comment: Comment, className = '', canOpenThread = true) {
     const threadCount = comments.filter((item) => item.parent_comment_id === String(comment.id)).length;
-    return <div className={`comment ${className}`.trim()} key={comment.id}>
+    return <div className={`comment ${focusedMentionSourceId === String(comment.id) ? 'mention-target' : ''} ${className}`.trim()} id={`comment-${comment.id}`} key={comment.id}>
       <Avatar member={commentMember(comment)} />
       <div className="comment-body">
         {editingCommentId === comment.id ? <form className="comment-edit" onSubmit={(event) => { event.preventDefault(); saveCommentEdit(comment); }}>

@@ -1726,6 +1726,8 @@ struct CardNotificationResponse {
     detail: String,
     is_read: bool,
     created_at: String,
+    source_kind: Option<String>,
+    source_id: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -4726,14 +4728,19 @@ async fn replace_card_mentions(pool: &PgPool, card_id: Uuid, actor_id: Uuid, sou
     for user_id in users {
         sqlx::query("INSERT INTO card_mentions (id, card_id, user_id, source_kind, source_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, source_kind, source_id) DO UPDATE SET card_id = EXCLUDED.card_id, created_at = now(), read_at = NULL")
             .bind(Uuid::new_v4()).bind(card_id).bind(user_id).bind(source_kind).bind(source_id).execute(pool).await.map_err(ApiError::internal)?;
-        if source_kind == "comment" {
+        let notification = match source_kind {
+            "comment" => Some(("Вас упомянули в обсуждении", "comment_mention")),
+            "checklist_item_description" => Some(("Вас упомянули в описании пункта", "checklist_item_mention")),
+            _ => None,
+        };
+        if let Some((action, notification_source_kind)) = notification {
             sqlx::query(
                 "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail, source_kind, source_id) \
-                 VALUES ($1, $2, $3, $4, 'Вас упомянули в обсуждении', $5, 'comment_mention', $6) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (user_id, source_kind, source_id) WHERE source_kind IS NOT NULL AND source_id IS NOT NULL \
                  DO UPDATE SET card_id = EXCLUDED.card_id, actor_id = EXCLUDED.actor_id, action = EXCLUDED.action, detail = EXCLUDED.detail, read_at = NULL, created_at = now()",
             )
-            .bind(Uuid::new_v4()).bind(user_id).bind(card_id).bind(actor_id).bind(&mention_detail).bind(source_id)
+            .bind(Uuid::new_v4()).bind(user_id).bind(card_id).bind(actor_id).bind(action).bind(&mention_detail).bind(notification_source_kind).bind(source_id)
             .execute(pool).await.map_err(ApiError::internal)?;
         }
     }
@@ -4794,7 +4801,7 @@ async fn unwatch_card(State(state): State<AppState>, current: CurrentUser, Path(
 
 async fn list_notifications(State(state): State<AppState>, current: CurrentUser) -> ApiResult<Vec<CardNotificationResponse>> {
     let notifications = sqlx::query_as::<_, CardNotificationResponse>(
-        "SELECT n.id, n.card_id, c.board_id, c.title AS card_title, b.title AS board_title, COALESCE(u.username, 'Deleted user') AS actor_name, n.action, n.detail, n.read_at IS NOT NULL AS is_read, n.created_at::text AS created_at FROM card_notifications n INNER JOIN cards c ON c.id = n.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN users u ON u.id = n.actor_id WHERE n.user_id = $1 AND b.archived_at IS NULL AND (b.visibility = 'public' OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = n.user_id) OR EXISTS(SELECT 1 FROM users owner WHERE owner.id = n.user_id AND owner.is_system_owner AND owner.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = n.user_id AND wm.role IN ('owner', 'full_access'))) ORDER BY n.created_at DESC LIMIT 80"
+        "SELECT n.id, n.card_id, c.board_id, c.title AS card_title, b.title AS board_title, COALESCE(u.username, 'Deleted user') AS actor_name, n.action, n.detail, n.read_at IS NOT NULL AS is_read, n.created_at::text AS created_at, n.source_kind, n.source_id FROM card_notifications n INNER JOIN cards c ON c.id = n.card_id INNER JOIN boards b ON b.id = c.board_id LEFT JOIN users u ON u.id = n.actor_id WHERE n.user_id = $1 AND b.archived_at IS NULL AND (b.visibility = 'public' OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = n.user_id) OR EXISTS(SELECT 1 FROM users owner WHERE owner.id = n.user_id AND owner.is_system_owner AND owner.disabled_at IS NULL) OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = n.user_id AND wm.role IN ('owner', 'full_access'))) ORDER BY n.created_at DESC LIMIT 80"
     )
     .bind(current.id)
     .fetch_all(database(&state)?)
