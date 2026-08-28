@@ -1307,6 +1307,8 @@ export default function Home() {
   const [isMembersPopoverOpen, setMembersPopoverOpen] = useState(false);
   const [nextCardId, setNextCardId] = useState(100);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
+  const [draggedChecklistId, setDraggedChecklistId] = useState<string | null>(null);
+  const [checklistDropTargetId, setChecklistDropTargetId] = useState<string | null>(null);
   const [collapsedChecklistIds, setCollapsedChecklistIds] = useState<string[]>([]);
   const [checklistNameDraft, setChecklistNameDraft] = useState('');
   const [checklistItemDrafts, setChecklistItemDrafts] = useState<Record<string, string>>({});
@@ -2842,9 +2844,9 @@ export default function Home() {
           const itemIds = checklist.items.map((item) => String(item.id));
           const allExpanded = itemIds.length > 0 && itemIds.every((id) => expandedChecklistItemIds.includes(id));
           const isCollapsed = collapsedChecklistIds.includes(checklist.id);
-          return <section className={`checklist ${isCollapsed ? 'collapsed' : ''}`} key={checklist.id}>
+          return <section className={`checklist ${isCollapsed ? 'collapsed' : ''} ${checklistDropTargetId === checklist.id ? 'checklist-drop-target' : ''}`} key={checklist.id} onDragOver={(event) => { if (draggedChecklistId && draggedChecklistId !== checklist.id) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setChecklistDropTargetId(checklist.id); } }} onDrop={(event) => { if (!draggedChecklistId || draggedChecklistId === checklist.id) return; event.preventDefault(); event.stopPropagation(); moveChecklist(draggedChecklistId, checklist.id); }}>
             <div className="section-heading">
-              {editingChecklistTitleId === checklist.id ? <InlineTitleEditor value={checklist.title} className="checklist-title-editor" ariaLabel="Название чек-листа" maxLength={200} onSave={(title) => renameChecklist(checklist, title)} onCancel={() => setEditingChecklistTitleId(null)} /> : isSelectedReadOnly ? <h4>{checklist.title}</h4> : <button className="checklist-title-edit" type="button" title="Изменить название чек-листа" onClick={() => setEditingChecklistTitleId(checklist.id)}>{checklist.title}</button>}<span>{completed}/{checklist.items.length}</span>
+              {!isSelectedReadOnly && <span className="checklist-drag-handle" draggable onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/x-flowboard-checklist', checklist.id); setDraggedChecklistId(checklist.id); }} onDragEnd={() => { setDraggedChecklistId(null); setChecklistDropTargetId(null); }} title="Перетащить чек-лист" aria-label="Перетащить чек-лист">⠿</span>}{editingChecklistTitleId === checklist.id ? <InlineTitleEditor value={checklist.title} className="checklist-title-editor" ariaLabel="Название чек-листа" maxLength={200} onSave={(title) => renameChecklist(checklist, title)} onCancel={() => setEditingChecklistTitleId(null)} /> : isSelectedReadOnly ? <h4>{checklist.title}</h4> : <button className="checklist-title-edit" type="button" title="Изменить название чек-листа" onClick={() => setEditingChecklistTitleId(checklist.id)}>{checklist.title}</button>}<span>{completed}/{checklist.items.length}</span>
               <button className={`text-action checklist-collapse-toggle ${isCollapsed ? 'collapsed' : ''}`} type="button" title={isCollapsed ? 'Развернуть чек-лист' : 'Свернуть чек-лист'} aria-expanded={!isCollapsed} onClick={() => setCollapsedChecklistIds((current) => current.includes(checklist.id) ? current.filter((id) => id !== checklist.id) : [...current, checklist.id])}>{isCollapsed ? '⌄' : '⌃'}</button>
               <button className="text-action checklist-all-toggle" type="button" title={allExpanded ? 'Свернуть все детали' : 'Раскрыть все детали'} onClick={() => setExpandedChecklistItemIds((current) => allExpanded ? current.filter((id) => !itemIds.includes(id)) : [...new Set([...current, ...itemIds])])}>{allExpanded ? '⌃ Все' : '⌄ Все'}</button>
               {!isSelectedReadOnly && <button className="text-action danger-text" onClick={() => deleteChecklist(checklist)}>Удалить</button>}
@@ -4856,6 +4858,23 @@ export default function Home() {
         .then((response) => { if (!response.ok) throw new Error('checklist delete failed'); })
         .catch(() => showToast('Удаление чек-листа не сохранено'));
     }
+  }
+  function moveChecklist(sourceId: string, beforeId: string) {
+    if (sourceId === beforeId || selected?.archived || isSelectedReadOnly) return;
+    const previous = checklists;
+    const sourceIndex = previous.findIndex((checklist) => checklist.id === sourceId);
+    const beforeIndex = previous.findIndex((checklist) => checklist.id === beforeId);
+    if (sourceIndex < 0 || beforeIndex < 0) return;
+    const next = [...previous];
+    const [moving] = next.splice(sourceIndex, 1);
+    next.splice(next.findIndex((checklist) => checklist.id === beforeId), 0, moving);
+    setDraggedChecklistId(null);
+    setChecklistDropTargetId(null);
+    applyChecklists(next);
+    if (persistence !== 'connected' || isParkingCardId(selected?.id) || typeof selected?.id !== 'string' || next.some((checklist) => checklist.id.startsWith('local-'))) return;
+    void fetch(`${API_URL}/v1/cards/${selected.id}/checklists/order`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ checklist_ids: next.map((checklist) => checklist.id) }) })
+      .then((response) => { if (!response.ok) throw new Error('checklist reorder failed'); })
+      .catch(() => { applyChecklists(previous); showToast('Порядок чек-листов не сохранён'); });
   }
   function toggleChecklistItem(checklistId: string, item: ChecklistItem) {
     if (selected?.archived) return;

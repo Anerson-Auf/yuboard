@@ -901,6 +901,11 @@ struct UpdateChecklistRequest {
 }
 
 #[derive(Deserialize)]
+struct ReorderChecklistsRequest {
+    checklist_ids: Vec<Uuid>,
+}
+
+#[derive(Deserialize)]
 struct UpdateChecklistItemRequest {
     #[serde(default)]
     title: Option<String>,
@@ -1908,6 +1913,7 @@ async fn main() {
         .route("/v1/diagram/notes/{note_id}", axum::routing::delete(delete_card_diagram_note))
         .route("/v1/diagram/notes/{note_id}/comments", post(create_card_diagram_note_comment))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
+        .route("/v1/cards/{card_id}/checklists/order", put(reorder_checklists))
         .route("/v1/checklists/{checklist_id}", patch(update_checklist).delete(delete_checklist))
         .route("/v1/checklists/{checklist_id}/items", post(create_checklist_item))
         .route("/v1/checklist-items/{item_id}", patch(update_checklist_item).delete(delete_checklist_item))
@@ -5339,6 +5345,30 @@ async fn create_checklist(State(state): State<AppState>, current: CurrentUser, P
     record_card_activity(pool, card_id, actor_id, "Создан чек-лист", &checklist.title).await;
     let _ = state.events.send(());
     Ok(Json(ChecklistResponse { id: checklist.id, title: checklist.title, items: vec![] }))
+}
+
+async fn reorder_checklists(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<ReorderChecklistsRequest>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    if request.checklist_ids.len() > 200 || request.checklist_ids.len() != request.checklist_ids.iter().collect::<HashSet<_>>().len() {
+        return Err(ApiError::bad_request("Checklist order contains duplicate or invalid entries."));
+    }
+    let existing_ids = sqlx::query_scalar::<_, Uuid>("SELECT id FROM checklists WHERE card_id = $1 ORDER BY position, id")
+        .bind(card_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    let requested_ids = request.checklist_ids.iter().copied().collect::<HashSet<_>>();
+    if existing_ids.len() != request.checklist_ids.len() || existing_ids.iter().collect::<HashSet<_>>() != requested_ids.iter().collect::<HashSet<_>>() {
+        return Err(ApiError::bad_request("Checklist order must include every checklist of this card exactly once."));
+    }
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    for (index, checklist_id) in request.checklist_ids.iter().enumerate() {
+        sqlx::query("UPDATE checklists SET position = $1 WHERE id = $2 AND card_id = $3")
+            .bind(((index + 1) * 1000) as i64).bind(checklist_id).bind(card_id)
+            .execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    }
+    transaction.commit().await.map_err(ApiError::internal)?;
+    record_card_activity(pool, card_id, current.id, "Изменён порядок чек-листов", "").await;
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn update_checklist(State(state): State<AppState>, current: CurrentUser, Path(checklist_id): Path<Uuid>, Json(request): Json<UpdateChecklistRequest>) -> ApiResult<ChecklistRow> {
