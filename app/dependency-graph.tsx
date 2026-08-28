@@ -55,6 +55,7 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
   const [draftNote, setDraftNote] = useState('');
   const [sourceSearch, setSourceSearch] = useState('');
   const [targetSearch, setTargetSearch] = useState('');
+  const [linkTargetId, setLinkTargetId] = useState<string | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const panDragRef = useRef<{ id: number; x: number; y: number; pan: Point } | null>(null);
   const nodeDragRef = useRef<{ id: number; nodeId: string; x: number; y: number; position: Point; moved: boolean } | null>(null);
@@ -121,7 +122,7 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
     void savePosition(cardId, next);
   };
   const chooseRelation = (id: string) => { const item = relations.find((relation) => relation.id === id); setSelectedId(id); setNote(item?.note ?? ''); };
-  const dismissMenus = () => { setCanvasMenu(null); setSourceMenu(null); setTargetMenu(null); setTypeMenu(null); setRelationMenu(null); setDraft(null); setDraftNote(''); setSourceSearch(''); setTargetSearch(''); };
+  const dismissMenus = () => { setCanvasMenu(null); setSourceMenu(null); setTargetMenu(null); setTypeMenu(null); setRelationMenu(null); setDraft(null); setDraftNote(''); setSourceSearch(''); setTargetSearch(''); setLinkTargetId(null); };
   // Menus are viewport-fixed. Clamp their trigger point before rendering so a
   // picker opened near an edge never disappears behind the browser boundary.
   const menuPosition = (point: Point, reservedHeight: number) => {
@@ -229,7 +230,7 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
   const begin = (sourceId: string, placement?: Point) => {
     if (placement) ensurePosition(sourceId, placement);
     const position = placement && !positions[sourceId] ? clampPoint(placement) : layout.positions.get(sourceId);
-    setCanvasMenu(null); setSourceMenu(null); setTargetMenu(null); setTargetSearch(''); setSelectedId(null);
+    setCanvasMenu(null); setSourceMenu(null); setTargetMenu(null); setTargetSearch(''); setLinkTargetId(null); setSelectedId(null);
     setDraft({ sourceId, cursor: position ? { x: position.x + NODE_WIDTH, y: position.y + NODE_HEIGHT / 2 } : { x: PAD + NODE_WIDTH, y: PAD + NODE_HEIGHT / 2 } });
   };
   const endpoints = (from: Point, to: Point) => {
@@ -267,7 +268,13 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
         setPositions((current) => ({ ...current, [nodeDrag.nodeId]: next }));
         return;
       }
-      if (draft) { setDraft((current) => current ? { ...current, cursor: canvasPoint(event.clientX, event.clientY) } : null); return; }
+      if (draft) {
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-dependency-node-id]')?.dataset.dependencyNodeId;
+        const nextTargetId = target && target !== draft.sourceId ? target : null;
+        setLinkTargetId((current) => current === nextTargetId ? current : nextTargetId);
+        setDraft((current) => current ? { ...current, cursor: canvasPoint(event.clientX, event.clientY) } : null);
+        return;
+      }
       const drag = panDragRef.current;
       if (drag?.id === event.pointerId) setPan({ x: drag.pan.x + event.clientX - drag.x, y: drag.pan.y + event.clientY - drag.y });
     }} onPointerUp={(event) => {
@@ -278,8 +285,16 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
         if (nodeDrag.moved) { suppressNodeClickRef.current = true; void savePosition(nodeDrag.nodeId, clampPoint({ x: nodeDrag.position.x + (event.clientX - nodeDrag.x) / zoom, y: nodeDrag.position.y + (event.clientY - nodeDrag.y) / zoom })); }
         return;
       }
-      if (draft && !(event.target instanceof Element && event.target.closest('.dependency-node, .dependency-menu'))) {
+      if (draft) {
         const client = { x: event.clientX, y: event.clientY };
+        const target = linkTargetId ?? document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-dependency-node-id]')?.dataset.dependencyNodeId;
+        if (target && target !== draft.sourceId) {
+          suppressNodeClickRef.current = true;
+          setLinkTargetId(null);
+          setTargetMenu(null);
+          setTypeMenu({ sourceId: draft.sourceId, targetId: target, client, canvas: canvasPoint(event.clientX, event.clientY) });
+          return;
+        }
         setTargetMenu({ sourceId: draft.sourceId, client, canvas: canvasPoint(event.clientX, event.clientY) });
         return;
       }
@@ -299,7 +314,7 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
       {targetMenu && <div className="dependency-menu dependency-source-picker" style={menuPosition(targetMenu.client, 432)}><b>С какой карточкой?</b><input className="dependency-menu-search" autoFocus value={targetSearch} onChange={(event) => setTargetSearch(event.target.value)} placeholder="Найти по названию или колонке…" aria-label="Найти целевую карточку" />{matchingNodes(targetSearch, targetMenu.sourceId).map((node) => <button key={node.id} type="button" onClick={() => { setTargetSearch(''); setTargetMenu(null); setTypeMenu({ sourceId: targetMenu.sourceId, targetId: node.id, client: targetMenu.client, canvas: targetMenu.canvas }); }}><small>{node.listTitle}</small>{node.title}</button>)}{!matchingNodes(targetSearch, targetMenu.sourceId).length && <p className="dependency-menu-empty">Ничего не найдено.</p>}</div>}
       {typeMenu && <div className="dependency-menu dependency-type-picker" style={menuPosition(typeMenu.client, 334)}><b>Как связать?</b>{TYPE_LIST.map((type) => <button key={type} type="button" disabled={saving} onClick={() => void create(typeMenu.sourceId, typeMenu.targetId, type, typeMenu.canvas)}><i className={meta[type].className} />{meta[type].label}</button>)}<textarea value={draftNote} onChange={(event) => setDraftNote(event.target.value)} maxLength={500} placeholder="Короткое пояснение (необязательно)" /><button type="button" className="dependency-cancel" onClick={() => { setTypeMenu(null); setTargetMenu(null); setDraft(null); }}>Отмена</button></div>}
       {relationMenu && selected && <div className="dependency-menu dependency-relation-menu" style={menuPosition({ x: relationMenu.x, y: relationMenu.y }, 298)}><b>Изменить связь</b>{TYPE_LIST.map((type) => <button key={type} type="button" disabled={saving || type === selected.relation_type} onClick={() => void changeType(type)}><i className={meta[type].className} />{meta[type].label}</button>)}<button type="button" className="dependency-menu-danger" onClick={() => void remove()}>Разорвать связь</button></div>}
-      {loading ? <p className="dependency-empty">Загружаем связи…</p> : <div className="dependency-canvas" style={{ width: layout.width, height: layout.height, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}><svg className="dependency-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`}><defs><marker id="dependency-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" /></marker></defs>{visibleRelations.map((relation) => { const order = direction(relation); const from = layout.positions.get(order.from); const to = layout.positions.get(order.to); if (!from || !to) return null; const { start, end } = endpoints(from, to); const type = meta[relation.relation_type]; return <g key={relation.id} className={`dependency-line ${type.className} ${selectedId === relation.id ? 'selected' : ''}`} onClick={() => chooseRelation(relation.id)} onContextMenu={(event) => { if (!canEdit) return; event.preventDefault(); event.stopPropagation(); chooseRelation(relation.id); setRelationMenu({ id: relation.id, x: event.clientX, y: event.clientY }); }}><path className="dependency-line-hitbox" d={linePath(start, end)} /><path className="dependency-line-stroke" d={linePath(start, end)} markerEnd={type.directed ? 'url(#dependency-arrow)' : undefined} /><text x={(start.x + end.x) / 2} y={(start.y + end.y) / 2 - 10} textAnchor="middle">{type.label}</text></g>; })}{draft && (() => { const source = layout.positions.get(draft.sourceId); if (!source) return null; const { start } = endpoints(source, draft.cursor); return <path className="dependency-draft-line" d={linePath(start, draft.cursor)} markerEnd="url(#dependency-arrow)" />; })()}</svg>{graphNodes.map((node) => { const position = layout.positions.get(node.id); if (!position) return null; return <button key={node.id} className={`dependency-node ${draft?.sourceId === node.id ? 'selected' : ''} ${node.completed ? 'completed' : ''}`} type="button" style={{ left: position.x, top: position.y }} onPointerDown={(event) => startNodeDrag(event, node.id)} onClick={(event) => { event.stopPropagation(); if (suppressNodeClickRef.current) { suppressNodeClickRef.current = false; return; } if (draft && draft.sourceId !== node.id) { setTargetMenu(null); setTypeMenu({ sourceId: draft.sourceId, targetId: node.id, client: { x: event.clientX, y: event.clientY } }); } else if (!draft) onOpenCard(node.id); }}><span className="dependency-node-list">{node.listTitle}</span><b>{node.title}</b><footer><span title={node.priority ? `Приоритет ${node.priority} из 5` : 'Без приоритета'}>{node.priority ? '▮'.repeat(node.priority) : '—'}</span>{node.completed && <em>Выполнено</em>}</footer>{canEdit && <span className="dependency-output" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); begin(node.id); viewportRef.current?.setPointerCapture(event.pointerId); }} />}</button>; })}</div>}
+      {loading ? <p className="dependency-empty">Загружаем связи…</p> : <div className="dependency-canvas" style={{ width: layout.width, height: layout.height, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}><svg className="dependency-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`}><defs><marker id="dependency-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" /></marker></defs>{visibleRelations.map((relation) => { const order = direction(relation); const from = layout.positions.get(order.from); const to = layout.positions.get(order.to); if (!from || !to) return null; const { start, end } = endpoints(from, to); const type = meta[relation.relation_type]; return <g key={relation.id} className={`dependency-line ${type.className} ${selectedId === relation.id ? 'selected' : ''}`} onClick={() => chooseRelation(relation.id)} onContextMenu={(event) => { if (!canEdit) return; event.preventDefault(); event.stopPropagation(); chooseRelation(relation.id); setRelationMenu({ id: relation.id, x: event.clientX, y: event.clientY }); }}><path className="dependency-line-hitbox" d={linePath(start, end)} /><path className="dependency-line-stroke" d={linePath(start, end)} markerEnd={type.directed ? 'url(#dependency-arrow)' : undefined} /><text x={(start.x + end.x) / 2} y={(start.y + end.y) / 2 - 10} textAnchor="middle">{type.label}</text></g>; })}{draft && (() => { const source = layout.positions.get(draft.sourceId); if (!source) return null; const { start } = endpoints(source, draft.cursor); return <path className="dependency-draft-line" d={linePath(start, draft.cursor)} markerEnd="url(#dependency-arrow)" />; })()}</svg>{graphNodes.map((node) => { const position = layout.positions.get(node.id); if (!position) return null; return <button key={node.id} data-dependency-node-id={node.id} className={`dependency-node ${draft?.sourceId === node.id ? 'selected' : ''} ${linkTargetId === node.id ? 'link-target' : ''} ${node.completed ? 'completed' : ''}`} type="button" style={{ left: position.x, top: position.y }} onPointerDown={(event) => startNodeDrag(event, node.id)} onClick={(event) => { event.stopPropagation(); if (suppressNodeClickRef.current) { suppressNodeClickRef.current = false; return; } if (draft && draft.sourceId !== node.id) { setLinkTargetId(null); setTargetMenu(null); setTypeMenu({ sourceId: draft.sourceId, targetId: node.id, client: { x: event.clientX, y: event.clientY } }); } else if (!draft) onOpenCard(node.id); }}><span className="dependency-node-list">{node.listTitle}</span><b>{node.title}</b><footer><span title={node.priority ? `Приоритет ${node.priority} из 5` : 'Без приоритета'}>{node.priority ? '▮'.repeat(node.priority) : '—'}</span>{node.completed && <em>Выполнено</em>}</footer>{canEdit && <span className="dependency-output" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); begin(node.id); viewportRef.current?.setPointerCapture(event.pointerId); }} />}</button>; })}</div>}
     </div>
   </section>;
 }

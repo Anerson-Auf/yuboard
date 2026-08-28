@@ -19,3 +19,4 @@
 .dependency-menu-search:focus { border-color: #729ce6; outline: 0; box-shadow: 0 0 0 2px rgb(93 146 235 / 16%); }
 .dependency-menu-search::placeholder { color: #8f9299; }
 .dependency-menu-empty { margin: 3px 7px 7px; color: #9da0a7; font-size: 11px; }
+.dependency-node.link-target { border-color: #9ec7ff; box-shadow: 0 0 0 3px rgb(104 162 255 / 28%), 0 12px 28px rgb(0 0 0 / 34%); transform: translateY(-3px) scale(1.015); }
