@@ -20,3 +20,15 @@
 .dependency-menu-search::placeholder { color: #8f9299; }
 .dependency-menu-empty { margin: 3px 7px 7px; color: #9da0a7; font-size: 11px; }
 .dependency-node.link-target { border-color: #9ec7ff; box-shadow: 0 0 0 3px rgb(104 162 255 / 28%), 0 12px 28px rgb(0 0 0 / 34%); transform: translateY(-3px) scale(1.015); }
+
+/* The graph is a workspace, not a landing page: keep its chrome inside the
+   canvas and reserve the screen for cards and their connections. */
+.dependency-graph { padding: 0; }
+.dependency-graph-scroll { min-height: clamp(620px, calc(100vh - 88px), 860px); border-top: 0; }
+.dependency-empty { min-height: clamp(620px, calc(100vh - 88px), 860px); }
+.dependency-canvas-actions { position: absolute; z-index: 5; right: 13px; bottom: 11px; display: flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid rgb(131 138 151 / 24%); border-radius: 8px; background: rgb(22 24 28 / 46%); backdrop-filter: blur(7px); }
+.dependency-canvas-actions:hover { background: rgb(22 24 28 / 76%); }
+.dependency-canvas-actions .dependency-reset { width: 25px; height: 23px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #b8c8e6; font-size: 15px; line-height: 1; cursor: pointer; }
+.dependency-canvas-actions .dependency-reset:hover { background: rgb(116 158 226 / 20%); color: #e1ebff; }
+.dependency-canvas-actions .dependency-zoom-readout { position: static; padding: 0 4px 0 2px; color: #b2b6bf; font-size: 10px; pointer-events: none; }
+@media (max-width: 620px) { .dependency-graph-scroll, .dependency-empty { min-height: 520px; } }
