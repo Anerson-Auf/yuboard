@@ -1242,27 +1242,6 @@ struct CardDescriptionVersionResponse {
     created_at: String,
 }
 
-#[derive(FromRow)]
-struct CardStateSnapshotRow {
-    id: i64,
-    state: SqlJson<Value>,
-    changed_fields: Vec<String>,
-    created_at: String,
-}
-
-#[derive(Serialize)]
-struct CardStateSnapshotResponse {
-    id: i64,
-    state: Value,
-    changed_fields: Vec<String>,
-    created_at: String,
-}
-
-#[derive(Deserialize)]
-struct RestoreCardStateSnapshotRequest {
-    fields: Vec<String>,
-}
-
 #[derive(Serialize)]
 struct CardPollOptionResponse {
     id: Uuid,
@@ -1910,8 +1889,6 @@ async fn main() {
         .route("/v1/cards/{card_id}/relations/{relation_id}", patch(update_card_relation).delete(delete_card_relation))
         .route("/v1/cards/{card_id}/description-versions", get(list_card_description_versions))
         .route("/v1/cards/{card_id}/description-versions/{version_id}/restore", post(restore_card_description_version))
-        .route("/v1/cards/{card_id}/state-snapshots", get(list_card_state_snapshots))
-        .route("/v1/cards/{card_id}/state-snapshots/{snapshot_id}/restore", post(restore_card_state_snapshot))
         .route("/v1/cards/{card_id}/polls", get(list_card_polls).post(create_card_poll))
         .route("/v1/cards/{card_id}/polls/{poll_id}", axum::routing::delete(delete_card_poll))
         .route("/v1/cards/{card_id}/public-visibility", patch(update_card_public_visibility))
@@ -7062,61 +7039,6 @@ async fn restore_card_description_version(State(state): State<AppState>, current
     transaction.commit().await.map_err(ApiError::internal)?;
     replace_card_mentions(pool, card_id, current.id, "card_description", card_id, &card.description).await?;
     record_card_activity(pool, card_id, current.id, "Восстановлена версия описания", "").await;
-    let _ = state.events.send(());
-    Ok(Json(card))
-}
-
-async fn list_card_state_snapshots(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> ApiResult<Vec<CardStateSnapshotResponse>> {
-    let pool = database(&state)?;
-    ensure_card_access(pool, card_id, current.id).await?;
-    let rows = sqlx::query_as::<_, CardStateSnapshotRow>(
-        "SELECT id, state, changed_fields, created_at::text AS created_at FROM card_state_snapshots WHERE card_id = $1 ORDER BY created_at DESC, id DESC LIMIT 80",
-    )
-    .bind(card_id)
-    .fetch_all(pool)
-    .await
-    .map_err(ApiError::internal)?;
-    Ok(Json(rows.into_iter().map(|row| CardStateSnapshotResponse { id: row.id, state: row.state.0, changed_fields: row.changed_fields, created_at: row.created_at }).collect()))
-}
-
-async fn restore_card_state_snapshot(State(state): State<AppState>, current: CurrentUser, Path((card_id, snapshot_id)): Path<(Uuid, i64)>, Json(request): Json<RestoreCardStateSnapshotRequest>) -> ApiResult<CardResponse> {
-    const ALLOWED_FIELDS: [&str; 10] = ["title", "description", "priority", "is_frozen", "start_at", "due_at", "completed_at", "cover_attachment_id", "cover_mode", "background_image_url"];
-    if request.fields.is_empty() { return Err(ApiError::bad_request("Select at least one field to restore.")); }
-    if request.fields.iter().any(|field| !ALLOWED_FIELDS.contains(&field.as_str())) { return Err(ApiError::bad_request("The snapshot contains an unsupported field.")); }
-    let pool = database(&state)?;
-    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
-    if request.fields.iter().any(|field| field == "is_frozen") { ensure_card_full_access(pool, card_id, current.id).await?; }
-    let snapshot = sqlx::query_scalar::<_, SqlJson<Value>>("SELECT state FROM card_state_snapshots WHERE id = $1 AND card_id = $2")
-        .bind(snapshot_id).bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_snapshot_not_found", "Card snapshot was not found.".to_owned()))?;
-    let fields = request.fields;
-    let card = sqlx::query_as::<_, CardResponse>(
-        "UPDATE cards SET
-            title = CASE WHEN 'title' = ANY($3) THEN COALESCE($2->>'title', title) ELSE title END,
-            description = CASE WHEN 'description' = ANY($3) THEN COALESCE($2->>'description', description) ELSE description END,
-            priority = CASE WHEN 'priority' = ANY($3) THEN COALESCE(($2->>'priority')::smallint, priority) ELSE priority END,
-            is_frozen = CASE WHEN 'is_frozen' = ANY($3) THEN COALESCE(($2->>'is_frozen')::boolean, is_frozen) ELSE is_frozen END,
-            start_at = CASE WHEN 'start_at' = ANY($3) THEN NULLIF($2->>'start_at', '')::timestamptz ELSE start_at END,
-            due_at = CASE WHEN 'due_at' = ANY($3) THEN NULLIF($2->>'due_at', '')::timestamptz ELSE due_at END,
-            completed_at = CASE WHEN 'completed_at' = ANY($3) THEN NULLIF($2->>'completed_at', '')::timestamptz ELSE completed_at END,
-            completed_by = CASE WHEN 'completed_at' = ANY($3) THEN CASE WHEN NULLIF($2->>'completed_at', '') IS NULL THEN NULL ELSE COALESCE(NULLIF($2->>'completed_by', '')::uuid, $4) END ELSE completed_by END,
-            cover_attachment_id = CASE WHEN 'cover_attachment_id' = ANY($3) THEN NULLIF($2->>'cover_attachment_id', '')::uuid ELSE cover_attachment_id END,
-            cover_mode = CASE WHEN 'cover_mode' = ANY($3) THEN COALESCE($2->>'cover_mode', cover_mode) ELSE cover_mode END,
-            background_image_url = CASE WHEN 'background_image_url' = ANY($3) THEN NULLIF($2->>'background_image_url', '') ELSE background_image_url END,
-            updated_at = now()
-         WHERE id = $1 AND archived_at IS NULL
-         RETURNING id, list_id, title, description, start_at::text AS start_at",
-    )
-    .bind(card_id)
-    .bind(snapshot)
-    .bind(&fields)
-    .bind(current.id)
-    .fetch_optional(pool)
-    .await
-    .map_err(ApiError::internal)?
-    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
-    if fields.iter().any(|field| field == "description") { replace_card_mentions(pool, card_id, current.id, "card_description", card_id, &card.description).await?; }
-    record_card_activity(pool, card_id, current.id, "Восстановлен снимок карточки", &fields.join(", ")).await;
     let _ = state.events.send(());
     Ok(Json(card))
 }
