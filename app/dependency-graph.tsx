@@ -103,6 +103,20 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
   }, [graphNodes, positions]);
   const visibleRelations = relations.filter((relation) => layout.positions.has(relation.source_card_id) && layout.positions.has(relation.target_card_id));
   const selected = relations.find((relation) => relation.id === selectedId) ?? null;
+  const miniMap = useMemo(() => {
+    if (!graphNodes.length) return null;
+    const points = graphNodes.map((node) => layout.positions.get(node.id)).filter((point): point is Point => Boolean(point));
+    if (!points.length) return null;
+    const minX = Math.min(...points.map((point) => point.x)) - PAD * 2;
+    const minY = Math.min(...points.map((point) => point.y)) - PAD * 2;
+    const maxX = Math.max(...points.map((point) => point.x + NODE_WIDTH)) + PAD * 2;
+    const maxY = Math.max(...points.map((point) => point.y + NODE_HEIGHT)) + PAD * 2;
+    return { minX, minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+  }, [graphNodes, layout.positions]);
+  const miniMapViewport = miniMap && viewportRef.current ? (() => {
+    const rect = viewportRef.current!.getBoundingClientRect();
+    return { x: (-pan.x / zoom - miniMap.minX) / miniMap.width, y: (-pan.y / zoom - miniMap.minY) / miniMap.height, width: rect.width / zoom / miniMap.width, height: rect.height / zoom / miniMap.height };
+  })() : null;
   const canvasPoint = (clientX: number, clientY: number) => {
     const rect = viewportRef.current?.getBoundingClientRect();
     return rect ? { x: (clientX - rect.left - pan.x) / zoom, y: (clientY - rect.top - pan.y) / zoom } : { x: 0, y: 0 };
@@ -134,6 +148,15 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
     };
   };
   const reset = () => { setZoom(1); setPan(INITIAL_PAN); };
+  const moveViewportFromMiniMap = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!miniMap || !viewportRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const mapRect = event.currentTarget.getBoundingClientRect();
+    const viewportRect = viewportRef.current.getBoundingClientRect();
+    const point = { x: miniMap.minX + (event.clientX - mapRect.left) / mapRect.width * miniMap.width, y: miniMap.minY + (event.clientY - mapRect.top) / mapRect.height * miniMap.height };
+    setPan({ x: viewportRect.width / 2 - point.x * zoom, y: viewportRect.height / 2 - point.y * zoom });
+  };
   const zoomAt = (x: number, y: number, next: number) => {
     const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -307,6 +330,7 @@ export default function DependencyGraph({ boardId, nodes, canEdit, onOpenCard }:
       setCanvasMenu({ client: { x: event.clientX, y: event.clientY }, canvas: canvasPoint(event.clientX, event.clientY) }); setRelationMenu(null);
     }}>
       <div className="dependency-canvas-actions"><button type="button" className="dependency-reset" onClick={reset} title="Вернуть исходный вид" aria-label="Вернуть исходный вид">↺</button><span className="dependency-zoom-readout">{Math.round(zoom * 100)}%</span></div>
+      {miniMap && <div className="dependency-minimap" role="button" tabIndex={0} aria-label="Мини-карта графа. Нажмите, чтобы перейти к области" title="Мини-карта: нажмите для перехода" onPointerDown={moveViewportFromMiniMap} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); moveViewportFromMiniMap({ ...event, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } as ReactPointerEvent<HTMLDivElement>); } }}><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">{visibleRelations.map((relation) => { const from = layout.positions.get(relation.source_card_id); const to = layout.positions.get(relation.target_card_id); if (!from || !to) return null; return <line key={relation.id} x1={(from.x + NODE_WIDTH / 2 - miniMap.minX) / miniMap.width * 100} y1={(from.y + NODE_HEIGHT / 2 - miniMap.minY) / miniMap.height * 100} x2={(to.x + NODE_WIDTH / 2 - miniMap.minX) / miniMap.width * 100} y2={(to.y + NODE_HEIGHT / 2 - miniMap.minY) / miniMap.height * 100} />; })}{graphNodes.map((node) => { const position = layout.positions.get(node.id); if (!position) return null; return <rect key={node.id} className={node.completed ? 'completed' : ''} x={(position.x - miniMap.minX) / miniMap.width * 100} y={(position.y - miniMap.minY) / miniMap.height * 100} width={NODE_WIDTH / miniMap.width * 100} height={NODE_HEIGHT / miniMap.height * 100} />; })}{miniMapViewport && <rect className="dependency-minimap-viewport" x={miniMapViewport.x * 100} y={miniMapViewport.y * 100} width={miniMapViewport.width * 100} height={miniMapViewport.height * 100} />}</svg></div>}
       {canvasMenu && <div className="dependency-menu dependency-canvas-menu" style={menuPosition(canvasMenu.client, 62)}><button type="button" onClick={() => { setSourceSearch(''); setSourceMenu(canvasMenu); setCanvasMenu(null); }}>↗ Создать зависимость</button></div>}
       {sourceMenu && <div className="dependency-menu dependency-source-picker" style={menuPosition(sourceMenu.client, 432)}><b>От какой карточки?</b><input className="dependency-menu-search" autoFocus value={sourceSearch} onChange={(event) => setSourceSearch(event.target.value)} placeholder="Найти по названию или колонке…" aria-label="Найти исходную карточку" />{matchingNodes(sourceSearch).map((node) => <button key={node.id} type="button" onClick={() => { setSourceSearch(''); begin(node.id, sourceMenu.canvas); }}><small>{node.listTitle}</small>{node.title}</button>)}{!matchingNodes(sourceSearch).length && <p className="dependency-menu-empty">Ничего не найдено.</p>}</div>}
       {targetMenu && <div className="dependency-menu dependency-source-picker" style={menuPosition(targetMenu.client, 432)}><b>С какой карточкой?</b><input className="dependency-menu-search" autoFocus value={targetSearch} onChange={(event) => setTargetSearch(event.target.value)} placeholder="Найти по названию или колонке…" aria-label="Найти целевую карточку" />{matchingNodes(targetSearch, targetMenu.sourceId).map((node) => <button key={node.id} type="button" onClick={() => { setTargetSearch(''); setTargetMenu(null); setTypeMenu({ sourceId: targetMenu.sourceId, targetId: node.id, client: targetMenu.client, canvas: targetMenu.canvas }); }}><small>{node.listTitle}</small>{node.title}</button>)}{!matchingNodes(targetSearch, targetMenu.sourceId).length && <p className="dependency-menu-empty">Ничего не найдено.</p>}</div>}

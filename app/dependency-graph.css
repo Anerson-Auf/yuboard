@@ -33,6 +33,11 @@
 .dependency-canvas-actions .dependency-zoom-readout { position: static; padding: 0 4px 0 2px; color: #b2b6bf; font-size: 10px; pointer-events: none; }
 @media (max-width: 620px) { .dependency-graph-scroll, .dependency-empty { min-height: 520px; } }
 
+.dependency-minimap { position: absolute; z-index: 5; right: 13px; bottom: 46px; width: 154px; height: 94px; overflow: hidden; border: 1px solid rgb(131 138 151 / 30%); border-radius: 9px; background: rgb(20 22 27 / 64%); box-shadow: 0 8px 22px rgb(0 0 0 / 22%); backdrop-filter: blur(8px); cursor: crosshair; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
+.dependency-minimap:hover, .dependency-minimap:focus-visible { border-color: rgb(140 180 248 / 74%); background: rgb(20 24 31 / 84%); outline: 0; transform: translateY(-1px); }
+.dependency-minimap svg { display: block; width: 100%; height: 100%; }.dependency-minimap line { stroke: rgb(142 166 211 / 48%); stroke-width: .8; }.dependency-minimap rect:not(.dependency-minimap-viewport) { fill: rgb(119 157 223 / 78%); rx: 1.6; ry: 1.6; }.dependency-minimap rect.completed { fill: rgb(101 165 126 / 68%); }.dependency-minimap .dependency-minimap-viewport { fill: rgb(147 190 255 / 12%); stroke: rgb(177 211 255 / 94%); stroke-width: 1.35; vector-effect: non-scaling-stroke; }
+@media (max-width: 620px) { .dependency-minimap { right: 9px; bottom: 43px; width: 122px; height: 75px; } }
+
 /* The dependency view fetches before it knows its canvas bounds.  A static
    layout skeleton preserves the workspace shape and avoids a blank flash. */
 .dependency-empty { position: relative; overflow: hidden; place-items: stretch; padding: 28px; color: transparent; font-size: 0; }
