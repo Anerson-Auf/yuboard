@@ -1209,13 +1209,29 @@ struct BoardRelationResponse {
 struct CardReviewRow {
     status: String,
     updated_at: String,
+    requested_by: Option<Uuid>,
+    requested_by_name: Option<String>,
+    requested_by_avatar_url: Option<String>,
 }
 
 #[derive(Serialize)]
 struct CardReviewResponse {
     status: String,
     reviewers: Vec<MemberResponse>,
+    decisions: Vec<CardReviewDecisionResponse>,
+    requested_by: Option<MemberResponse>,
     updated_at: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct CardReviewDecisionResponse {
+    reviewer_id: Uuid,
+    #[serde(rename = "reviewer_username")]
+    reviewer_name: String,
+    reviewer_avatar_url: Option<String>,
+    status: Option<String>,
+    reason: Option<String>,
+    decided_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1223,6 +1239,13 @@ struct UpdateCardReviewRequest {
     status: String,
     #[serde(default)]
     reviewer_ids: Vec<Uuid>,
+}
+
+#[derive(Deserialize)]
+struct DecideCardReviewRequest {
+    status: String,
+    #[serde(default)]
+    reason: String,
 }
 
 #[derive(Serialize, FromRow)]
@@ -1892,6 +1915,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/completion", patch(update_card_completion))
         .route("/v1/cards/{card_id}/waiting", put(update_card_waiting).delete(clear_card_waiting))
         .route("/v1/cards/{card_id}/review", get(get_card_review).put(update_card_review))
+        .route("/v1/cards/{card_id}/review/decision", put(decide_card_review))
         .route("/v1/cards/{card_id}/relations", get(list_card_relations).post(create_card_relation))
         .route("/v1/cards/{card_id}/relations/{relation_id}", patch(update_card_relation).delete(delete_card_relation))
         .route("/v1/cards/{card_id}/description-versions", get(list_card_description_versions))
@@ -4597,9 +4621,10 @@ async fn notify_card_watchers(pool: &PgPool, card_id: Uuid, actor_id: Option<Uui
 async fn notify_card_reviewers(pool: &PgPool, card_id: Uuid, actor_id: Uuid, reviewer_ids: &[Uuid]) {
     for user_id in reviewer_ids.iter().copied().filter(|user_id| *user_id != actor_id) {
         let result = sqlx::query(
-            "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail) \
-             SELECT $1, $2, $3, $4, 'Нужна ваша проверка', 'Вас назначили проверяющим' \
-             WHERE NOT EXISTS (SELECT 1 FROM card_notifications WHERE user_id = $2 AND card_id = $3 AND action = 'Нужна ваша проверка' AND read_at IS NULL)",
+            "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail, source_kind, source_id) \
+             VALUES ($1, $2, $3, $4, 'Нужна ваша проверка', 'Вас назначили проверяющим', 'review_request', $3) \
+             ON CONFLICT (user_id, source_kind, source_id) WHERE source_kind IS NOT NULL AND source_id IS NOT NULL \
+             DO UPDATE SET actor_id = EXCLUDED.actor_id, action = EXCLUDED.action, detail = EXCLUDED.detail, read_at = NULL, created_at = now()",
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
@@ -4610,6 +4635,36 @@ async fn notify_card_reviewers(pool: &PgPool, card_id: Uuid, actor_id: Uuid, rev
         if let Err(error) = result {
             tracing::error!(?error, card_id = %card_id, user_id = %user_id, "reviewer notification insert failed");
         }
+    }
+}
+
+async fn clear_card_review_request_notifications(pool: &PgPool, card_id: Uuid) {
+    if let Err(error) = sqlx::query("DELETE FROM card_notifications WHERE card_id = $1 AND source_kind = 'review_request'")
+        .bind(card_id)
+        .execute(pool)
+        .await
+    {
+        tracing::error!(?error, card_id = %card_id, "review request notification cleanup failed");
+    }
+}
+
+async fn notify_review_requester(pool: &PgPool, card_id: Uuid, requester_id: Uuid, actor_id: Uuid, status: &str, detail: &str) {
+    if requester_id == actor_id { return; }
+    let action = match status {
+        "approved" => "Проверка одобрена",
+        "changes_requested" => "По проверке нужны правки",
+        "rejected" => "Проверка отклонена",
+        _ => return,
+    };
+    if let Err(error) = sqlx::query(
+        "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail, source_kind, source_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'review_result', $3) \
+         ON CONFLICT (user_id, source_kind, source_id) WHERE source_kind IS NOT NULL AND source_id IS NOT NULL \
+         DO UPDATE SET actor_id = EXCLUDED.actor_id, action = EXCLUDED.action, detail = EXCLUDED.detail, read_at = NULL, created_at = now()",
+    )
+    .bind(Uuid::new_v4()).bind(requester_id).bind(card_id).bind(actor_id).bind(action).bind(detail)
+    .execute(pool).await {
+        tracing::error!(?error, card_id = %card_id, requester_id = %requester_id, "review requester notification insert failed");
     }
 }
 
@@ -6846,17 +6901,36 @@ async fn list_my_tasks(State(state): State<AppState>, current: CurrentUser) -> A
 }
 
 async fn load_card_review(pool: &PgPool, card_id: Uuid) -> Result<CardReviewResponse, ApiError> {
-    let review = sqlx::query_as::<_, CardReviewRow>("SELECT status, updated_at::text AS updated_at FROM card_reviews WHERE card_id = $1")
+    let review = sqlx::query_as::<_, CardReviewRow>(
+        "SELECT cr.status, cr.updated_at::text AS updated_at, cr.requested_by, requester.username AS requested_by_name, \
+         CASE WHEN requester.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || requester.id::text END AS requested_by_avatar_url \
+         FROM card_reviews cr LEFT JOIN users requester ON requester.id = cr.requested_by WHERE cr.card_id = $1",
+    )
         .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?;
-    let reviewers = sqlx::query_as::<_, MemberResponse>(
-        "SELECT u.id, u.username AS display_name, u.avatar_url \
-         FROM card_reviewers cr INNER JOIN users u ON u.id = cr.user_id \
-         WHERE cr.card_id = $1 ORDER BY u.username COLLATE \"C\"",
+    let decisions = sqlx::query_as::<_, CardReviewDecisionResponse>(
+        "SELECT reviewer.id AS reviewer_id, reviewer.username AS reviewer_name, \
+         CASE WHEN reviewer.avatar_key IS NULL THEN NULL ELSE '/v1/avatars/' || reviewer.id::text END AS reviewer_avatar_url, \
+         decision.status, NULLIF(decision.reason, '') AS reason, decision.decided_at::text AS decided_at \
+         FROM card_reviewers assigned \
+         INNER JOIN users reviewer ON reviewer.id = assigned.user_id \
+         LEFT JOIN card_review_decisions decision ON decision.card_id = assigned.card_id AND decision.reviewer_id = assigned.user_id \
+         WHERE assigned.card_id = $1 ORDER BY reviewer.username COLLATE \"C\"",
     )
     .bind(card_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    let reviewers = decisions.iter().map(|decision| MemberResponse {
+        id: decision.reviewer_id,
+        display_name: decision.reviewer_name.clone(),
+        avatar_url: decision.reviewer_avatar_url.clone(),
+    }).collect();
     Ok(CardReviewResponse {
         status: review.as_ref().map(|item| item.status.clone()).unwrap_or_else(|| "none".to_owned()),
         reviewers,
+        decisions,
+        requested_by: review.as_ref().and_then(|item| Some(MemberResponse {
+            id: item.requested_by?,
+            display_name: item.requested_by_name.clone()?,
+            avatar_url: item.requested_by_avatar_url.clone(),
+        })),
         updated_at: review.map(|item| item.updated_at),
     })
 }
@@ -6868,20 +6942,22 @@ async fn get_card_review(State(state): State<AppState>, current: Viewer, Path(ca
 }
 
 async fn update_card_review(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardReviewRequest>) -> ApiResult<CardReviewResponse> {
-    if !matches!(request.status.as_str(), "none" | "requested" | "approved" | "changes_requested") {
-        return Err(ApiError::bad_request("review status is invalid."));
+    if !matches!(request.status.as_str(), "none" | "requested") {
+        return Err(ApiError::bad_request("A review can only be requested or cancelled here."));
     }
     if request.reviewer_ids.len() > 30 {
         return Err(ApiError::bad_request("a card can have at most 30 reviewers."));
     }
     let mut reviewer_ids = request.reviewer_ids;
     reviewer_ids.sort(); reviewer_ids.dedup();
+    if request.status == "requested" && reviewer_ids.is_empty() {
+        return Err(ApiError::bad_request("Choose at least one reviewer before requesting a review."));
+    }
+    if request.status == "none" && !reviewer_ids.is_empty() {
+        return Err(ApiError::bad_request("A cancelled review cannot keep reviewers."));
+    }
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
-    let previous_status = sqlx::query_scalar::<_, String>("SELECT status FROM card_reviews WHERE card_id = $1")
-        .bind(card_id).fetch_optional(pool).await.map_err(ApiError::internal)?;
-    let previous_reviewer_ids = sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM card_reviewers WHERE card_id = $1")
-        .bind(card_id).fetch_all(pool).await.map_err(ApiError::internal)?;
     if !reviewer_ids.is_empty() {
         let found: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM board_members bm \
@@ -6893,21 +6969,84 @@ async fn update_card_review(State(state): State<AppState>, current: CurrentUser,
         }
     }
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
-    sqlx::query("INSERT INTO card_reviews (card_id, status, updated_by, updated_at) VALUES ($1, $2, $3, now()) ON CONFLICT (card_id) DO UPDATE SET status = EXCLUDED.status, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at")
-        .bind(card_id).bind(&request.status).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    sqlx::query("DELETE FROM card_reviewers WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
-    for reviewer_id in &reviewer_ids {
-        sqlx::query("INSERT INTO card_reviewers (card_id, user_id) VALUES ($1, $2)").bind(card_id).bind(reviewer_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    let existed = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM card_reviews WHERE card_id = $1)")
+        .bind(card_id).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
+    if request.status == "none" {
+        sqlx::query("DELETE FROM card_review_decisions WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("DELETE FROM card_reviewers WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("DELETE FROM card_reviews WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    } else {
+        sqlx::query("INSERT INTO card_reviews (card_id, status, updated_by, requested_by, updated_at) VALUES ($1, 'requested', $2, $2, now()) ON CONFLICT (card_id) DO UPDATE SET status = 'requested', updated_by = EXCLUDED.updated_by, requested_by = EXCLUDED.requested_by, updated_at = now()")
+            .bind(card_id).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("DELETE FROM card_review_decisions WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("DELETE FROM card_reviewers WHERE card_id = $1").bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        for reviewer_id in &reviewer_ids {
+            sqlx::query("INSERT INTO card_reviewers (card_id, user_id) VALUES ($1, $2)").bind(card_id).bind(reviewer_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        }
+        sqlx::query("UPDATE cards SET completed_at = NULL, updated_at = now() WHERE id = $1 AND archived_at IS NULL")
+            .bind(card_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
     }
     transaction.commit().await.map_err(ApiError::internal)?;
-    let detail = if reviewer_ids.is_empty() { request.status.clone() } else { format!("{} · проверяющих: {}", request.status, reviewer_ids.len()) };
-    record_card_activity(pool, card_id, current.id, "Изменён статус проверки", &detail).await;
     if request.status == "requested" {
-        let should_notify = previous_status.as_deref() != Some("requested");
-        let newly_assigned: Vec<Uuid> = reviewer_ids.iter().copied()
-            .filter(|reviewer_id| should_notify || !previous_reviewer_ids.contains(reviewer_id))
-            .collect();
-        notify_card_reviewers(pool, card_id, current.id, &newly_assigned).await;
+        clear_card_review_request_notifications(pool, card_id).await;
+        record_card_activity(pool, card_id, current.id, if existed { "Проверка запрошена повторно" } else { "Запрошена проверка" }, &format!("Проверяющих: {}", reviewer_ids.len())).await;
+        notify_card_reviewers(pool, card_id, current.id, &reviewer_ids).await;
+    } else if existed {
+        clear_card_review_request_notifications(pool, card_id).await;
+        record_card_activity(pool, card_id, current.id, "Проверка отменена", "").await;
+    }
+    let result = load_card_review(pool, card_id).await?;
+    let _ = state.events.send(());
+    Ok(Json(result))
+}
+
+async fn decide_card_review(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<DecideCardReviewRequest>) -> ApiResult<CardReviewResponse> {
+    if !matches!(request.status.as_str(), "approved" | "changes_requested" | "rejected") {
+        return Err(ApiError::bad_request("review decision is invalid."));
+    }
+    let reason = request.reason.trim();
+    if matches!(request.status.as_str(), "changes_requested" | "rejected") && reason.is_empty() {
+        return Err(ApiError::bad_request("Explain why changes are needed or the review is rejected."));
+    }
+    if reason.chars().count() > 4_000 { return Err(ApiError::bad_request("Review reason must be at most 4000 characters.")); }
+    let pool = database(&state)?;
+    ensure_card_access(pool, card_id, current.id).await?;
+    let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    let review = sqlx::query_as::<_, (String, Option<Uuid>)>("SELECT status, requested_by FROM card_reviews WHERE card_id = $1 FOR UPDATE")
+        .bind(card_id).fetch_optional(&mut *transaction).await.map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("No review is requested for this card."))?;
+    if review.0 != "requested" { return Err(ApiError::bad_request("This review is no longer awaiting decisions.")); }
+    let assigned = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM card_reviewers WHERE card_id = $1 AND user_id = $2)")
+        .bind(card_id).bind(current.id).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
+    if !assigned { return Err(ApiError::forbidden("Only an assigned reviewer can submit this decision.")); }
+    sqlx::query("INSERT INTO card_review_decisions (card_id, reviewer_id, status, reason, decided_at) VALUES ($1, $2, $3, $4, now()) ON CONFLICT (card_id, reviewer_id) DO UPDATE SET status = EXCLUDED.status, reason = EXCLUDED.reason, decided_at = now()")
+        .bind(card_id).bind(current.id).bind(&request.status).bind(reason).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    let (reviewer_count, decision_count) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT (SELECT COUNT(*) FROM card_reviewers WHERE card_id = $1), (SELECT COUNT(*) FROM card_review_decisions WHERE card_id = $1)",
+    )
+    .bind(card_id).fetch_one(&mut *transaction).await.map_err(ApiError::internal)?;
+    let final_status = if reviewer_count > 0 && reviewer_count == decision_count {
+        let decisions = sqlx::query_scalar::<_, String>("SELECT status FROM card_review_decisions WHERE card_id = $1")
+            .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
+        Some(if decisions.iter().any(|status| status == "rejected") { "rejected" } else if decisions.iter().any(|status| status == "changes_requested") { "changes_requested" } else { "approved" })
+    } else { None };
+    let final_reason = if let Some(status) = final_status {
+        let reasons = sqlx::query_scalar::<_, String>("SELECT reason FROM card_review_decisions WHERE card_id = $1 AND reason <> '' ORDER BY decided_at")
+            .bind(card_id).fetch_all(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("UPDATE card_reviews SET status = $2, updated_by = $3, updated_at = now() WHERE card_id = $1")
+            .bind(card_id).bind(status).bind(current.id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        sqlx::query("UPDATE cards SET completed_at = CASE WHEN $2 = 'approved' THEN now() ELSE NULL END, updated_at = now() WHERE id = $1 AND archived_at IS NULL")
+            .bind(card_id).bind(status).execute(&mut *transaction).await.map_err(ApiError::internal)?;
+        Some(reasons.join(" · "))
+    } else { None };
+    transaction.commit().await.map_err(ApiError::internal)?;
+    if let Some(status) = final_status {
+        clear_card_review_request_notifications(pool, card_id).await;
+        let detail = final_reason.as_deref().filter(|detail| !detail.is_empty()).unwrap_or_else(|| match status { "approved" => "Все проверяющие одобрили работу", "changes_requested" => "Все проверяющие оставили решения", _ => "Все проверяющие завершили review" });
+        let action = match status { "approved" => "Проверка одобрена", "changes_requested" => "По проверке нужны правки", "rejected" => "Проверка отклонена", _ => unreachable!() };
+        record_card_activity(pool, card_id, current.id, action, detail).await;
+        if status == "approved" { record_discord_card_thread_event(pool, card_id, "completed").await; }
+        if let Some(requester_id) = review.1 { notify_review_requester(pool, card_id, requester_id, current.id, status, detail).await; }
     }
     let result = load_card_review(pool, card_id).await?;
     let _ = state.events.send(());
@@ -7217,6 +7356,16 @@ async fn active_duplicate_group_ids(pool: &PgPool, card_id: Uuid) -> Result<Vec<
 async fn update_card_completion(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardCompletionRequest>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    if request.is_completed {
+        let review_status = sqlx::query_scalar::<_, String>("SELECT status FROM card_reviews WHERE card_id = $1")
+            .bind(card_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(ApiError::internal)?;
+        if matches!(review_status.as_deref(), Some("requested" | "changes_requested" | "rejected")) {
+            return Err(ApiError::bad_request("Эта задача не может быть завершена, пока review не будет одобрен."));
+        }
+    }
     let card_ids = active_duplicate_group_ids(pool, card_id).await?;
     for duplicate_id in &card_ids {
         ensure_card_permission(pool, *duplicate_id, current.id, "edit_cards").await?;
