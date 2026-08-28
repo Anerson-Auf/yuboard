@@ -1676,6 +1676,17 @@ struct BoardActivityQuery {
     per_page: Option<i64>,
 }
 
+#[derive(Deserialize)]
+struct BoardCardSearchQuery {
+    q: String,
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct BoardCardSearchResponse {
+    card_ids: Vec<Uuid>,
+}
+
 #[derive(Serialize, FromRow)]
 struct BoardActivityItemResponse {
     id: String,
@@ -1846,6 +1857,7 @@ async fn main() {
         .route("/v1/boards/{board_id}/integrations/discord/{integration_id}", axum::routing::delete(revoke_discord_integration))
         .route("/v1/boards/{board_id}/export", get(export_board))
         .route("/v1/boards/{board_id}/archived-cards", get(list_archived_cards))
+        .route("/v1/boards/{board_id}/search", get(search_board_cards))
         .route("/v1/boards/{board_id}/activity", get(list_board_activity))
         .route("/v1/boards/{board_id}/relations", get(list_board_relations))
         .route("/v1/boards/{board_id}/events", get(board_events))
@@ -3714,6 +3726,54 @@ async fn replace_board_freeform_drawing(State(state): State<AppState>, current: 
         .bind(board_id).bind(SqlJson(&request.document)).execute(database(&state)?).await.map_err(ApiError::internal)?;
     let _ = state.events.send(());
     Ok(Json(BoardFreeformDrawingResponse { document: request.document }))
+}
+
+async fn search_board_cards(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Query(query): Query<BoardCardSearchQuery>) -> ApiResult<BoardCardSearchResponse> {
+    let needle = query.q.trim();
+    if needle.is_empty() { return Ok(Json(BoardCardSearchResponse { card_ids: Vec::new() })); }
+    if needle.chars().count() > 240 { return Err(ApiError::bad_request("Search query is too long.")); }
+    let pool = database(&state)?;
+    ensure_board_layout_access(pool, board_id, current.id).await?;
+    let limit = query.limit.unwrap_or(250).clamp(1, 500);
+    // Keep every searchable field in its own indexed EXISTS branch. Combining
+    // comments and checklist rows into one aggregate would force a full-board
+    // scan even when PostgreSQL already has a matching GIN index.
+    let cards = sqlx::query_scalar::<_, Uuid>(
+        "SELECT c.id
+         FROM cards c
+         INNER JOIN boards b ON b.id = c.board_id
+         WHERE c.board_id = $1 AND c.archived_at IS NULL
+           AND (
+             EXISTS(SELECT 1 FROM users u WHERE u.id = $3 AND u.is_system_owner AND u.disabled_at IS NULL)
+             OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3 AND wm.role IN ('owner', 'full_access'))
+             OR EXISTS(
+               SELECT 1 FROM board_members bm
+               INNER JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id
+               WHERE bm.board_id = b.id AND bm.user_id = $3
+                 AND CASE wm.role::text WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 WHEN 'owner' THEN 4 ELSE -1 END
+                   >= CASE c.min_view_preset WHEN 'viewer' THEN 0 WHEN 'contributor' THEN 1 WHEN 'editor' THEN 2 WHEN 'full_access' THEN 3 ELSE 0 END
+             )
+           )
+           AND (
+             to_tsvector('simple', concat_ws(' ', c.title, c.description)) @@ websearch_to_tsquery('simple', $2)
+             OR EXISTS(SELECT 1 FROM comments cm WHERE cm.card_id = c.id AND to_tsvector('simple', cm.body) @@ websearch_to_tsquery('simple', $2))
+             OR EXISTS(SELECT 1 FROM checklists cl WHERE cl.card_id = c.id AND to_tsvector('simple', cl.title) @@ websearch_to_tsquery('simple', $2))
+             OR EXISTS(SELECT 1 FROM checklist_items ci WHERE ci.card_id = c.id AND to_tsvector('simple', concat_ws(' ', ci.title, ci.description)) @@ websearch_to_tsquery('simple', $2))
+             OR EXISTS(SELECT 1 FROM card_labels cl JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = c.id AND to_tsvector('simple', l.name) @@ websearch_to_tsquery('simple', $2))
+             OR EXISTS(SELECT 1 FROM card_assignees ca JOIN users u ON u.id = ca.user_id WHERE ca.card_id = c.id AND to_tsvector('simple', u.display_name) @@ websearch_to_tsquery('simple', $2))
+             OR EXISTS(SELECT 1 FROM card_profile_roles cpr JOIN profile_roles pr ON pr.id = cpr.role_id WHERE cpr.card_id = c.id AND to_tsvector('simple', pr.name) @@ websearch_to_tsquery('simple', $2))
+           )
+         ORDER BY c.updated_at DESC, c.id DESC
+         LIMIT $4",
+    )
+    .bind(board_id)
+    .bind(needle)
+    .bind(current.id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(BoardCardSearchResponse { card_ids: cards }))
 }
 
 async fn list_board_activity(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Query(query): Query<BoardActivityQuery>) -> ApiResult<BoardActivityPageResponse> {

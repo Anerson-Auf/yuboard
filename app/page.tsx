@@ -1206,6 +1206,8 @@ export default function Home() {
   const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
   const [query, setQuery] = useState('');
+  const [contentSearchMatchIds, setContentSearchMatchIds] = useState<Set<string> | null>(null);
+  const [isContentSearchLoading, setContentSearchLoading] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [labelFilterIds, setLabelFilterIds] = useState<string[]>([]);
   const [milestoneFilterId, setMilestoneFilterId] = useState<string | null>(null);
@@ -1717,10 +1719,32 @@ export default function Home() {
     return typeof cardId === 'string' && cardId.startsWith('parking-');
   }
 
+  useEffect(() => {
+    const needle = query.trim();
+    if (!needle || !boardId || authState !== 'signed-in') {
+      setContentSearchMatchIds(null);
+      setContentSearchLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setContentSearchLoading(true);
+      void fetch(`${API_URL}/v1/boards/${boardId}/search?q=${encodeURIComponent(needle)}`, { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error('content search failed');
+          return response.json() as Promise<{ card_ids: string[] }>;
+        })
+        .then((result) => setContentSearchMatchIds(new Set(result.card_ids.map(String))))
+        .catch((error: unknown) => { if (!(error instanceof DOMException && error.name === 'AbortError')) setContentSearchMatchIds(null); })
+        .finally(() => { if (!controller.signal.aborted) setContentSearchLoading(false); });
+    }, 180);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [authState, boardId, query]);
+
   const visibleColumns = useMemo(() => columns.map((column) => {
     const cards = column.cards.filter((card) => {
       if (focusCardId && !focusRelatedCardIds.includes(String(card.id))) return false;
-      if (!card.title.toLowerCase().includes(query.toLowerCase())) return false;
+      if (query.trim() && contentSearchMatchIds ? !contentSearchMatchIds.has(String(card.id)) : !card.title.toLowerCase().includes(query.toLowerCase())) return false;
       if (milestoneFilterId && card.milestone?.id !== milestoneFilterId) return false;
       if (labelFilterIds.length && !labelFilterIds.some((labelId) => card.labels.some((label) => label.id === labelId))) return false;
       if (filterMode === 'assigned') return card.members.some((member) => member.id === currentMember.id);
@@ -1738,7 +1762,7 @@ export default function Home() {
     return { ...column, cards: [...cards].sort((left, right) => cardSort === 'priority'
       ? (right.priority ?? 0) - (left.priority ?? 0)
       : activityTime(right) - activityTime(left)) };
-  }), [cardSort, columns, currentMember.id, filterMode, focusCardId, focusRelatedCardIds, labelFilterIds, milestoneFilterId, myProfileRoleIds, query]);
+  }), [cardSort, columns, contentSearchMatchIds, currentMember.id, filterMode, focusCardId, focusRelatedCardIds, labelFilterIds, milestoneFilterId, myProfileRoleIds, query]);
 
   const hasCompletedCards = useMemo(() => visibleColumns.some((column) => column.cards.some((card) => Boolean(card.completedAt))), [visibleColumns]);
 
@@ -5866,7 +5890,7 @@ export default function Home() {
   return <CardPresenceContext.Provider value={{ people: boardPresence, currentUserId: account?.user.id }}><main className={`app-shell dark ${view === 'home' ? 'home-mode' : ''} ${view === 'board' ? `board-ui-scale-${boardUiScale}` : ''} ${isPublicViewer ? 'public-viewer' : ''} ${boardBackgroundUrl && view === 'board' && !boardBackgroundFailed ? 'has-board-background' : ''} ${usesDefaultBoardBackground ? 'default-board-background' : ''}`} style={boardBackgroundStyle}>
     <header className="topbar">
       <button className="brand" type="button" onClick={openHome} aria-label="Flowboard: перейти на главную"><span className="brand-mark">✓</span><span>Flowboard</span></button>
-      <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам" aria-label="Поиск по задачам" /></label>
+      <label className={`search ${isContentSearchLoading ? 'searching' : ''}`}><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам и содержимому" aria-label="Поиск по задачам и содержимому" aria-busy={isContentSearchLoading} />{isContentSearchLoading && <i aria-label="Ищем по содержимому" />}</label>
       <div className="top-actions">
         {account && view === 'board' && <BoardPresence people={boardPresence} currentUserId={account.user.id} onPersonClick={(person) => openBoardActivityForUser(person.user_id)} />}
         {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
