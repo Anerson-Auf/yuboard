@@ -772,6 +772,13 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .card-details-skeleton-title { width: min(64%, 370px); height: 30px; margin-top: 21px; }.card-details-skeleton-meta { width: 42%; height: 22px; }.card-details-skeleton-description { width: 94%; height: 13px; margin-top: 13px; }.card-details-skeleton-description.short { width: 69%; }.card-details-skeleton-block { display: grid; gap: 8px; margin-top: 16px; padding: 13px; border: 1px solid color-mix(in srgb, var(--line) 56%, transparent); border-radius: 12px; }.card-details-skeleton-block > i { height: 36px; }.card-details-skeleton-block.compact { width: 72%; }.card-details-skeleton-block.compact > i { height: 20px; }
 @keyframes card-details-shimmer { to { background-position: -220% 0; } }
 @media (prefers-reduced-motion: reduce) { .card-details-skeleton > i, .card-details-skeleton-block > i { animation: none; } }
+
+/* First archive page has no card shape yet, so reserve its eventual list
+   instead of showing an empty modal with a single loading sentence. */
+.archive-modal > .detail-loading { display: grid; gap: 9px; min-height: 206px; margin: 18px 0; padding: 13px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--line) 62%, transparent); border-radius: 12px; color: transparent; font-size: 0; }
+.archive-modal > .detail-loading::before, .archive-modal > .detail-loading::after { display: block; border-radius: 8px; background: linear-gradient(105deg, color-mix(in srgb, var(--surface-soft) 66%, transparent) 34%, color-mix(in srgb, var(--line) 56%, transparent) 50%, color-mix(in srgb, var(--surface-soft) 66%, transparent) 66%); background-size: 220% 100%; content: ''; animation: card-details-shimmer 1.15s linear infinite; }
+.archive-modal > .detail-loading::before { height: 72px; box-shadow: 0 81px 0 color-mix(in srgb, var(--surface-soft) 64%, transparent); }.archive-modal > .detail-loading::after { width: 58%; height: 13px; margin-top: auto; }
+@media (prefers-reduced-motion: reduce) { .archive-modal > .detail-loading::before, .archive-modal > .detail-loading::after { animation: none; } }
 .frozen-card-modal .task-sidebar { opacity: .72; filter: saturate(.72); }
 .frozen-card-modal .task-sidebar .comment-composer { display: none; }
 .frozen-card-modal .task-sidebar .conversation-scroll button { pointer-events: none; }
