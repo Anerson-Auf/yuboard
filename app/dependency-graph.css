@@ -15,3 +15,7 @@
 
 .dependency-legend-item.part-of i, .dependency-menu i.part-of { background: #80c997; }
 .dependency-line.part-of { color: #80c997; }
+.dependency-menu-search { width: 100%; margin: 2px 0 5px; padding: 8px 9px; border: 1px solid #4d5059; border-radius: 7px; background: #1c1d20; color: #e1e2e5; font: inherit; font-size: 12px; }
+.dependency-menu-search:focus { border-color: #729ce6; outline: 0; box-shadow: 0 0 0 2px rgb(93 146 235 / 16%); }
+.dependency-menu-search::placeholder { color: #8f9299; }
+.dependency-menu-empty { margin: 3px 7px 7px; color: #9da0a7; font-size: 11px; }
