@@ -305,6 +305,11 @@ struct AccountInvitationResponse {
     token: Option<String>,
 }
 
+#[derive(Serialize)]
+struct AccountInvitationPermissionResponse {
+    can_create: bool,
+}
+
 #[derive(FromRow)]
 struct AccountInvitationForAcceptance {
     id: Uuid,
@@ -1788,6 +1793,7 @@ async fn main() {
         .route("/v1/auth/sessions", get(list_sessions).delete(revoke_other_sessions))
         .route("/v1/auth/sessions/{session_id}", axum::routing::delete(revoke_session))
         .route("/v1/auth/avatar", get(download_avatar).post(upload_avatar))
+        .route("/v1/auth/account-invitations/permission", get(account_invitation_permission))
         .route("/v1/me/tasks", get(list_my_tasks))
         .route("/v1/profile-roles", get(list_profile_roles).post(create_profile_role))
         .route("/v1/profile-roles/{role_id}", patch(update_profile_role).delete(delete_profile_role))
@@ -2501,6 +2507,31 @@ async fn ensure_system_owner(pool: &PgPool, actor_id: Uuid) -> Result<(), ApiErr
     if allowed { Ok(()) } else { Err(ApiError::forbidden("System owner access is required.")) }
 }
 
+async fn can_create_account_invitations(pool: &PgPool, actor_id: Uuid) -> Result<bool, ApiError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND is_system_owner AND disabled_at IS NULL)
+         OR EXISTS(
+             SELECT 1
+             FROM workspace_members member
+             INNER JOIN workspaces workspace ON workspace.id = member.workspace_id AND workspace.archived_at IS NULL
+             INNER JOIN boards board ON board.workspace_id = workspace.id AND board.archived_at IS NULL
+             WHERE member.user_id = $1 AND member.role IN ('owner', 'full_access')
+         )",
+    )
+    .bind(actor_id)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::internal)
+}
+
+async fn ensure_account_invitation_creator(pool: &PgPool, actor_id: Uuid) -> Result<(), ApiError> {
+    if can_create_account_invitations(pool, actor_id).await? {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("Full Access on an active board is required to create account invitations."))
+    }
+}
+
 fn valid_profile_role_shape(value: &str) -> Result<&str, ApiError> {
     match value {
         "circle" | "square" | "diamond" | "star" | "triangle" | "hexagon" | "bolt" | "flag" | "check" | "cross" => Ok(value),
@@ -2616,9 +2647,14 @@ async fn list_account_invitations(State(state): State<AppState>, current: Curren
         .fetch_all(pool).await.map_err(ApiError::internal)?))
 }
 
+async fn account_invitation_permission(State(state): State<AppState>, current: CurrentUser) -> ApiResult<AccountInvitationPermissionResponse> {
+    let can_create = can_create_account_invitations(database(&state)?, current.id).await?;
+    Ok(Json(AccountInvitationPermissionResponse { can_create }))
+}
+
 async fn create_account_invitation(State(state): State<AppState>, current: CurrentUser) -> ApiResult<AccountInvitationResponse> {
     let pool = database(&state)?;
-    ensure_system_owner(pool, current.id).await?;
+    ensure_account_invitation_creator(pool, current.id).await?;
     let token = new_token();
     let invitation: AccountInvitationResponse = sqlx::query_as("INSERT INTO account_invitations (id, token_hash, invited_by, expires_at) VALUES ($1, $2, $3, $4) RETURNING id, expires_at::text AS expires_at, NULL::text AS token")
         .bind(Uuid::new_v4()).bind(token_hash(&token)).bind(current.id).bind(Utc::now() + chrono::Duration::days(7))
