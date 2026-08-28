@@ -38,12 +38,6 @@
 .implementation-open small, .implementation-open span { overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .implementation-todo-list article.done .implementation-open b { color: var(--muted); text-decoration: line-through; }
 .implementation-todo-list article.done .implementation-open span { color: #8bcf93; }
-.implementation-create { display: grid; grid-template-columns: minmax(118px, .62fr) minmax(0, 1fr) auto; gap: 7px; align-items: center; margin-top: 7px; padding: 8px; border: 1px dashed color-mix(in srgb, var(--primary) 33%, var(--line)); border-radius: 9px; }
-.implementation-create label { color: var(--muted); font-size: 11px; font-weight: 700; }
-.implementation-create select, .implementation-create button { min-width: 0; min-height: 32px; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--line) 78%, transparent); border-radius: 8px; background: var(--surface-raised); color: var(--text); font: inherit; font-size: 11px; }
-.implementation-create select { color-scheme: dark; cursor: pointer; }
-.light .implementation-create select { color-scheme: light; }
-.implementation-create select option { background: var(--surface-raised); color: var(--text); }
-.implementation-create button { border-color: color-mix(in srgb, var(--primary) 44%, var(--line)); color: var(--primary); font-weight: 750; }
-.implementation-create button:disabled { cursor: not-allowed; opacity: .48; }
-@media (max-width: 620px) { .implementation-create { grid-template-columns: 1fr; } }
+.relation-create.relation-create-part-of { border-color: color-mix(in srgb, #80c997 58%, var(--line)); background: color-mix(in srgb, #80c997 8%, var(--surface-raised)); }
+.relation-create.relation-create-part-of button { border-color: color-mix(in srgb, #80c997 58%, var(--line)); color: #a6e6b9; }
+.relation-part-of-hint { margin: -1px 2px 0; color: color-mix(in srgb, #a6e6b9 76%, var(--muted)); font-size: 10px; line-height: 1.35; }
