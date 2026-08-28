@@ -2082,6 +2082,13 @@ export default function Home() {
   }, [authState, boardId, persistence, isPublicViewer, selectedCardId]);
 
   useEffect(() => {
+    const element = selectedDiagramElement === null ? null : diagramElements[selectedDiagramElement];
+    if (!element) return;
+    if ('color' in element && typeof element.color === 'string') setDiagramColor(element.color);
+    if ('fillColor' in element && typeof element.fillColor === 'string') setDiagramFillColor(element.fillColor);
+  }, [diagramElements, selectedDiagramElement]);
+
+  useEffect(() => {
     const canvas = diagramCanvasRef.current;
     if (!isDiagramOpen || !canvas) return;
     const context = canvas.getContext('2d');
@@ -4248,12 +4255,28 @@ export default function Home() {
     const element = selectedDiagramElement === null ? null : diagramElements[selectedDiagramElement];
     return element?.type === 'rectangle' || element?.type === 'ellipse' ? element : null;
   }
+  function selectedDiagramColorElement() {
+    const element = selectedDiagramElement === null ? null : diagramElements[selectedDiagramElement];
+    return element && 'color' in element ? element : null;
+  }
+  function selectedDiagramFillElement() {
+    const element = selectedDiagramElement === null ? null : diagramElements[selectedDiagramElement];
+    return element?.type === 'rectangle' || element?.type === 'ellipse' || element?.type === 'sticker' ? element : null;
+  }
   function updateSelectedDiagramElement(patch: Record<string, unknown>) {
     if (selectedDiagramElement === null || isSelectedReadOnly) return;
     const element = diagramElements[selectedDiagramElement];
     if (!element || element.locked || diagramLockedByOther(element)) return;
     publishDiagramObjectLock(element.id, true);
     setDiagramElements((current) => current.map((item, index) => index === selectedDiagramElement ? { ...item, ...patch } as DiagramElement : item));
+  }
+  function setSelectedDiagramColor(color: string) {
+    setDiagramColor(color);
+    if (selectedDiagramColorElement()) updateSelectedDiagramElement({ color });
+  }
+  function setSelectedDiagramFillColor(fillColor: string) {
+    setDiagramFillColor(fillColor);
+    if (selectedDiagramFillElement()) updateSelectedDiagramElement({ fillColor });
   }
   function setDiagramShapeTextStyle(patch: Partial<Pick<DiagramRectangle, 'textColor' | 'fontSize' | 'fontFamily' | 'fontWeight' | 'textAlign' | 'textVerticalAlign' | 'textPadding'>>) {
     if (patch.fontSize) setDiagramFontSize(patch.fontSize);
@@ -5937,8 +5960,8 @@ export default function Home() {
             <button type="button" className={`diagram-tool ${isDiagramLayersOpen ? 'active' : ''}`} onClick={() => setDiagramLayersOpen((current) => !current)} title="Слои" aria-label="Открыть слои">☷</button>
             <input ref={diagramImageUploadRef} className="diagram-image-upload" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => void uploadDiagramImages(event)} />
           </div>
-          <label className="diagram-control">Контур<input type="color" value={diagramColor} onPointerDown={rememberDiagramState} onChange={(event) => setDiagramColor(event.target.value)} onBlur={(event) => { if (selectedDiagramShapeElement()) updateSelectedDiagramElement({ color: event.currentTarget.value }); }} aria-label="Цвет контура" /></label>
-          {(diagramTool === 'rectangle' || diagramTool === 'ellipse' || selectedDiagramShapeElement() || diagramTool === 'sticker') && <label className="diagram-control">Заливка<input type="color" value={diagramFillColor} onPointerDown={rememberDiagramState} onChange={(event) => setDiagramFillColor(event.target.value)} onBlur={(event) => { const shape = selectedDiagramShapeElement(); if (shape) updateSelectedDiagramElement({ fillColor: event.currentTarget.value }); }} aria-label="Цвет заливки" /></label>}
+          <label className="diagram-control">Контур<input type="color" value={diagramColor} onPointerDown={rememberDiagramState} onChange={(event) => setSelectedDiagramColor(event.target.value)} aria-label="Цвет контура" /></label>
+          {(diagramTool === 'rectangle' || diagramTool === 'ellipse' || selectedDiagramFillElement() || diagramTool === 'sticker') && <label className="diagram-control">Заливка<input type="color" value={diagramFillColor} onPointerDown={rememberDiagramState} onChange={(event) => setSelectedDiagramFillColor(event.target.value)} aria-label="Цвет заливки" /></label>}
           {diagramTool === 'sticker' && <div className="diagram-sticker-picker" aria-label="Стикер"><button type="button" className={diagramStickerIcon === '?' ? 'active' : ''} onClick={() => setDiagramStickerIcon('?')}>?</button><button type="button" className={diagramStickerIcon === '!' ? 'active' : ''} onClick={() => setDiagramStickerIcon('!')}>!</button></div>}
           <div className="diagram-width-picker" aria-label="Толщина кисти и линий"><span>Кисть / линия</span><div>{([2, 3, 6, 12] as const).map((width) => <button type="button" key={width} className={diagramLineWidth === width ? 'active' : ''} onClick={() => setDiagramLineWidth(width)} aria-label={`${width} px`} title={`${width} px`}><i style={{ width, height: width }} /></button>)}</div></div>
           {(diagramTool === 'text' || diagramTool === 'callout' || selectedDiagramTextElement()) && <>
