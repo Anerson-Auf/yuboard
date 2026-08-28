@@ -130,6 +130,7 @@ type DiagramLiveEvent = DiagramMergeEvent | DiagramCursorEvent | DiagramObjectLo
 type DiagramObjectLock = { user_id: string; username: string; expires_at: number };
 type DiagramNoteComment = { id: string; author_id: string | null; author_name: string; author_avatar_url?: string | null; body: string; created_at: string };
 type DiagramNote = { id: string; x: number; y: number; author_id: string | null; author_name: string; author_avatar_url?: string | null; created_at: string; comments: DiagramNoteComment[] };
+type DiagramNoteContextMenu = { note: DiagramNote; x: number; y: number };
 type CardContextMenu = { card: Card; x: number; y: number };
 type ColumnContextMenu = { column: Column; x: number; y: number };
 type ViewportRect = { left: number; top: number; width: number; height: number };
@@ -143,6 +144,12 @@ type BoardRelation = { source_card_id: string; target_card_id: string };
 const API_URL = process.env.NEXT_PUBLIC_FLOWBOARD_API_URL ?? '';
 const DIAGRAM_CANVAS_WIDTH = 4800;
 const DIAGRAM_CANVAS_HEIGHT = 2880;
+// The document stays at 4800×2880 logical units, while the bitmap uses a
+// sensible density for the visible zoom. This cuts repaint work by 75% when a
+// color picker emits many updates in a row.
+const DIAGRAM_CANVAS_RENDER_SCALE = .5;
+const DIAGRAM_CANVAS_RENDER_WIDTH = Math.round(DIAGRAM_CANVAS_WIDTH * DIAGRAM_CANVAS_RENDER_SCALE);
+const DIAGRAM_CANVAS_RENDER_HEIGHT = Math.round(DIAGRAM_CANVAS_HEIGHT * DIAGRAM_CANVAS_RENDER_SCALE);
 const browserFetch = globalThis.fetch.bind(globalThis);
 const DEFAULT_REACTION_EMOJIS = ['👍', '👎', '❤️', '🔥', '🎉', '😂', '😮', '😢', '😡', '🤔', '👀', '🙏', '💯', '✅', '❌', '🚀', '💀', '🤝', '👏', '💪', '⭐', '💫', '⚡', '🎯', '🫡', '🫶', '🥳', '😎', '🤡', '🧠', '💬', '📌'];
 const DEFAULT_STICKERS = [
@@ -1402,6 +1409,7 @@ export default function Home() {
   const [diagramObjectLocks, setDiagramObjectLocks] = useState<Record<string, DiagramObjectLock>>({});
   const [diagramNotes, setDiagramNotes] = useState<DiagramNote[]>([]);
   const [selectedDiagramNoteId, setSelectedDiagramNoteId] = useState<string | null>(null);
+  const [diagramNoteContextMenu, setDiagramNoteContextMenu] = useState<DiagramNoteContextMenu | null>(null);
   const [diagramNoteComposerPoint, setDiagramNoteComposerPoint] = useState<DiagramPoint | null>(null);
   const [diagramNoteDraft, setDiagramNoteDraft] = useState('');
   const [diagramNoteReplyDrafts, setDiagramNoteReplyDrafts] = useState<Record<string, string>>({});
@@ -1516,6 +1524,7 @@ export default function Home() {
   const diagramTitleRef = useRef('Схема');
   const diagramSocketRef = useRef<WebSocket | null>(null);
   const diagramInlineTextEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const diagramNotesRequestRef = useRef(0);
   // WebSocket makes remote edits immediate. The version is also polled as a
   // fallback: reverse proxies can silently drop an upgraded connection.
   const diagramServerVersionRef = useRef(-1);
@@ -2043,8 +2052,10 @@ export default function Home() {
     if (!isDiagramOpen || !canvas) return;
     const context = canvas.getContext('2d');
     if (!context) return;
+    context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#171923'; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.setTransform(DIAGRAM_CANVAS_RENDER_SCALE, 0, 0, DIAGRAM_CANVAS_RENDER_SCALE, 0, 0);
+    context.fillStyle = '#171923'; context.fillRect(0, 0, DIAGRAM_CANVAS_WIDTH, DIAGRAM_CANVAS_HEIGHT);
     diagramElements.forEach((element) => drawDiagramElement(context, element));
     // Ink is a separate top layer: annotations must remain visible over
     // screenshots, references and every other canvas object.
@@ -2179,7 +2190,12 @@ export default function Home() {
     };
     const applyCursor = (event: DiagramCursorEvent) => {
       if (event.user_id === account?.user.id) return;
-      setDiagramPresence((current) => [...current.filter((person) => person.user_id !== event.user_id), { user_id: event.user_id, username: event.username, avatar_url: event.avatar_url, x: event.x, y: event.y }]);
+      const next = { user_id: event.user_id, username: event.username, avatar_url: event.avatar_url, x: event.x, y: event.y };
+      // Preserve the existing overlay node. Reordering it on every packet can
+      // cancel the CSS interpolation and makes a smooth stream look like jumps.
+      setDiagramPresence((current) => current.some((person) => person.user_id === event.user_id)
+        ? current.map((person) => person.user_id === event.user_id ? next : person)
+        : [...current, next]);
     };
     const connect = () => {
       if (!active || typeof selected?.id !== 'string') return;
@@ -2203,6 +2219,15 @@ export default function Home() {
     connect();
     return () => { active = false; if (reconnectTimer !== null) window.clearTimeout(reconnectTimer); if (diagramSocketRef.current === socket) diagramSocketRef.current = null; socket?.close(); lockExpiryTimers.forEach((timer) => window.clearTimeout(timer)); lockExpiryTimers.clear(); };
   }, [account?.user.id, authState, isDiagramOpen, selected?.id]);
+
+  useEffect(() => {
+    if (!isDiagramOpen || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
+    const cardId = selected.id;
+    // WebSocket is immediate; this is a small recovery path for a proxy that
+    // drops one event, so a point discussion never requires reopening Schema.
+    const timer = window.setInterval(() => loadDiagramNotes(cardId), 1_200);
+    return () => window.clearInterval(timer);
+  }, [isDiagramOpen, selected?.id]);
 
   useEffect(() => {
     if (!isDiagramOpen || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
@@ -2393,13 +2418,13 @@ export default function Home() {
   }, [stickerPickerTarget]);
 
   useEffect(() => {
-    if (!cardContextMenu && !columnContextMenu && !freeformContextMenu) return;
-    const close = (event?: PointerEvent) => { if (event?.target instanceof Element && event.target.closest('.freeform-context-menu')) return; setCardContextMenu(null); setColumnContextMenu(null); setFreeformContextMenu(null); };
+    if (!cardContextMenu && !columnContextMenu && !freeformContextMenu && !diagramNoteContextMenu) return;
+    const close = (event?: PointerEvent) => { if (event?.target instanceof Element && event.target.closest('.freeform-context-menu, .diagram-note-context-menu')) return; setCardContextMenu(null); setColumnContextMenu(null); setFreeformContextMenu(null); setDiagramNoteContextMenu(null); };
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
     window.addEventListener('pointerdown', close);
     window.addEventListener('keydown', closeOnEscape);
     return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', closeOnEscape); };
-  }, [cardContextMenu, columnContextMenu, freeformContextMenu]);
+  }, [cardContextMenu, columnContextMenu, freeformContextMenu, diagramNoteContextMenu]);
 
   useEffect(() => {
     if (!selected || selected.archived || !cardTitleDraft.trim() || (selected.title === cardTitleDraft.trim() && (selected.description ?? '') === cardDescriptionDraft)) return;
@@ -3959,9 +3984,12 @@ export default function Home() {
   }
   function loadDiagramNotes(cardId = selected?.id) {
     if (typeof cardId !== 'string' || isParkingCardId(cardId)) return;
+    const requestId = ++diagramNotesRequestRef.current;
     void fetch(`${API_URL}/v1/cards/${cardId}/diagram/notes`)
       .then(async (response) => { if (!response.ok) throw new Error('diagram notes load failed'); return response.json() as Promise<DiagramNote[]>; })
-      .then((notes) => setDiagramNotes(notes))
+      // Slow initial and recovery requests must never overwrite a note or a
+      // reply that has just been optimistically placed on the canvas.
+      .then((notes) => { if (requestId === diagramNotesRequestRef.current) setDiagramNotes(notes); })
       .catch(() => undefined);
   }
   function createDiagramNote(event: FormEvent) {
@@ -3970,7 +3998,7 @@ export default function Home() {
     const point = diagramNoteComposerPoint;
     void fetch(`${API_URL}/v1/cards/${selected.id}/diagram/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y), body: diagramNoteDraft }) })
       .then(async (response) => { if (!response.ok) throw new Error('diagram note create failed'); return response.json() as Promise<DiagramNote>; })
-      .then((note) => { setDiagramNotes((current) => [...current, note]); setSelectedDiagramNoteId(note.id); setDiagramNoteComposerPoint(null); setDiagramNoteDraft(''); setDiagramTool('select'); })
+      .then((note) => { diagramNotesRequestRef.current += 1; setDiagramNotes((current) => [...current.filter((item) => item.id !== note.id), note]); setSelectedDiagramNoteId(note.id); setDiagramNoteComposerPoint(null); setDiagramNoteDraft(''); setDiagramTool('select'); })
       .catch(() => showToast('Не удалось создать заметку'));
   }
   function replyToDiagramNote(note: DiagramNote) {
@@ -3978,8 +4006,14 @@ export default function Home() {
     if (!body || isSelectedReadOnly) return;
     void fetch(`${API_URL}/v1/diagram/notes/${note.id}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
       .then(async (response) => { if (!response.ok) throw new Error('diagram note reply failed'); return response.json() as Promise<DiagramNote>; })
-      .then((saved) => { setDiagramNotes((current) => current.map((item) => item.id === saved.id ? saved : item)); setDiagramNoteReplyDrafts((current) => ({ ...current, [note.id]: '' })); })
+      .then((saved) => { diagramNotesRequestRef.current += 1; setDiagramNotes((current) => current.map((item) => item.id === saved.id ? saved : item)); setDiagramNoteReplyDrafts((current) => ({ ...current, [note.id]: '' })); })
       .catch(() => showToast('Не удалось отправить ответ'));
+  }
+  function deleteDiagramNote(note: DiagramNote) {
+    if (!selected || typeof selected.id !== 'string' || isSelectedReadOnly) return;
+    void fetch(`${API_URL}/v1/diagram/notes/${note.id}`, { method: 'DELETE' })
+      .then((response) => { if (!response.ok) throw new Error('diagram note delete failed'); diagramNotesRequestRef.current += 1; setDiagramNotes((current) => current.filter((item) => item.id !== note.id)); setSelectedDiagramNoteId((current) => current === note.id ? null : current); setDiagramNoteContextMenu(null); showToast('Заметка удалена'); })
+      .catch(() => showToast('Не удалось удалить заметку'));
   }
   function openDiagram() {
     if (!selected || typeof selected.id !== 'string') return;
@@ -4011,11 +4045,20 @@ export default function Home() {
         setDiagramNoteComposerPoint(null);
         setDiagramNoteDraft('');
         setDiagramNoteReplyDrafts({});
+        setDiagramNoteContextMenu(null);
         loadDiagramNotes(selected.id);
         setDiagramTool('select');
         setDiagramZoom(.35);
-        setDiagramFullscreen(false);
+        setDiagramFullscreen(true);
         setDiagramOpen(true);
+        window.requestAnimationFrame(() => {
+          const viewport = diagramViewportRef.current;
+          if (!viewport) return;
+          // Fill the newly opened full-screen workspace exactly to its right
+          // edge instead of leaving a dead strip beside the canvas.
+          const fitZoom = Math.max(.2, Math.min(1, (viewport.clientWidth - 16) / DIAGRAM_CANVAS_WIDTH));
+          setDiagramZoom(Math.ceil(fitZoom * 100) / 100);
+        });
       })
       .catch(() => showToast('Не удалось загрузить схему'));
   }
@@ -4024,7 +4067,7 @@ export default function Home() {
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
-    return { x: (clientX - rect.left) * canvas.width / rect.width, y: (clientY - rect.top) * canvas.height / rect.height };
+    return { x: (clientX - rect.left) * DIAGRAM_CANVAS_WIDTH / rect.width, y: (clientY - rect.top) * DIAGRAM_CANVAS_HEIGHT / rect.height };
   }
   function diagramPoint(event: ReactPointerEvent<HTMLCanvasElement>): DiagramPoint | null {
     return diagramPointFromClient(event.clientX, event.clientY);
@@ -5817,8 +5860,9 @@ export default function Home() {
           </article>)}</div> : <p>Добавьте фигуру, текст, стрелку или изображение — они появятся здесь.</p>}
         </section>}
         <div className="diagram-zoom" aria-label="Масштаб схемы"><span>Масштаб</span><button type="button" onClick={() => setDiagramZoom((current) => Math.max(.2, Number((current - .1).toFixed(2))))} disabled={diagramZoom <= .2} aria-label="Отдалить">−</button><output>{Math.round(diagramZoom * 100)}%</output><button type="button" onClick={() => setDiagramZoom((current) => Math.min(2.2, Number((current + .1).toFixed(2))))} disabled={diagramZoom >= 2.2} aria-label="Приблизить">+</button><button type="button" onClick={() => setDiagramZoom(.35)}>Обзор</button><button type="button" onClick={() => setDiagramZoom(1)}>100%</button></div>
-        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(DIAGRAM_CANVAS_WIDTH * diagramZoom)}px`, height: `${Math.round(DIAGRAM_CANVAS_HEIGHT * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width={DIAGRAM_CANVAS_WIDTH} height={DIAGRAM_CANVAS_HEIGHT} style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onLostPointerCapture={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramNotes.map((note) => <div className="diagram-note-anchor" key={note.id} style={{ left: `${note.x * diagramZoom}px`, top: `${note.y * diagramZoom}px` }} onPointerDown={(event) => event.stopPropagation()}><button type="button" className={`diagram-note-pin ${selectedDiagramNoteId === note.id ? 'open' : ''}`} onClick={() => { setSelectedDiagramNoteId((current) => current === note.id ? null : note.id); setDiagramNoteComposerPoint(null); }} title={`Заметка @${note.author_name}`} aria-label={`Открыть заметку @${note.author_name}`}>{note.author_avatar_url ? <img src={assetUrl(note.author_avatar_url)} alt="" /> : <span>{note.author_name.slice(0, 1).toUpperCase()}</span>}<i>{note.comments.length}</i></button>{selectedDiagramNoteId === note.id && <section className="diagram-note-thread" onPointerDown={(event) => event.stopPropagation()}><header><span><b>@{note.author_name}</b><small>{new Date(note.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></span><button type="button" onClick={() => setSelectedDiagramNoteId(null)} aria-label="Закрыть заметку">×</button></header><div className="diagram-note-messages">{note.comments.map((comment) => <article key={comment.id}><span>{comment.author_avatar_url ? <img src={assetUrl(comment.author_avatar_url)} alt="" /> : comment.author_name.slice(0, 1).toUpperCase()}</span><p><b>@{comment.author_name}</b>{comment.body}</p></article>)}</div>{!isSelectedReadOnly && <form onSubmit={(event) => { event.preventDefault(); replyToDiagramNote(note); }}><textarea value={diagramNoteReplyDrafts[note.id] ?? ''} onChange={(event) => setDiagramNoteReplyDrafts((current) => ({ ...current, [note.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); replyToDiagramNote(note); } }} maxLength={4000} placeholder="Ответить…" aria-label="Ответ на заметку" /><button type="submit" disabled={!(diagramNoteReplyDrafts[note.id] ?? '').trim()}>↑</button></form>}</section>}</div>)}{diagramNoteComposerPoint && <form className="diagram-note-composer" style={{ left: `${diagramNoteComposerPoint.x * diagramZoom}px`, top: `${diagramNoteComposerPoint.y * diagramZoom}px` }} onPointerDown={(event) => event.stopPropagation()} onSubmit={createDiagramNote}><b>Новая заметка</b><textarea autoFocus value={diagramNoteDraft} onChange={(event) => setDiagramNoteDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={4000} placeholder="Что обсудить в этой точке?" aria-label="Текст заметки" /><span><button type="button" onClick={() => setDiagramNoteComposerPoint(null)}>Отмена</button><button type="submit" className="create-button" disabled={!diagramNoteDraft.trim()}>Создать</button></span></form>}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
+        <div ref={diagramViewportRef} className="diagram-viewport"><div className="diagram-stage" style={{ width: `${Math.round(DIAGRAM_CANVAS_WIDTH * diagramZoom)}px`, height: `${Math.round(DIAGRAM_CANVAS_HEIGHT * diagramZoom)}px` }}><canvas ref={diagramCanvasRef} className={`diagram-canvas tool-${diagramTool}`} width={DIAGRAM_CANVAS_RENDER_WIDTH} height={DIAGRAM_CANVAS_RENDER_HEIGHT} style={{ width: '100%', height: '100%' }} onPointerDown={startDiagramStroke} onPointerMove={continueDiagramStroke} onPointerUp={finishDiagramInteraction} onPointerCancel={finishDiagramInteraction} onLostPointerCapture={finishDiagramInteraction} onDoubleClick={openDiagramTextEditor} />{editingDiagramTextIndex !== null && (() => { const element = diagramElements[editingDiagramTextIndex]; if (!element || (element.type !== 'text' && element.type !== 'callout')) return null; const x = (element.type === 'callout' ? element.x2 + 14 : element.x) * diagramZoom; const y = (element.type === 'callout' ? element.y2 + 14 : element.y) * diagramZoom; return <textarea ref={diagramInlineTextEditorRef} className="diagram-inline-text-editor" value={editingDiagramTextDraft} style={{ left: `${x}px`, top: `${y}px`, fontSize: `${Math.max(12, element.fontSize * diagramZoom)}px`, fontFamily: element.fontFamily, fontWeight: element.fontWeight, color: element.color }} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => updateDiagramTextEdit(event.target.value)} onBlur={finishDiagramTextEdit} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }} maxLength={4000} placeholder="Введите текст…" aria-label="Текст на схеме" />; })()}{diagramNotes.map((note) => <div className="diagram-note-anchor" key={note.id} style={{ left: `${note.x * diagramZoom}px`, top: `${note.y * diagramZoom}px` }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => { if (isSelectedReadOnly || (note.author_id !== account?.user.id && !canManageBoardAdministration)) return; event.preventDefault(); event.stopPropagation(); setDiagramNoteContextMenu({ note, x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 90) }); }}><button type="button" className={`diagram-note-pin ${selectedDiagramNoteId === note.id ? 'open' : ''}`} onClick={() => { setSelectedDiagramNoteId((current) => current === note.id ? null : note.id); setDiagramNoteComposerPoint(null); }} title={`Заметка @${note.author_name}`} aria-label={`Открыть заметку @${note.author_name}`}>{note.author_avatar_url ? <img src={assetUrl(note.author_avatar_url)} alt="" /> : <span>{note.author_name.slice(0, 1).toUpperCase()}</span>}<i>{note.comments.length}</i></button>{selectedDiagramNoteId === note.id && <section className="diagram-note-thread" onPointerDown={(event) => event.stopPropagation()}><header><span><b>@{note.author_name}</b><small>{new Date(note.created_at).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</small></span><button type="button" onClick={() => setSelectedDiagramNoteId(null)} aria-label="Закрыть заметку">×</button></header><div className="diagram-note-messages">{note.comments.map((comment) => <article key={comment.id}><span>{comment.author_avatar_url ? <img src={assetUrl(comment.author_avatar_url)} alt="" /> : comment.author_name.slice(0, 1).toUpperCase()}</span><p><b>@{comment.author_name}</b>{comment.body}</p></article>)}</div>{!isSelectedReadOnly && <form onSubmit={(event) => { event.preventDefault(); replyToDiagramNote(note); }}><textarea value={diagramNoteReplyDrafts[note.id] ?? ''} onChange={(event) => setDiagramNoteReplyDrafts((current) => ({ ...current, [note.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); replyToDiagramNote(note); } }} maxLength={4000} placeholder="Ответить…" aria-label="Ответ на заметку" /><button type="submit" disabled={!(diagramNoteReplyDrafts[note.id] ?? '').trim()}>↑</button></form>}</section>}</div>)}{diagramNoteComposerPoint && <form className="diagram-note-composer" style={{ left: `${diagramNoteComposerPoint.x * diagramZoom}px`, top: `${diagramNoteComposerPoint.y * diagramZoom}px` }} onPointerDown={(event) => event.stopPropagation()} onSubmit={createDiagramNote}><b>Новая заметка</b><textarea autoFocus value={diagramNoteDraft} onChange={(event) => setDiagramNoteDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={4000} placeholder="Что обсудить в этой точке?" aria-label="Текст заметки" /><span><button type="button" onClick={() => setDiagramNoteComposerPoint(null)}>Отмена</button><button type="submit" className="create-button" disabled={!diagramNoteDraft.trim()}>Создать</button></span></form>}{diagramPresence.map((person) => <div className="diagram-presence-cursor" key={person.user_id} style={{ left: `${person.x * diagramZoom}px`, top: `${person.y * diagramZoom}px` }}><span>↖</span><b>@{person.username}</b></div>)}</div></div>
         <div className="diagram-actions"><button className="secondary-button" onClick={undoDiagram} disabled={!diagramHistory.length || isSelectedReadOnly} title="Ctrl+Z / ⌘Z">↶ Отменить <kbd>Ctrl+Z</kbd></button><button className="secondary-button" onClick={() => { rememberDiagramState(); setDiagramStrokes([]); setDiagramElements([]); setDiagramPreview(null); setSelectedDiagramElement(null); }} disabled={isSelectedReadOnly || (!diagramStrokes.length && !diagramElements.length)}>Очистить</button><span className="diagram-autosave-status" aria-live="polite">{isDiagramSaving ? 'Сохраняем…' : 'Сохраняется автоматически'}</span></div>
+        {diagramNoteContextMenu && <div className="diagram-note-context-menu card-context-menu" role="menu" style={{ left: diagramNoteContextMenu.x, top: diagramNoteContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger-action" type="button" onClick={() => deleteDiagramNote(diagramNoteContextMenu.note)}>Удалить заметку</button></div>}
       </section>
     </div>}
 

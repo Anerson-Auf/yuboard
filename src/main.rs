@@ -1887,6 +1887,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/diagram/ws", get(card_diagram_websocket))
         .route("/v1/cards/{card_id}/diagram/presence", get(get_card_diagram_presence).put(update_card_diagram_presence))
         .route("/v1/cards/{card_id}/diagram/notes", get(list_card_diagram_notes).post(create_card_diagram_note))
+        .route("/v1/diagram/notes/{note_id}", axum::routing::delete(delete_card_diagram_note))
         .route("/v1/diagram/notes/{note_id}/comments", post(create_card_diagram_note_comment))
         .route("/v1/cards/{card_id}/checklists", post(create_checklist))
         .route("/v1/checklists/{checklist_id}", patch(update_checklist).delete(delete_checklist))
@@ -5041,6 +5042,7 @@ async fn create_card_diagram_note(State(state): State<AppState>, current: Curren
     let note = load_card_diagram_notes(pool, card_id).await?.into_iter().find(|note| note.id == note_id)
         .ok_or_else(|| ApiError::internal(sqlx::Error::RowNotFound))?;
     let _ = state.diagram_events.send(DiagramLiveEvent::NotesChanged(DiagramNotesChangedEvent { event_type: "diagram_notes_changed", card_id }));
+    let _ = state.events.send(());
     Ok(Json(note))
 }
 
@@ -5057,7 +5059,34 @@ async fn create_card_diagram_note_comment(State(state): State<AppState>, current
     let note = load_card_diagram_notes(pool, card_id).await?.into_iter().find(|note| note.id == note_id)
         .ok_or_else(|| ApiError::internal(sqlx::Error::RowNotFound))?;
     let _ = state.diagram_events.send(DiagramLiveEvent::NotesChanged(DiagramNotesChangedEvent { event_type: "diagram_notes_changed", card_id }));
+    let _ = state.events.send(());
     Ok(Json(note))
+}
+
+async fn delete_card_diagram_note(State(state): State<AppState>, current: CurrentUser, Path(note_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    let pool = database(&state)?;
+    let (card_id, author_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>("SELECT card_id, created_by FROM card_diagram_notes WHERE id = $1")
+        .bind(note_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "diagram_note_not_found", "Diagram note was not found.".to_owned()))?;
+    ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
+    if author_id != Some(current.id) {
+        ensure_card_full_access(pool, card_id, current.id).await?;
+    }
+    let deleted = sqlx::query("DELETE FROM card_diagram_notes WHERE id = $1")
+        .bind(note_id)
+        .execute(pool)
+        .await
+        .map_err(ApiError::internal)?;
+    if deleted.rows_affected() == 0 {
+        return Err(ApiError(StatusCode::NOT_FOUND, "diagram_note_not_found", "Diagram note was not found.".to_owned()));
+    }
+    record_card_activity(pool, card_id, current.id, "Удалена заметка на схеме", "").await;
+    let _ = state.diagram_events.send(DiagramLiveEvent::NotesChanged(DiagramNotesChangedEvent { event_type: "diagram_notes_changed", card_id }));
+    let _ = state.events.send(());
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_card_diagram(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> ApiResult<Option<DiagramResponse>> {
