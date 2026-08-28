@@ -5360,6 +5360,15 @@ async fn reorder_checklists(State(state): State<AppState>, current: CurrentUser,
         return Err(ApiError::bad_request("Checklist order must include every checklist of this card exactly once."));
     }
     let mut transaction = pool.begin().await.map_err(ApiError::internal)?;
+    // `(card_id, position)` is unique. Swapping adjacent checklists directly
+    // would temporarily reuse the neighbour's position and PostgreSQL would
+    // reject the otherwise valid reorder. Reserve unique transient positions
+    // first, then write the final stable order in the same transaction.
+    for (index, checklist_id) in request.checklist_ids.iter().enumerate() {
+        sqlx::query("UPDATE checklists SET position = $1 WHERE id = $2 AND card_id = $3")
+            .bind(-1_000_000_000_i64 - index as i64).bind(checklist_id).bind(card_id)
+            .execute(&mut *transaction).await.map_err(ApiError::internal)?;
+    }
     for (index, checklist_id) in request.checklist_ids.iter().enumerate() {
         sqlx::query("UPDATE checklists SET position = $1 WHERE id = $2 AND card_id = $3")
             .bind(((index + 1) * 1000) as i64).bind(checklist_id).bind(card_id)
