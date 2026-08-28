@@ -495,6 +495,13 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .board-header { flex-wrap: wrap; }
 .board-header > :first-child { margin-right: auto; }
 .board-tools { position: relative; z-index: 30; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }.board-tools > .filter-control { margin-left: 5px; padding-left: 11px; border-left: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }@media (max-width: 760px) { .board-tools > .filter-control { margin-left: 0; padding-left: 0; border-left: 0; } }
+
+/* Board tools stay in their familiar order, but their visual rhythm now
+   separates views, filters, project data and the administration menu. */
+.board-tools > .board-team-button { margin-left: 5px; box-shadow: -1px 0 0 color-mix(in srgb, var(--line) 80%, transparent); }
+.board-tools > .board-menu-control { margin-left: 5px; padding-left: 8px; border-left: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }
+.board-tools > .board-menu-control > .more { margin-left: 0; }
+@media (max-width: 760px) { .board-tools > .board-team-button { margin-left: 0; box-shadow: none; }.board-tools > .board-menu-control { margin-left: 0; padding-left: 0; border-left: 0; } }
 .secondary-button.more { padding: 8px 7px; border: 0; background: transparent; box-shadow: none; }
 .secondary-button.more:hover { background: transparent; color: var(--text); }
 .board-members-control { position: relative; z-index: 32; flex: 0 0 auto; }
