@@ -1,10 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import './board-presence.css';
 
 export type PresenceLocation = 'board' | 'card' | 'diagram';
 export type Presence = { user_id: string; username: string; avatar_url: string | null; card_id: string | null; card_title: string | null; editing_description: boolean; location: PresenceLocation };
+
+const PRESENCE_HEARTBEAT_MS = 6_000;
+const PRESENCE_IDLE_MS = 90_000;
+const PRESENCE_ACTIVITY_SIGNAL_MS = 4_000;
 
 function csrfHeaders() {
   const token = document.cookie.split('; ').find((item) => item.startsWith('flowboard_csrf='))?.slice('flowboard_csrf='.length);
@@ -13,22 +17,74 @@ function csrfHeaders() {
 
 export function useBoardPresence({ boardId, currentUserId, activeCardId, editingDescription, location, isBoardOpen }: { boardId?: string | null; currentUserId?: string; activeCardId?: string | null; editingDescription: boolean; location: PresenceLocation; isBoardOpen: boolean }) {
   const [people, setPeople] = useState<Presence[]>([]);
+  const [activityRevision, setActivityRevision] = useState(0);
+  const lastActivityAtRef = useRef(0);
+  const lastActivitySignalAtRef = useRef(0);
+  const presenceSentRef = useRef(false);
+
+  useEffect(() => {
+    if (!boardId || !currentUserId || !isBoardOpen) {
+      lastActivityAtRef.current = 0;
+      presenceSentRef.current = false;
+      setPeople([]);
+      return;
+    }
+    const markActivity = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      lastActivityAtRef.current = now;
+      if (!presenceSentRef.current || now - lastActivitySignalAtRef.current >= PRESENCE_ACTIVITY_SIGNAL_MS) {
+        lastActivitySignalAtRef.current = now;
+        setActivityRevision((current) => current + 1);
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') markActivity();
+      else {
+        lastActivityAtRef.current = 0;
+        setActivityRevision((current) => current + 1);
+      }
+    };
+    markActivity();
+    const activityEvents: Array<keyof DocumentEventMap> = ['pointerdown', 'keydown', 'touchstart', 'wheel'];
+    activityEvents.forEach((eventName) => document.addEventListener(eventName, markActivity, { passive: true }));
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      activityEvents.forEach((eventName) => document.removeEventListener(eventName, markActivity));
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [boardId, currentUserId, isBoardOpen]);
+
   useEffect(() => {
     if (!boardId || !currentUserId || !isBoardOpen) { setPeople([]); return; }
     let active = true;
-    const refresh = () => {
-      void fetch(`/v1/boards/${boardId}/presence`, { method: 'PUT', headers: csrfHeaders(), body: JSON.stringify({ card_id: activeCardId ?? null, editing_description: editingDescription, location }) })
+    const snapshot = () => {
+      void fetch(`/v1/boards/${boardId}/presence`)
         .then((response) => response.ok ? response.json() as Promise<Presence[]> : [])
         .then((next) => { if (active) setPeople(next); });
     };
+    const leave = () => {
+      if (!presenceSentRef.current) return;
+      presenceSentRef.current = false;
+      void fetch(`/v1/boards/${boardId}/presence`, { method: 'DELETE', headers: csrfHeaders(), keepalive: true })
+        .finally(snapshot);
+    };
+    const refresh = () => {
+      const activeRecently = document.visibilityState === 'visible' && Date.now() - lastActivityAtRef.current <= PRESENCE_IDLE_MS;
+      if (!activeRecently) { leave(); return; }
+      void fetch(`/v1/boards/${boardId}/presence`, { method: 'PUT', headers: csrfHeaders(), body: JSON.stringify({ card_id: activeCardId ?? null, editing_description: editingDescription, location }) })
+        .then((response) => response.ok ? response.json() as Promise<Presence[]> : [])
+        .then((next) => { if (active) { presenceSentRef.current = true; setPeople(next); } });
+    };
     refresh();
-    const timer = window.setInterval(refresh, 6_000);
+    const timer = window.setInterval(refresh, PRESENCE_HEARTBEAT_MS);
     return () => { active = false; window.clearInterval(timer); };
-  }, [activeCardId, boardId, currentUserId, editingDescription, isBoardOpen, location]);
+  }, [activeCardId, activityRevision, boardId, currentUserId, editingDescription, isBoardOpen, location]);
 
   useEffect(() => {
     if (!boardId || !currentUserId || !isBoardOpen) return;
     const leave = () => {
+      presenceSentRef.current = false;
       void fetch(`/v1/boards/${boardId}/presence`, { method: 'DELETE', headers: csrfHeaders(), keepalive: true });
     };
     window.addEventListener('pagehide', leave);
