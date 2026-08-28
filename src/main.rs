@@ -4695,13 +4695,27 @@ fn mentioned_usernames(value: &str) -> Vec<String> {
     names.into_iter().collect()
 }
 
+fn mentioned_role_names(value: &str) -> Vec<String> {
+    let mut roles = HashSet::new();
+    let mut remainder = value;
+    while let Some(start) = remainder.find("@{") {
+        let after_start = &remainder[start + 2..];
+        let Some(end) = after_start.find('}') else { break; };
+        let name = after_start[..end].trim();
+        if (1..=80).contains(&name.chars().count()) { roles.insert(name.to_lowercase()); }
+        remainder = &after_start[end + 1..];
+    }
+    roles.into_iter().collect()
+}
+
 async fn replace_card_mentions(pool: &PgPool, card_id: Uuid, actor_id: Uuid, source_kind: &str, source_id: Uuid, body: &str) -> Result<(), ApiError> {
     sqlx::query("DELETE FROM card_mentions WHERE source_kind = $1 AND source_id = $2")
         .bind(source_kind).bind(source_id).execute(pool).await.map_err(ApiError::internal)?;
     let usernames = mentioned_usernames(body);
-    if usernames.is_empty() { return Ok(()); }
-    let users = sqlx::query_scalar::<_, Uuid>("SELECT bm.user_id FROM cards c JOIN board_members bm ON bm.board_id = c.board_id JOIN users u ON u.id = bm.user_id WHERE c.id = $1 AND bm.user_id <> $2 AND u.disabled_at IS NULL AND lower(u.username) = ANY($3)")
-        .bind(card_id).bind(actor_id).bind(usernames).fetch_all(pool).await.map_err(ApiError::internal)?;
+    let role_names = mentioned_role_names(body);
+    if usernames.is_empty() && role_names.is_empty() { return Ok(()); }
+    let users = sqlx::query_scalar::<_, Uuid>("SELECT DISTINCT bm.user_id FROM cards c JOIN board_members bm ON bm.board_id = c.board_id JOIN users u ON u.id = bm.user_id LEFT JOIN user_profile_roles upr ON upr.user_id = u.id LEFT JOIN profile_roles pr ON pr.id = upr.role_id WHERE c.id = $1 AND bm.user_id <> $2 AND u.disabled_at IS NULL AND (lower(u.username) = ANY($3) OR lower(pr.name) = ANY($4))")
+        .bind(card_id).bind(actor_id).bind(usernames).bind(role_names).fetch_all(pool).await.map_err(ApiError::internal)?;
     for user_id in users {
         sqlx::query("INSERT INTO card_mentions (id, card_id, user_id, source_kind, source_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, source_kind, source_id) DO UPDATE SET card_id = EXCLUDED.card_id, created_at = now(), read_at = NULL")
             .bind(Uuid::new_v4()).bind(card_id).bind(user_id).bind(source_kind).bind(source_id).execute(pool).await.map_err(ApiError::internal)?;

@@ -585,6 +585,7 @@ type MentionTextareaProps = {
   value: string;
   onValueChange: (value: string) => void;
   members: Member[];
+  roles?: ProfileRole[];
   className?: string;
   placeholder?: string;
   maxLength?: number;
@@ -599,7 +600,7 @@ type MentionTextareaProps = {
   commands?: { command: string; label: string }[];
 };
 
-function MentionTextarea({ value, onValueChange, members, className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }: MentionTextareaProps) {
+function MentionTextarea({ value, onValueChange, members, roles = [], className, placeholder, maxLength, ariaLabel, autoFocus, disabled, onBlur, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }: MentionTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [query, setQuery] = useState<string | null>(null);
   const [commandQuery, setCommandQuery] = useState<string | null>(null);
@@ -610,25 +611,31 @@ function MentionTextarea({ value, onValueChange, members, className, placeholder
   }, [isMarkdownPreview]);
   const findQuery = (nextValue: string, caret: number | null) => {
     const beforeCaret = nextValue.slice(0, caret ?? nextValue.length);
-    const match = beforeCaret.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);
+    const match = beforeCaret.match(/(?:^|\s)@\{?([^}]*)$/);
     const commandMatch = beforeCaret.match(/(?:^|\s)\/([a-zA-Z]*)$/);
-    setQuery(match ? match[1].toLowerCase() : null);
+    setQuery(match ? match[1].toLowerCase() : '');
     setCommandQuery(commandMatch ? commandMatch[1].toLowerCase() : null);
   };
-  const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().startsWith(query)).slice(0, 7);
+  const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().includes(query));
+  const roleSuggestions = query === null ? [] : roles.filter((role) => role.name.toLowerCase().includes(query));
   const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
   const insertMention = (member: Member) => {
     const textarea = textareaRef.current;
     const caret = textarea?.selectionStart ?? value.length;
     const at = value.slice(0, caret).lastIndexOf('@');
-    if (at < 0) return;
-    const next = `${value.slice(0, at)}@${member.name} ${value.slice(caret)}`;
+    const start = at < 0 ? caret : at;
+    const next = `${value.slice(0, start)}@${member.name} ${value.slice(caret)}`;
     onValueChange(next);
     setQuery(null);
     window.requestAnimationFrame(() => {
-      const nextCaret = at + member.name.length + 2;
+      const nextCaret = start + member.name.length + 2;
       textarea?.focus(); textarea?.setSelectionRange(nextCaret, nextCaret);
     });
+  };
+  const insertRoleMention = (role: ProfileRole) => {
+    const textarea = textareaRef.current; const caret = textarea?.selectionStart ?? value.length; const at = value.slice(0, caret).lastIndexOf('@'); const start = at < 0 ? caret : at; const token = `@{${role.name}} `;
+    onValueChange(`${value.slice(0, start)}${token}${value.slice(caret)}`); setQuery('');
+    window.requestAnimationFrame(() => { const nextCaret = start + token.length; textarea?.focus(); textarea?.setSelectionRange(nextCaret, nextCaret); });
   };
   const insertCommand = (item: { command: string }) => {
     const textarea = textareaRef.current;
@@ -646,7 +653,7 @@ function MentionTextarea({ value, onValueChange, members, className, placeholder
   if (isChecklistDescription && isMarkdownPreview) {
     return <div className={`checklist-description-preview markdown-editable-description ${className ?? ''}`} role={disabled ? undefined : 'button'} tabIndex={disabled ? undefined : 0} onClick={() => { if (!disabled) setMarkdownPreview(false); }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMarkdownPreview(false); } }}><MarkdownDescription value={value} emptyText="Добавьте описание пункта…" /></div>;
   }
-  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); else onSubmitShortcut(); } }} onBlur={() => { setQuery(null); setCommandQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); insertCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
+  return <div className="mention-textarea"><textarea ref={textareaRef} className={className} value={value} onFocus={() => setQuery('')} onChange={(event) => { onValueChange(event.target.value); findQuery(event.target.value, event.target.selectionStart); }} onClick={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyUp={(event) => findQuery(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); } if (event.key === 'Tab' && (suggestions[0] || roleSuggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (roleSuggestions[0]) insertRoleMention(roleSuggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) insertMention(suggestions[0]); else if (roleSuggestions[0]) insertRoleMention(roleSuggestions[0]); else if (commandSuggestions[0]) insertCommand(commandSuggestions[0]); else onSubmitShortcut(); } }} onBlur={() => { setQuery(null); setCommandQuery(null); if (isChecklistDescription) setMarkdownPreview(true); onBlur?.(); }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} maxLength={maxLength} placeholder={placeholder} aria-label={ariaLabel} autoFocus={autoFocus} disabled={disabled} />{(suggestions.length > 0 || roleSuggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label="Участники, роли и команды">{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{roleSuggestions.length > 0 && <><p>Роли</p>{roleSuggestions.map((role) => <button key={role.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertRoleMention(role); }}><ProfileRoleChip role={role} /><span>@{role.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); insertCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
 }
 
 type InlineStickerComposerHandle = { insertSticker: (sticker: DraftSticker) => void; getValue: () => string; clear: () => void };
@@ -654,6 +661,7 @@ type InlineStickerComposerProps = {
   value: string;
   onValueChange: (value: string) => void;
   members: Member[];
+  roles?: ProfileRole[];
   className?: string;
   placeholder?: string;
   ariaLabel: string;
@@ -745,7 +753,7 @@ function renderComposerText(root: HTMLElement, value: string) {
   root.replaceChildren(fragment);
 }
 
-const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStickerComposerProps>(function InlineStickerComposer({ value, onValueChange, members, className, placeholder, ariaLabel, disabled, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }, ref) {
+const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStickerComposerProps>(function InlineStickerComposer({ value, onValueChange, members, roles = [], className, placeholder, ariaLabel, disabled, onDragOver, onDrop, onPaste, onSubmitShortcut, commands = [] }, ref) {
   const composerRef = useRef<HTMLDivElement | null>(null);
   const pendingCaret = useRef<number | null>(null);
   const localValueRef = useRef(value);
@@ -754,12 +762,13 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
   const [commandQuery, setCommandQuery] = useState<string | null>(null);
   const findQuery = (nextValue: string, caret: number) => {
     const beforeCaret = nextValue.slice(0, caret);
-    const mention = beforeCaret.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);
+    const mention = beforeCaret.match(/(?:^|\s)@\{?([^}]*)$/);
     const command = beforeCaret.match(/(?:^|\s)\/([a-zA-Z]*)$/);
-    setQuery(mention ? mention[1].toLowerCase() : null);
+    setQuery(mention ? mention[1].toLowerCase() : '');
     setCommandQuery(command ? command[1].toLowerCase() : null);
   };
-  const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().startsWith(query)).slice(0, 7);
+  const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().includes(query));
+  const roleSuggestions = query === null ? [] : roles.filter((role) => role.name.toLowerCase().includes(query));
   const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
   const flushValue = () => {
     if (delayedValueTimerRef.current !== null) {
@@ -818,10 +827,10 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
   }), [updateValue, value]);
   const replaceMention = (member: Member) => {
     const composer = composerRef.current; if (!composer) return;
-    const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@');
-    if (at < 0) return;
-    updateValue(`${current.slice(0, at)}@${member.name} ${current.slice(caret)}`, at + member.name.length + 2);
+    const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@'); const start = at < 0 ? caret : at;
+    updateValue(`${current.slice(0, start)}@${member.name} ${current.slice(caret)}`, start + member.name.length + 2);
   };
+  const replaceRoleMention = (role: ProfileRole) => { const composer = composerRef.current; if (!composer) return; const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@'); const start = at < 0 ? caret : at; const token = `@{${role.name}} `; updateValue(`${current.slice(0, start)}${token}${current.slice(caret)}`, start + token.length); };
   const replaceCommand = (item: { command: string }) => {
     const composer = composerRef.current; if (!composer) return;
     const current = composerText(composer); const caret = composerSelectionOffset(composer); const slash = current.slice(0, caret).lastIndexOf('/');
@@ -841,7 +850,7 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     updateValue(`${current.slice(0, start)}${current.slice(start + found[1].length)}`, start);
     return true;
   };
-  return <div className="mention-textarea inline-sticker-composer-wrap"><div ref={composerRef} className={`inline-sticker-composer ${className ?? ''}`} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-multiline="true" aria-label={ariaLabel} data-placeholder={placeholder} onInput={(event) => { const composer = event.currentTarget; const next = composerText(composer); updateValue(next, composerSelectionOffset(composer)); }} onClick={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyUp={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); return; } if (event.key === 'Backspace' && removeStickerNearCaret('backward')) { event.preventDefault(); return; } if (event.key === 'Delete' && removeStickerNearCaret('forward')) { event.preventDefault(); return; } if (event.key === 'Tab' && (suggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); return; } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); else { flushValue(); onSubmitShortcut(composerText(event.currentTarget)); } } }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} />{(suggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label={suggestions.length ? 'Участники доски' : 'Команды обсуждения'}>{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); replaceMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); replaceCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
+  return <div className="mention-textarea inline-sticker-composer-wrap"><div ref={composerRef} className={`inline-sticker-composer ${className ?? ''}`} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-multiline="true" aria-label={ariaLabel} data-placeholder={placeholder} onFocus={() => setQuery('')} onInput={(event) => { const composer = event.currentTarget; const next = composerText(composer); updateValue(next, composerSelectionOffset(composer)); }} onClick={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyUp={(event) => { const composer = event.currentTarget; findQuery(composerText(composer), composerSelectionOffset(composer)); }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(null); setCommandQuery(null); return; } if (event.key === 'Backspace' && removeStickerNearCaret('backward')) { event.preventDefault(); return; } if (event.key === 'Delete' && removeStickerNearCaret('forward')) { event.preventDefault(); return; } if (event.key === 'Tab' && (suggestions[0] || roleSuggestions[0] || commandSuggestions[0])) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (roleSuggestions[0]) replaceRoleMention(roleSuggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); return; } if (event.key === 'Enter' && !event.shiftKey && onSubmitShortcut) { event.preventDefault(); if (suggestions[0]) replaceMention(suggestions[0]); else if (roleSuggestions[0]) replaceRoleMention(roleSuggestions[0]); else if (commandSuggestions[0]) replaceCommand(commandSuggestions[0]); else { flushValue(); onSubmitShortcut(composerText(event.currentTarget)); } } }} onDragOver={onDragOver} onDrop={onDrop} onPaste={onPaste} />{(suggestions.length > 0 || roleSuggestions.length > 0 || commandSuggestions.length > 0) && <div className="mention-suggestions" role="listbox" aria-label="Участники, роли и команды">{suggestions.length > 0 && <><p>Участники доски</p>{suggestions.map((member) => <button key={member.id} type="button" onMouseDown={(event) => { event.preventDefault(); replaceMention(member); }}><Avatar member={member} /><span>@{member.name}</span></button>)}</>}{roleSuggestions.length > 0 && <><p>Роли</p>{roleSuggestions.map((role) => <button key={role.id} type="button" onMouseDown={(event) => { event.preventDefault(); replaceRoleMention(role); }}><ProfileRoleChip role={role} /><span>@{role.name}</span></button>)}</>}{commandSuggestions.length > 0 && <><p>Команды</p>{commandSuggestions.map((item) => <button key={item.command} type="button" onMouseDown={(event) => { event.preventDefault(); replaceCommand(item); }}><b>/{item.command}</b><span>{item.label}</span></button>)}</>}</div>}</div>;
 });
 
 function diagramRoundedRectPath(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
