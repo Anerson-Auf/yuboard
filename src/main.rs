@@ -4722,9 +4722,20 @@ async fn replace_card_mentions(pool: &PgPool, card_id: Uuid, actor_id: Uuid, sou
     if usernames.is_empty() && role_names.is_empty() { return Ok(()); }
     let users = sqlx::query_scalar::<_, Uuid>("SELECT DISTINCT bm.user_id FROM cards c JOIN board_members bm ON bm.board_id = c.board_id JOIN users u ON u.id = bm.user_id LEFT JOIN user_profile_roles upr ON upr.user_id = u.id LEFT JOIN profile_roles pr ON pr.id = upr.role_id WHERE c.id = $1 AND bm.user_id <> $2 AND u.disabled_at IS NULL AND (lower(u.username) = ANY($3) OR lower(pr.name) = ANY($4))")
         .bind(card_id).bind(actor_id).bind(usernames).bind(role_names).fetch_all(pool).await.map_err(ApiError::internal)?;
+    let mention_detail = body.chars().take(220).collect::<String>();
     for user_id in users {
         sqlx::query("INSERT INTO card_mentions (id, card_id, user_id, source_kind, source_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, source_kind, source_id) DO UPDATE SET card_id = EXCLUDED.card_id, created_at = now(), read_at = NULL")
             .bind(Uuid::new_v4()).bind(card_id).bind(user_id).bind(source_kind).bind(source_id).execute(pool).await.map_err(ApiError::internal)?;
+        if source_kind == "comment" {
+            sqlx::query(
+                "INSERT INTO card_notifications (id, user_id, card_id, actor_id, action, detail, source_kind, source_id) \
+                 VALUES ($1, $2, $3, $4, 'Вас упомянули в обсуждении', $5, 'comment_mention', $6) \
+                 ON CONFLICT (user_id, source_kind, source_id) WHERE source_kind IS NOT NULL AND source_id IS NOT NULL \
+                 DO UPDATE SET card_id = EXCLUDED.card_id, actor_id = EXCLUDED.actor_id, action = EXCLUDED.action, detail = EXCLUDED.detail, read_at = NULL, created_at = now()",
+            )
+            .bind(Uuid::new_v4()).bind(user_id).bind(card_id).bind(actor_id).bind(&mention_detail).bind(source_id)
+            .execute(pool).await.map_err(ApiError::internal)?;
+        }
     }
     Ok(())
 }
