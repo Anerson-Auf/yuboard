@@ -756,6 +756,15 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .archived-card-modal .card-quick-actions-left > button, .archived-card-modal .card-quick-actions-right .card-watch-toggle, .archived-card-modal .card-quick-actions-right .quick-action:not([title="Схема"]):not([title="Режим фокуса"]), .archived-card-modal .member-plus, .archived-card-modal .label-plus, .archived-card-modal .card-join-button { display: none; }
 .archived-card-modal .card-priority-editor button, .archived-card-modal .detail-card-complete { cursor: default; opacity: .7; }
 .frozen-card-modal .task-content > :not(.modal-actions):not(.frozen-card-notice) { pointer-events: none; opacity: .72; filter: saturate(.72); }
+
+/* Details arrive as several independent requests.  Keep the card calm while
+   they settle instead of briefly exposing stale fields and empty dark areas. */
+.task-content { position: relative; }
+.card-details-skeleton { position: absolute; z-index: 28; inset: 0; display: grid; align-content: start; gap: 12px; min-height: 100%; padding: 34px 30px; background: var(--surface); pointer-events: auto; }
+.card-details-skeleton > i, .card-details-skeleton-block > i { display: block; border-radius: 8px; background: linear-gradient(105deg, color-mix(in srgb, var(--surface-soft) 68%, transparent) 34%, color-mix(in srgb, var(--line) 56%, transparent) 50%, color-mix(in srgb, var(--surface-soft) 68%, transparent) 66%); background-size: 220% 100%; animation: card-details-shimmer 1.15s linear infinite; }
+.card-details-skeleton-title { width: min(64%, 370px); height: 30px; margin-top: 21px; }.card-details-skeleton-meta { width: 42%; height: 22px; }.card-details-skeleton-description { width: 94%; height: 13px; margin-top: 13px; }.card-details-skeleton-description.short { width: 69%; }.card-details-skeleton-block { display: grid; gap: 8px; margin-top: 16px; padding: 13px; border: 1px solid color-mix(in srgb, var(--line) 56%, transparent); border-radius: 12px; }.card-details-skeleton-block > i { height: 36px; }.card-details-skeleton-block.compact { width: 72%; }.card-details-skeleton-block.compact > i { height: 20px; }
+@keyframes card-details-shimmer { to { background-position: -220% 0; } }
+@media (prefers-reduced-motion: reduce) { .card-details-skeleton > i, .card-details-skeleton-block > i { animation: none; } }
 .frozen-card-modal .task-sidebar { opacity: .72; filter: saturate(.72); }
 .frozen-card-modal .task-sidebar .comment-composer { display: none; }
 .frozen-card-modal .task-sidebar .conversation-scroll button { pointer-events: none; }

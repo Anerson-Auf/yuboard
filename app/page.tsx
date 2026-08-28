@@ -6024,6 +6024,7 @@ export default function Home() {
         <button className="modal-close" onClick={closeSelectedCard} aria-label="Закрыть">×</button>
         <div className="task-layout">
           <div className="task-content">
+            {isDetailsLoading && <div className="card-details-skeleton" aria-label="Загружаем карточку"><i className="card-details-skeleton-title" /><i className="card-details-skeleton-meta" /><i className="card-details-skeleton-description" /><i className="card-details-skeleton-description short" /><div className="card-details-skeleton-block"><i /><i /><i /></div><div className="card-details-skeleton-block compact"><i /><i /></div></div>}
             {selected.frozen && !isSelectedParkingCard && <div className="frozen-card-notice">❄ Карточка заморожена. Сначала разморозьте её, чтобы что-либо изменить.</div>}
             {selected.archived && <div className="archived-card-notice">▣ Карточка находится в архиве и доступна только для чтения.</div>}
             <div className={`card-detail-top ${hasSelectedCardBackground ? 'has-card-background' : ''}`} style={hasSelectedCardBackground ? { backgroundImage: `linear-gradient(rgb(13 18 23 / 45%), rgb(13 18 23 / 72%)), url("${assetUrl(selected.backgroundImageUrl)}")` } : undefined}>
