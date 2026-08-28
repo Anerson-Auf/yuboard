@@ -120,6 +120,7 @@ export default function CardCollaborationPanel({ cardId, canEdit, candidates, on
   const ordinaryRelations = relations.filter((relation) => !(relation.relation_type === 'part_of' && relation.direction === 'incoming'));
   const completedImplementationCount = implementationRelations.filter((relation) => relation.other_card_completed_at).length;
   if (!showExisting && !showRelationCreator) return null;
+  if (!showRelationCreator && !hideEmptyRelations) return null;
   if (hideEmptyRelations && !relations.length) return null;
   return <section className={`card-collaboration-panel ${showExisting ? '' : 'collaboration-create-only'}`} aria-label="Связи и история описания">
     <header><div><button type="button" className={activeSection === 'relations' ? 'active' : ''} onClick={() => setActiveSection('relations')}>Связи</button><button type="button" className={activeSection === 'history' ? 'active' : ''} onClick={() => setActiveSection('history')}>История описания</button></div>{blockers.length > 0 && <b className="card-blocked">Заблокировано: {blockers.length}</b>}</header>
