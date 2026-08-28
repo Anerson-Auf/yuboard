@@ -1423,6 +1423,7 @@ export default function Home() {
   const [isAutomationsOpen, setAutomationsOpen] = useState(false);
   const [isNotificationsLoading, setNotificationsLoading] = useState(false);
   const [pendingNotificationCardId, setPendingNotificationCardId] = useState<string | null>(null);
+  const [pendingNotification, setPendingNotification] = useState<CardNotification | null>(null);
   const [availableAccounts, setAvailableAccounts] = useState<ApiMember[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
@@ -2067,6 +2068,17 @@ export default function Home() {
     setPendingNotificationCardId(null);
     openCard(card);
   }, [columns, pendingNotificationCardId]);
+
+  useEffect(() => {
+    if (!pendingNotification || boardId !== pendingNotification.board_id) return;
+    const activeCard = columns.flatMap((column) => column.cards).find((item) => String(item.id) === pendingNotification.card_id);
+    setPendingNotification(null);
+    if (activeCard) { openCard(activeCard); return; }
+    // Archived cards are deliberately absent from board columns. The details
+    // endpoint still enforces access and loads their real content afterwards;
+    // this lightweight shell only makes the notification link navigable.
+    openCard({ id: pendingNotification.card_id, title: pendingNotification.card_title, description: '', priority: 0, archived: true, labels: [], roles: [], members: [] });
+  }, [boardId, columns, pendingNotification]);
 
   useEffect(() => {
     if (!sharedCardId || !boardId) return;
@@ -3903,11 +3915,8 @@ export default function Home() {
     setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, is_read: true } : item));
     setNotificationsOpen(false);
     if (!notification.is_read) void fetch(`${API_URL}/v1/notifications/${notification.id}/read`, { method: 'POST' }).catch(() => undefined);
-    if (notification.board_id !== boardId) { setPendingNotificationCardId(notification.card_id); void selectBoard(notification.board_id); }
-    else {
-      const card = columns.flatMap((column) => column.cards).find((item) => item.id === notification.card_id);
-      if (card) openCard(card);
-    }
+    setPendingNotification(notification);
+    if (notification.board_id !== boardId) void selectBoard(notification.board_id);
   }
   function markAllNotificationsRead() {
     setNotifications((current) => current.map((item) => ({ ...item, is_read: true })));
