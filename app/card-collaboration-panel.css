@@ -74,3 +74,18 @@
 .relation-composer .relation-part-of-hint { margin: -1px 1px 0; }
 .relation-composer .relation-error { margin-top: -2px; }
 @media (max-width: 620px) { .relation-composer .relation-create { grid-template-columns: 1fr; }.relation-direction { display: none; }.relation-composer .relation-submit { width: 100%; } }
+
+/* Existing links are intentionally compact: relationship first, then the
+   target and optional context without competing with the card body. */
+.relation-list { gap: 7px; }
+.relation-list article { position: relative; overflow: hidden; min-height: 58px; border: 1px solid color-mix(in srgb, var(--line) 82%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--surface-raised) 68%, transparent); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary) 62%, var(--line)); transition: border-color .16s ease, background .16s ease, transform .16s ease, box-shadow .16s ease; }
+.relation-list article::before { position: absolute; z-index: 1; top: 11px; left: 9px; width: 14px; height: 14px; border: 1px solid color-mix(in srgb, var(--primary) 62%, var(--line)); border-radius: 5px; color: var(--primary); content: '↗'; font-size: 10px; font-weight: 800; line-height: 13px; text-align: center; pointer-events: none; }
+.relation-list article:hover { border-color: color-mix(in srgb, var(--primary) 48%, var(--line)); background: color-mix(in srgb, var(--primary) 8%, var(--surface-raised)); box-shadow: inset 3px 0 0 var(--primary), 0 7px 18px rgb(0 0 0 / 12%); transform: translateY(-1px); }
+.relation-list article > button:first-child { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'type state' 'title state' 'note note'; gap: 2px 8px; min-height: 58px; padding: 8px 33px 8px 31px; }
+.relation-list article > button:first-child > b { grid-area: type; overflow: hidden; color: color-mix(in srgb, var(--primary) 82%, var(--text)); font-size: 10px; letter-spacing: .01em; text-overflow: ellipsis; white-space: nowrap; }
+.relation-list article > button:first-child > span { grid-area: title; color: var(--text); font-size: 12px; line-height: 1.2; }
+.relation-list article > button:first-child > small { overflow: hidden; color: var(--muted); font-size: 10px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.relation-list article > button:first-child > small:last-child { grid-area: state; align-self: center; padding: 3px 6px; border: 1px solid color-mix(in srgb, var(--line) 82%, transparent); border-radius: 99px; background: color-mix(in srgb, var(--surface) 64%, transparent); color: var(--faint); font-size: 9px; font-weight: 750; }
+.relation-list article > button:first-child > small:not(:last-child) { grid-area: note; }
+.relation-list article > .relation-remove { position: absolute; z-index: 2; top: 50%; right: 4px; width: 25px; height: 25px; padding: 0; border-radius: 7px; transform: translateY(-50%); }
+.relation-list article > .relation-remove:hover { background: color-mix(in srgb, #ff7287 12%, transparent); }
