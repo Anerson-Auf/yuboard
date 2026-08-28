@@ -11,4 +11,4 @@
 
 /* The cover area owns a legacy duplicate.  The canonical relations and polls
    block is rendered below the cover, before the checklists. */
-.card-detail-top .card-polls-panel { display: none; }
+.card-detail-top .card-polls-panel:not(.card-polls-composer-only) { display: none; }
