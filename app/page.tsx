@@ -105,7 +105,7 @@ type DiscordIntegration = { id: string; name: string; default_list_id: string | 
 type DiagramPoint = { x: number; y: number };
 type DiagramObject = { id?: string; hidden?: boolean; locked?: boolean; rotation?: number };
 type DiagramStroke = DiagramObject & { points: DiagramPoint[]; color?: string; width?: number };
-type DiagramRectangle = DiagramObject & { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number; fillColor?: string; cornerRadius?: number; text?: string; textColor?: string; fontSize?: number; fontFamily?: string; fontWeight?: 'normal' | 'bold' };
+type DiagramRectangle = DiagramObject & { type: 'rectangle' | 'ellipse'; x: number; y: number; width: number; height: number; color: string; lineWidth: number; fillColor?: string; cornerRadius?: number; text?: string; textColor?: string; fontSize?: number; fontFamily?: string; fontWeight?: 'normal' | 'bold'; textAlign?: 'left' | 'center' | 'right'; textVerticalAlign?: 'top' | 'middle' | 'bottom'; textPadding?: number };
 type DiagramConnectorSide = 'top' | 'right' | 'bottom' | 'left';
 type DiagramConnectorAnchor = { element_id: string; side: DiagramConnectorSide; offset: number };
 type DiagramArrow = DiagramObject & { type: 'arrow'; x: number; y: number; x2: number; y2: number; color: string; lineWidth: number; start_anchor?: DiagramConnectorAnchor; end_anchor?: DiagramConnectorAnchor };
@@ -847,6 +847,41 @@ function diagramRoundedRectPath(context: CanvasRenderingContext2D, x: number, y:
   context.roundRect(x, y, width, height, normalizedRadius);
 }
 
+function drawDiagramShapeText(context: CanvasRenderingContext2D, element: DiagramRectangle) {
+  if (!element.text?.trim()) return;
+  const padding = Math.max(0, Math.min(120, element.textPadding ?? 14));
+  const fontSize = element.fontSize ?? 20;
+  const lineHeight = fontSize * 1.28;
+  const width = Math.abs(element.width);
+  const height = Math.abs(element.height);
+  const left = Math.min(element.x, element.x + element.width);
+  const top = Math.min(element.y, element.y + element.height);
+  const maxWidth = Math.max(20, width - padding * 2);
+  context.fillStyle = element.textColor ?? '#f6f8ff';
+  context.font = `${element.fontWeight === 'bold' ? '700' : '400'} ${fontSize}px ${element.fontFamily ?? 'Inter, system-ui, sans-serif'}`;
+  context.textBaseline = 'top';
+  context.textAlign = element.textAlign ?? 'left';
+  const lines = element.text.split('\n').flatMap((paragraph) => {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    const wrapped: string[] = [];
+    let line = '';
+    words.forEach((word) => {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && context.measureText(candidate).width > maxWidth) { wrapped.push(line); line = word; }
+      else line = candidate;
+    });
+    if (line || !words.length) wrapped.push(line);
+    return wrapped;
+  });
+  const contentHeight = lines.length * lineHeight;
+  const verticalAlign = element.textVerticalAlign ?? 'top';
+  let y = verticalAlign === 'middle' ? top + (height - contentHeight) / 2 : verticalAlign === 'bottom' ? top + height - padding - contentHeight : top + padding;
+  const horizontalAlign = element.textAlign ?? 'left';
+  const x = horizontalAlign === 'center' ? left + width / 2 : horizontalAlign === 'right' ? left + width - padding : left + padding;
+  const bottom = top + height - padding / 2;
+  lines.forEach((line) => { if (y + lineHeight <= bottom) context.fillText(line, x, y); y += lineHeight; });
+}
+
 function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramElement) {
   if (element.hidden) return;
   context.save();
@@ -869,27 +904,7 @@ function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramE
     diagramRoundedRectPath(context, element.x, element.y, element.width, element.height, element.cornerRadius ?? 0);
     if (element.fillColor && element.fillColor !== 'transparent') { context.fillStyle = element.fillColor; context.fill(); }
     context.stroke();
-    if (element.text?.trim()) {
-      context.fillStyle = element.textColor ?? '#f6f8ff';
-      context.font = `${element.fontWeight === 'bold' ? '700' : '400'} ${element.fontSize ?? 20}px ${element.fontFamily ?? 'Inter, system-ui, sans-serif'}`;
-      context.textBaseline = 'top';
-      const padding = 14;
-      const lineHeight = (element.fontSize ?? 20) * 1.28;
-      let y = element.y + padding;
-      const maxWidth = Math.max(20, element.width - padding * 2);
-      element.text.split('\n').flatMap((paragraph) => {
-        const words = paragraph.split(/\s+/).filter(Boolean);
-        const lines: string[] = [];
-        let line = '';
-        words.forEach((word) => {
-          const candidate = line ? `${line} ${word}` : word;
-          if (line && context.measureText(candidate).width > maxWidth) { lines.push(line); line = word; }
-          else line = candidate;
-        });
-        if (line || !words.length) lines.push(line);
-        return lines;
-      }).forEach((line) => { if (y + lineHeight <= element.y + element.height - padding / 2) context.fillText(line, element.x + padding, y); y += lineHeight; });
-    }
+    drawDiagramShapeText(context, element);
   } else if (element.type === 'ellipse') {
     const centerX = element.x + element.width / 2;
     const centerY = element.y + element.height / 2;
@@ -897,6 +912,7 @@ function drawDiagramElement(context: CanvasRenderingContext2D, element: DiagramE
     context.ellipse(centerX, centerY, Math.abs(element.width) / 2, Math.abs(element.height) / 2, 0, 0, Math.PI * 2);
     if (element.fillColor && element.fillColor !== 'transparent') { context.fillStyle = element.fillColor; context.fill(); }
     context.stroke();
+    drawDiagramShapeText(context, element);
   } else if (element.type === 'arrow') {
     const angle = Math.atan2(element.y2 - element.y, element.x2 - element.x);
     const head = Math.max(10, element.lineWidth * 4);
@@ -1515,6 +1531,8 @@ export default function Home() {
   const diagramInteractionRef = useRef<DiagramInteraction | null>(null);
   const diagramPanRef = useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
   const diagramPresenceSentAtRef = useRef(0);
+  const diagramCursorPendingRef = useRef<Map<string, DiagramPresence>>(new Map());
+  const diagramCursorFlushTimerRef = useRef<number | null>(null);
   const diagramLockSentAtRef = useRef<Map<string, number>>(new Map());
   const diagramSavedSnapshotRef = useRef('');
   const diagramBaseDocumentRef = useRef<DiagramDocument>({ strokes: [], elements: [] });
@@ -2131,7 +2149,16 @@ export default function Home() {
     const refresh = () => {
       void fetch(`${API_URL}/v1/cards/${cardId}/diagram/presence`)
         .then(async (response) => { if (!response.ok) throw new Error('diagram presence failed'); return response.json() as Promise<DiagramPresence[]>; })
-        .then((people) => { if (active) setDiagramPresence(people); })
+        .then((people) => {
+          if (!active) return;
+          // A fallback snapshot must not snap a cursor back to an older point
+          // while the WebSocket is already streaming its newer coordinates.
+          const socketIsLive = diagramSocketRef.current?.readyState === WebSocket.OPEN;
+          setDiagramPresence((current) => socketIsLive ? people.map((person) => {
+            const existing = current.find((item) => item.user_id === person.user_id);
+            return existing ? { ...person, x: existing.x, y: existing.y } : person;
+          }) : people);
+        })
         .catch(() => undefined);
     };
     refresh();
@@ -2191,11 +2218,23 @@ export default function Home() {
     const applyCursor = (event: DiagramCursorEvent) => {
       if (event.user_id === account?.user.id) return;
       const next = { user_id: event.user_id, username: event.username, avatar_url: event.avatar_url, x: event.x, y: event.y };
-      // Preserve the existing overlay node. Reordering it on every packet can
-      // cancel the CSS interpolation and makes a smooth stream look like jumps.
-      setDiagramPresence((current) => current.some((person) => person.user_id === event.user_id)
-        ? current.map((person) => person.user_id === event.user_id ? next : person)
-        : [...current, next]);
+      // Commit one latest point per participant per frame group. Updating the
+      // React tree on every socket packet restarts the CSS transition and turns
+      // a continuous stream into visible teleports.
+      diagramCursorPendingRef.current.set(event.user_id, next);
+      if (diagramCursorFlushTimerRef.current !== null) return;
+      diagramCursorFlushTimerRef.current = window.setTimeout(() => {
+        diagramCursorFlushTimerRef.current = null;
+        const pending = [...diagramCursorPendingRef.current.values()];
+        diagramCursorPendingRef.current.clear();
+        if (!pending.length || !active) return;
+        setDiagramPresence((current) => {
+          const updates = new Map(pending.map((person) => [person.user_id, person]));
+          const updated = current.map((person) => updates.get(person.user_id) ?? person);
+          pending.forEach((person) => { if (!current.some((item) => item.user_id === person.user_id)) updated.push(person); });
+          return updated;
+        });
+      }, 64);
     };
     const connect = () => {
       if (!active || typeof selected?.id !== 'string') return;
@@ -2217,7 +2256,17 @@ export default function Home() {
       };
     };
     connect();
-    return () => { active = false; if (reconnectTimer !== null) window.clearTimeout(reconnectTimer); if (diagramSocketRef.current === socket) diagramSocketRef.current = null; socket?.close(); lockExpiryTimers.forEach((timer) => window.clearTimeout(timer)); lockExpiryTimers.clear(); };
+    return () => {
+      active = false;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (diagramSocketRef.current === socket) diagramSocketRef.current = null;
+      socket?.close();
+      if (diagramCursorFlushTimerRef.current !== null) window.clearTimeout(diagramCursorFlushTimerRef.current);
+      diagramCursorFlushTimerRef.current = null;
+      diagramCursorPendingRef.current.clear();
+      lockExpiryTimers.forEach((timer) => window.clearTimeout(timer));
+      lockExpiryTimers.clear();
+    };
   }, [account?.user.id, authState, isDiagramOpen, selected?.id]);
 
   useEffect(() => {
@@ -4165,6 +4214,12 @@ export default function Home() {
     publishDiagramObjectLock(element.id, true);
     setDiagramElements((current) => current.map((item, index) => index === selectedDiagramElement ? { ...item, ...patch } as DiagramElement : item));
   }
+  function setDiagramShapeTextStyle(patch: Partial<Pick<DiagramRectangle, 'textColor' | 'fontSize' | 'fontFamily' | 'fontWeight' | 'textAlign' | 'textVerticalAlign' | 'textPadding'>>) {
+    if (patch.fontSize) setDiagramFontSize(patch.fontSize);
+    if (patch.fontFamily) setDiagramFontFamily(patch.fontFamily);
+    if (patch.fontWeight) setDiagramFontWeight(patch.fontWeight);
+    updateSelectedDiagramElement(patch);
+  }
   function setDiagramTextStyle(patch: Partial<Pick<DiagramText | DiagramCallout, 'color' | 'fontSize' | 'fontFamily' | 'fontWeight'>>) {
     if (patch.color) setDiagramColor(patch.color);
     if (patch.fontSize) setDiagramFontSize(patch.fontSize);
@@ -5840,8 +5895,8 @@ export default function Home() {
             <button type="button" className={`diagram-tool ${isDiagramLayersOpen ? 'active' : ''}`} onClick={() => setDiagramLayersOpen((current) => !current)} title="Слои" aria-label="Открыть слои">☷</button>
             <input ref={diagramImageUploadRef} className="diagram-image-upload" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => void uploadDiagramImages(event)} />
           </div>
-          <label className="diagram-control">Контур<input type="color" value={diagramColor} onPointerDown={rememberDiagramState} onChange={(event) => { setDiagramColor(event.target.value); if (selectedDiagramShapeElement()) updateSelectedDiagramElement({ color: event.target.value }); }} aria-label="Цвет контура" /></label>
-          {(diagramTool === 'rectangle' || diagramTool === 'ellipse' || selectedDiagramShapeElement() || diagramTool === 'sticker') && <label className="diagram-control">Заливка<input type="color" value={diagramFillColor} onPointerDown={rememberDiagramState} onChange={(event) => { setDiagramFillColor(event.target.value); const shape = selectedDiagramShapeElement(); if (shape) updateSelectedDiagramElement({ fillColor: event.target.value }); }} aria-label="Цвет заливки" /></label>}
+          <label className="diagram-control">Контур<input type="color" value={diagramColor} onPointerDown={rememberDiagramState} onChange={(event) => setDiagramColor(event.target.value)} onBlur={(event) => { if (selectedDiagramShapeElement()) updateSelectedDiagramElement({ color: event.currentTarget.value }); }} aria-label="Цвет контура" /></label>
+          {(diagramTool === 'rectangle' || diagramTool === 'ellipse' || selectedDiagramShapeElement() || diagramTool === 'sticker') && <label className="diagram-control">Заливка<input type="color" value={diagramFillColor} onPointerDown={rememberDiagramState} onChange={(event) => setDiagramFillColor(event.target.value)} onBlur={(event) => { const shape = selectedDiagramShapeElement(); if (shape) updateSelectedDiagramElement({ fillColor: event.currentTarget.value }); }} aria-label="Цвет заливки" /></label>}
           {diagramTool === 'sticker' && <div className="diagram-sticker-picker" aria-label="Стикер"><button type="button" className={diagramStickerIcon === '?' ? 'active' : ''} onClick={() => setDiagramStickerIcon('?')}>?</button><button type="button" className={diagramStickerIcon === '!' ? 'active' : ''} onClick={() => setDiagramStickerIcon('!')}>!</button></div>}
           <div className="diagram-width-picker" aria-label="Толщина кисти и линий"><span>Кисть / линия</span><div>{([2, 3, 6, 12] as const).map((width) => <button type="button" key={width} className={diagramLineWidth === width ? 'active' : ''} onClick={() => setDiagramLineWidth(width)} aria-label={`${width} px`} title={`${width} px`}><i style={{ width, height: width }} /></button>)}</div></div>
           {(diagramTool === 'text' || diagramTool === 'callout' || selectedDiagramTextElement()) && <>
@@ -5851,7 +5906,23 @@ export default function Home() {
           </>}
           {selectedDiagramElement !== null && <label className="diagram-control diagram-rotation-control">Поворот<input type="range" min="-180" max="180" value={((diagramElements[selectedDiagramElement]?.rotation ?? 0) + 180) % 360 - 180} onPointerDown={rememberDiagramState} onChange={(event) => updateSelectedDiagramElement({ rotation: Number(event.target.value) })} aria-label="Поворот выбранного объекта" /><output>{Math.round(((diagramElements[selectedDiagramElement]?.rotation ?? 0) + 180) % 360 - 180)}°</output></label>}
         </div>
-        {selectedDiagramShapeElement() && <section className="diagram-shape-inspector" aria-label="Настройки фигуры"><label>Скругление<input type="range" min="0" max="80" value={selectedDiagramShapeElement()?.cornerRadius ?? 0} onPointerDown={rememberDiagramState} onChange={(event) => { setDiagramCornerRadius(Number(event.target.value)); updateSelectedDiagramElement({ cornerRadius: Number(event.target.value) }); }} /><output>{selectedDiagramShapeElement()?.cornerRadius ?? 0}px</output></label>{selectedDiagramShapeElement()?.type === 'rectangle' && <label>Текст внутри<textarea value={selectedDiagramShapeElement()?.text ?? ''} maxLength={4000} placeholder="Напишите внутри фигуры…" onFocus={rememberDiagramState} onChange={(event) => updateSelectedDiagramElement({ text: event.target.value })} /></label>}<label>Цвет текста<input type="color" value={selectedDiagramShapeElement()?.textColor ?? '#f6f8ff'} onPointerDown={rememberDiagramState} onChange={(event) => updateSelectedDiagramElement({ textColor: event.target.value })} /></label></section>}
+        {selectedDiagramShapeElement() && (() => {
+          const shape = selectedDiagramShapeElement();
+          if (!shape) return null;
+          return <section className="diagram-shape-inspector" aria-label="Настройки фигуры">
+            <label>Положение<span className="diagram-shape-number-pair"><input type="number" value={Math.round(shape.x)} aria-label="Положение по X" onFocus={rememberDiagramState} onChange={(event) => updateSelectedDiagramElement({ x: Math.max(0, Number(event.target.value) || 0) })} /><input type="number" value={Math.round(shape.y)} aria-label="Положение по Y" onFocus={rememberDiagramState} onChange={(event) => updateSelectedDiagramElement({ y: Math.max(0, Number(event.target.value) || 0) })} /></span><small>X · Y</small></label>
+            <label>Размер<span className="diagram-shape-number-pair"><input type="number" min="40" value={Math.round(shape.width)} aria-label="Ширина фигуры" onFocus={rememberDiagramState} onChange={(event) => updateSelectedDiagramElement({ width: Math.max(40, Number(event.target.value) || 40) })} /><input type="number" min="40" value={Math.round(shape.height)} aria-label="Высота фигуры" onFocus={rememberDiagramState} onChange={(event) => updateSelectedDiagramElement({ height: Math.max(40, Number(event.target.value) || 40) })} /></span><small>Ширина · высота</small></label>
+            {shape.type === 'rectangle' && <label>Скругление<input type="range" min="0" max="80" value={shape.cornerRadius ?? 0} onPointerDown={rememberDiagramState} onChange={(event) => { setDiagramCornerRadius(Number(event.target.value)); updateSelectedDiagramElement({ cornerRadius: Number(event.target.value) }); }} /><output>{shape.cornerRadius ?? 0}px</output></label>}
+            <label className="diagram-shape-text-editor">Текст внутри<textarea value={shape.text ?? ''} maxLength={4000} placeholder="Напишите внутри фигуры…" onFocus={rememberDiagramState} onChange={(event) => updateSelectedDiagramElement({ text: event.target.value })} /></label>
+            <label>Шрифт<select value={shape.fontFamily ?? diagramFontFamily} onChange={(event) => setDiagramShapeTextStyle({ fontFamily: event.target.value })}><option value="Inter, system-ui, sans-serif">Sans</option><option value="Georgia, serif">Serif</option><option value="ui-monospace, SFMono-Regular, Menlo, monospace">Mono</option></select></label>
+            <label>Размер<select value={shape.fontSize ?? diagramFontSize} onChange={(event) => setDiagramShapeTextStyle({ fontSize: Number(event.target.value) })}><option value={16}>16 px</option><option value={22}>22 px</option><option value={30}>30 px</option><option value={42}>42 px</option><option value={56}>56 px</option></select></label>
+            <button type="button" className={`diagram-tool diagram-bold ${(shape.fontWeight ?? diagramFontWeight) === 'bold' ? 'active' : ''}`} onClick={() => setDiagramShapeTextStyle({ fontWeight: (shape.fontWeight ?? diagramFontWeight) === 'bold' ? 'normal' : 'bold' })} aria-label="Полужирный текст внутри фигуры"><b>B</b></button>
+            <label>По горизонтали<select value={shape.textAlign ?? 'left'} onChange={(event) => setDiagramShapeTextStyle({ textAlign: event.target.value as DiagramRectangle['textAlign'] })}><option value="left">Слева</option><option value="center">По центру</option><option value="right">Справа</option></select></label>
+            <label>По вертикали<select value={shape.textVerticalAlign ?? 'top'} onChange={(event) => setDiagramShapeTextStyle({ textVerticalAlign: event.target.value as DiagramRectangle['textVerticalAlign'] })}><option value="top">Сверху</option><option value="middle">По центру</option><option value="bottom">Снизу</option></select></label>
+            <label>Отступ<input type="number" min="0" max="120" value={shape.textPadding ?? 14} onFocus={rememberDiagramState} onChange={(event) => setDiagramShapeTextStyle({ textPadding: Math.max(0, Math.min(120, Number(event.target.value) || 0)) })} /><small>Внутри фигуры</small></label>
+            <label>Цвет текста<input type="color" value={shape.textColor ?? '#f6f8ff'} onPointerDown={rememberDiagramState} onBlur={(event) => setDiagramShapeTextStyle({ textColor: event.currentTarget.value })} aria-label="Цвет текста" /></label>
+          </section>;
+        })()}
         {isDiagramLayersOpen && <section className="diagram-layers-panel" aria-label="Слои схемы">
           <header><span><b>Слои</b><small>Верхняя строка — поверх остальных</small></span><button type="button" onClick={() => setDiagramLayersOpen(false)} aria-label="Закрыть слои">×</button></header>
           {diagramElements.length ? <div className="diagram-layers-list">{diagramElements.map((element, index) => ({ element, index })).reverse().map(({ element, index }) => <article key={element.id ?? `layer-${index}`} className={`${selectedDiagramElement === index ? 'selected' : ''} ${element.hidden ? 'hidden' : ''}`}>
