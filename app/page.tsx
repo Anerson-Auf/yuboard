@@ -20,6 +20,7 @@ import CommandPalette from './command-palette';
 import ScheduleView from './schedule-view';
 import SegmentedToggle from './segmented-toggle';
 import DependencyGraph from './dependency-graph';
+import FreeformMinimap, { type FreeformMinimapItem } from './freeform-minimap';
 import ThemePicker from './theme-picker';
 import ParkingShelf, { ParkingCard } from './parking-shelf';
 
@@ -1757,6 +1758,13 @@ export default function Home() {
   const freeformDetachedCards = useMemo(() => visibleColumns.flatMap((column) => column.cards
     .filter((card) => Boolean(freeformCardLayout[String(card.id)]))
     .map((card) => ({ card, listId: column.id, position: freeformCardLayout[String(card.id)] }))), [freeformCardLayout, visibleColumns]);
+  const freeformMinimapItems = useMemo<FreeformMinimapItem[]>(() => [
+    ...renderedColumns.map((column, index) => {
+      const position = freeformLayout[String(column.id)] ?? { x: index * 336, y: 0 };
+      return { id: `column-${column.id}`, x: position.x, y: position.y, width: 322, height: 620, kind: 'column' as const };
+    }),
+    ...freeformDetachedCards.map(({ card, position }) => ({ id: `card-${card.id}`, x: position.x, y: position.y, width: 310, height: 180, kind: 'card' as const })),
+  ], [freeformDetachedCards, freeformLayout, renderedColumns]);
 
   useEffect(() => {
     document.querySelectorAll<HTMLElement>('[data-list-id]').forEach((element) => {
@@ -2870,12 +2878,20 @@ export default function Home() {
     const zoom = freeformZoomRef.current;
     const next = { x: board.scrollLeft / zoom, y: board.scrollTop / zoom, width: board.clientWidth / zoom, height: board.clientHeight / zoom };
     freeformViewportRef.current = next;
-    if (!forceRender && freeformLiveRef.current.pings.length === 0) return;
     if (freeformViewportFrameRef.current !== null) return;
     freeformViewportFrameRef.current = window.requestAnimationFrame(() => {
       freeformViewportFrameRef.current = null;
       setFreeformViewport(freeformViewportRef.current);
     });
+  }
+
+  function moveFreeformViewport(point: FreeformPosition) {
+    const board = boardRef.current;
+    if (!board) return;
+    const zoom = freeformZoomRef.current;
+    board.scrollLeft = Math.max(0, point.x * zoom - board.clientWidth / 2);
+    board.scrollTop = Math.max(0, point.y * zoom - board.clientHeight / 2);
+    refreshFreeformViewport(true);
   }
 
   useEffect(() => {
@@ -5932,6 +5948,7 @@ export default function Home() {
         {boardViewMode === 'standard' && parkingStorageKey && <ParkingShelf storageKey={parkingStorageKey} cards={parkingCards} onChange={setParkingCards} onOpenCard={openParkingCard} onCreateCard={createParkingCard} renderCard={renderParkingCard} onParkServerCard={() => { const card = dragging ? columns.find((column) => column.id === dragging.sourceListId)?.cards.find((item) => item.id === dragging.cardId) : null; if (card) parkServerCard(card); clearDragState(); }} draggedServerCard={Boolean(dragging)} />}
         {boardViewMode !== 'freeform' && <button className="add-column" onClick={() => addColumn()}>＋ Добавить колонку</button>}</div></div>}
       </section>
+      {boardViewMode === 'freeform' && <FreeformMinimap canvas={freeformCanvasSize} items={freeformMinimapItems} viewport={freeformViewport} onNavigate={moveFreeformViewport} />}
       {freeformContextMenu && !isPublicViewer && <div className="freeform-context-menu" style={{ left: freeformContextMenu.x, top: freeformContextMenu.y }} role="menu"><b>Свободная доска</b><button type="button" onClick={() => { addColumn(freeformContextMenu.position); setFreeformContextMenu(null); }}>＋ Создать колонку здесь</button><button type="button" onClick={() => { publishFreeformCursor(freeformContextMenu.position, true); setFreeformContextMenu(null); showToast('Метка показана участникам на 5 секунд'); }}>⌁ Дать метку · 5 сек</button><button type="button" onClick={() => { setFreeformErasing(false); setFreeformDrawingMode(true); setFreeformContextMenu(null); showToast('Рисование включено'); }}>✎ Рисовать</button></div>}
       {boardViewMode === 'freeform' && !isPublicViewer && <div className="freeform-drawing-toolbar"><button type="button" className={isFreeformDrawing ? 'active' : ''} onClick={() => { setFreeformErasing(false); setFreeformDrawingMode((current) => !current); }}>✎ {isFreeformDrawing ? 'Рисование' : 'Рисовать'}</button><button type="button" className={isFreeformErasing ? 'active' : ''} onClick={() => { setFreeformDrawingMode(false); setFreeformErasing((current) => !current); }}>⌫ Ластик</button><span className="freeform-zoom">{Math.round(freeformZoom * 100)}%</span><button type="button" onClick={() => setFreeformZoom(1)}>100%</button>{(isFreeformDrawing || isFreeformErasing) && <><input type="color" value={freeformInkColor} onChange={(event) => setFreeformInkColor(event.target.value)} aria-label="Цвет кисти" /><select value={freeformInkWidth} onChange={(event) => setFreeformInkWidth(Number(event.target.value))} aria-label="Толщина кисти"><option value="2">Тонкая</option><option value="4">Средняя</option><option value="7">Толстая</option></select></>}<button type="button" onClick={clearOwnFreeformInk}>Стереть мои линии</button></div>}
     {isArchiveOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setArchiveOpen(false)}><section className="archive-modal" role="dialog" aria-modal="true" aria-label="Архив задач" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setArchiveOpen(false)} aria-label="Закрыть архив">×</button><p className="eyebrow">АРХИВ ПРОЕКТА</p><h2>Архивированные задачи</h2><p className="archive-copy">{isPublicViewer ? 'Откройте карточку, чтобы посмотреть её содержимое и обсуждение.' : 'Откройте карточку для просмотра или восстановите её в последнюю колонку.'}</p>{isArchiveLoading ? <p className="detail-loading">Загружаем архив…</p> : archivedCards.length ? <><div className="archive-list">{archivedCards.map((card) => <article className="archive-card-entry" key={card.id} role="button" tabIndex={0} onClick={() => openArchivedCard(card)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openArchivedCard(card); } }}><div><b>{card.title}</b>{card.description && <small>{card.description}</small>}<time>{new Date(card.archived_at).toLocaleString('ru-RU')}</time></div>{!isPublicViewer && <button onClick={(event) => { event.stopPropagation(); restoreArchivedCard(card); }}>Восстановить</button>}</article>)}</div>{archiveNextCursor && <button className="archive-load-more" type="button" disabled={isArchiveLoadingMore} onClick={() => loadArchivePage(archiveNextCursor)}>{isArchiveLoadingMore ? 'Загружаем…' : 'Показать ещё'}</button>}</> : <p className="empty-comments">В архиве пока нет задач.</p>}</section></div>}
