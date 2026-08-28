@@ -5753,11 +5753,16 @@ async fn set_discord_card_completion(State(state): State<AppState>, integration:
     let pool = database(&state)?;
     let current = load_discord_card_status(pool, integration, card_id).await?;
     if current.is_completed == request.is_completed { return Ok(Json(current)); }
-    if request.is_completed { ensure_card_has_no_active_blockers(pool, card_id).await?; }
-    let card = sqlx::query_as::<_, DiscordCardStatusResponse>("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = $2 AND board_id = $3 AND archived_at IS NULL RETURNING id, list_id, title, description, priority, completed_at IS NOT NULL AS is_completed, completed_at::text AS completed_at")
-        .bind(request.is_completed).bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned()))?;
-    record_external_card_activity(pool, card_id, if request.is_completed { "Discord: задача выполнена" } else { "Discord: задача возвращена в работу" }, "").await;
+    let card_ids = active_duplicate_group_ids(pool, card_id).await?;
+    if request.is_completed { for duplicate_id in &card_ids { ensure_card_has_no_active_blockers(pool, *duplicate_id).await?; } }
+    let updated = sqlx::query("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = ANY($2) AND board_id = $3 AND archived_at IS NULL")
+        .bind(request.is_completed).bind(&card_ids).bind(integration.board_id).execute(pool).await.map_err(ApiError::internal)?;
+    if updated.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
+    for changed_card_id in card_ids {
+        let detail = if changed_card_id == card_id { "" } else { "Синхронизировано со связью «Дубликат»" };
+        record_external_card_activity(pool, changed_card_id, if request.is_completed { "Discord: задача выполнена" } else { "Discord: задача возвращена в работу" }, detail).await;
+    }
+    let card = load_discord_card_status(pool, integration, card_id).await?;
     let _ = state.events.send(());
     Ok(Json(card))
 }
@@ -5856,10 +5861,14 @@ async fn set_discord_card_cover(State(state): State<AppState>, integration: Disc
 
 async fn archive_discord_card(State(state): State<AppState>, integration: DiscordIntegration, Path(card_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
-    let archived = sqlx::query_scalar::<_, Uuid>("UPDATE cards SET archived_at = now(), updated_at = now() WHERE id = $1 AND board_id = $2 AND archived_at IS NULL RETURNING id")
-        .bind(card_id).bind(integration.board_id).fetch_optional(pool).await.map_err(ApiError::internal)?;
-    if archived.is_some() {
-        record_external_card_activity(pool, card_id, "Discord: предложка архивирована", "").await;
+    let card_ids = active_duplicate_group_ids(pool, card_id).await?;
+    let archived = sqlx::query_scalar::<_, Uuid>("UPDATE cards SET archived_at = now(), updated_at = now() WHERE id = ANY($1) AND board_id = $2 AND archived_at IS NULL RETURNING id")
+        .bind(&card_ids).bind(integration.board_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    if !archived.is_empty() {
+        for changed_card_id in archived {
+            let detail = if changed_card_id == card_id { "" } else { "Синхронизировано со связью «Дубликат»" };
+            record_external_card_activity(pool, changed_card_id, "Discord: предложка архивирована", detail).await;
+        }
         let _ = state.events.send(());
         return Ok(StatusCode::NO_CONTENT);
     }
@@ -7052,15 +7061,44 @@ async fn ensure_card_has_no_active_blockers(pool: &PgPool, card_id: Uuid) -> Res
     Ok(())
 }
 
+// A duplicate is a direct peer relation, not a transitive group: A ↔ B and
+// B ↔ C must not let an action on A silently modify C. This keeps the
+// operation understandable while still making a paired duplicate behave as
+// one task for completion and archiving.
+async fn active_duplicate_peer_ids(pool: &PgPool, card_id: Uuid) -> Result<Vec<Uuid>, ApiError> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT DISTINCT CASE WHEN r.source_card_id = $1 THEN r.target_card_id ELSE r.source_card_id END FROM card_relations r INNER JOIN cards peer ON peer.id = CASE WHEN r.source_card_id = $1 THEN r.target_card_id ELSE r.source_card_id END WHERE (r.source_card_id = $1 OR r.target_card_id = $1) AND r.relation_type = 'duplicate' AND peer.archived_at IS NULL",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)
+}
+
+async fn active_duplicate_group_ids(pool: &PgPool, card_id: Uuid) -> Result<Vec<Uuid>, ApiError> {
+    let mut card_ids = active_duplicate_peer_ids(pool, card_id).await?;
+    card_ids.push(card_id);
+    card_ids.sort_unstable();
+    card_ids.dedup();
+    Ok(card_ids)
+}
+
 async fn update_card_completion(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>, Json(request): Json<UpdateCardCompletionRequest>) -> Result<StatusCode, ApiError> {
     let pool = database(&state)?;
     ensure_card_permission(pool, card_id, current.id, "edit_cards").await?;
-    if request.is_completed { ensure_card_has_no_active_blockers(pool, card_id).await?; }
-    let result = sqlx::query("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = $2 AND archived_at IS NULL")
-        .bind(request.is_completed).bind(card_id).execute(pool).await.map_err(ApiError::internal)?;
+    let card_ids = active_duplicate_group_ids(pool, card_id).await?;
+    for duplicate_id in &card_ids {
+        ensure_card_permission(pool, *duplicate_id, current.id, "edit_cards").await?;
+        if request.is_completed { ensure_card_has_no_active_blockers(pool, *duplicate_id).await?; }
+    }
+    let result = sqlx::query("UPDATE cards SET completed_at = CASE WHEN $1 THEN now() ELSE NULL END, updated_at = now() WHERE id = ANY($2) AND archived_at IS NULL")
+        .bind(request.is_completed).bind(&card_ids).execute(pool).await.map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
-    record_card_activity(pool, card_id, current.id, if request.is_completed { "Задача выполнена" } else { "Задача возвращена в работу" }, "").await;
-    record_discord_card_thread_event(pool, card_id, if request.is_completed { "completed" } else { "reopened" }).await;
+    for changed_card_id in card_ids {
+        let detail = if changed_card_id == card_id { "" } else { "Синхронизировано со связью «Дубликат»" };
+        record_card_activity(pool, changed_card_id, current.id, if request.is_completed { "Задача выполнена" } else { "Задача возвращена в работу" }, detail).await;
+        record_discord_card_thread_event(pool, changed_card_id, if request.is_completed { "completed" } else { "reopened" }).await;
+    }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
@@ -7369,18 +7407,24 @@ async fn replace_card_assignees(State(state): State<AppState>, current: CurrentU
 }
 
 async fn archive_card(State(state): State<AppState>, current: CurrentUser, Path(card_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
-    ensure_card_permission(database(&state)?, card_id, current.id, "delete_cards").await?;
+    let pool = database(&state)?;
+    ensure_card_permission(pool, card_id, current.id, "delete_cards").await?;
+    let card_ids = active_duplicate_group_ids(pool, card_id).await?;
+    for duplicate_id in &card_ids { ensure_card_permission(pool, *duplicate_id, current.id, "delete_cards").await?; }
     let actor_id = current.id;
     let result = sqlx::query(
-        "UPDATE cards c SET archived_at = now(), updated_at = now() FROM boards b WHERE c.id = $1 AND c.board_id = b.id AND c.archived_at IS NULL AND b.archived_at IS NULL",
+        "UPDATE cards c SET archived_at = now(), updated_at = now() FROM boards b WHERE c.id = ANY($1) AND c.board_id = b.id AND c.archived_at IS NULL AND b.archived_at IS NULL",
     )
-    .bind(card_id)
-    .execute(database(&state)?)
+    .bind(&card_ids)
+    .execute(pool)
     .await
     .map_err(ApiError::internal)?;
     if result.rows_affected() == 0 { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned())); }
-    record_card_activity(database(&state)?, card_id, actor_id, "Задача архивирована", "").await;
-    record_discord_card_thread_event(database(&state)?, card_id, "archived").await;
+    for changed_card_id in card_ids {
+        let detail = if changed_card_id == card_id { "" } else { "Синхронизировано со связью «Дубликат»" };
+        record_card_activity(pool, changed_card_id, actor_id, "Задача архивирована", detail).await;
+        record_discord_card_thread_event(pool, changed_card_id, "archived").await;
+    }
     let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
