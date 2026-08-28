@@ -142,6 +142,14 @@ button, input, textarea { font: inherit; } button { cursor: pointer; }
    a personal canvas whose coordinates are persisted per user and board. */
 .board { display: block; overflow: auto; }
 .board-columns { display: flex; align-items: flex-start; gap: 16px; min-width: max-content; min-height: calc(100vh - 170px); }
+.completed-visibility-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 28px; color: var(--muted); font-size: 11px; font-weight: 750; cursor: pointer; user-select: none; }
+.completed-visibility-toggle input { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.completed-visibility-toggle i { position: relative; width: 30px; height: 17px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); transition: background .18s ease, border-color .18s ease; }
+.completed-visibility-toggle i::after { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; content: ''; background: var(--muted); box-shadow: 0 1px 3px rgb(0 0 0 / 30%); transition: transform .18s cubic-bezier(.2, .8, .2, 1), background .18s ease; }
+.completed-visibility-toggle input:checked + i { border-color: color-mix(in srgb, #78d8a2 65%, var(--line)); background: color-mix(in srgb, #4cb978 65%, var(--surface-soft)); }
+.completed-visibility-toggle input:checked + i::after { transform: translateX(13px); background: #effff4; }
+.completed-visibility-toggle:hover { color: var(--text); }
+.completed-visibility-toggle input:focus-visible + i { outline: 2px solid var(--primary); outline-offset: 2px; }
 .board.board-freeform { height: calc(100vh - 178px); min-height: 540px; overflow: auto; cursor: grab; overscroll-behavior: none; touch-action: none; }
 .freeform-canvas { position: relative; min-width: 980px; min-height: calc(100vh - 190px); }
 .freeform-scene { position: relative; transform-origin: 0 0; }

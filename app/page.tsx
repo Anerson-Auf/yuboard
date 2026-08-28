@@ -64,7 +64,7 @@ type BoardContentMode = 'columns' | 'members' | 'schedule';
 type BoardUiScale = 'compact' | 'normal' | 'roomy';
 type UndoAction = { undo: () => void };
 type BoardLocalPreferences = {
-  version: 1;
+  version: 2;
   boardUiScale: BoardUiScale;
   boardViewMode: BoardViewMode;
   filterMode: FilterMode;
@@ -74,6 +74,7 @@ type BoardLocalPreferences = {
   boardContentMode: BoardContentMode;
   labelsCollapsed: boolean;
   hideCompletedChecklistItems: boolean;
+  hideCompletedCards: boolean;
 };
 const boardContentToggleOptions = [{ value: 'columns', label: 'Колонки' }, { value: 'members', label: 'По людям' }, { value: 'schedule', label: 'Календарь' }] as const;
 const boardViewToggleOptions = [{ value: 'standard', label: 'Ряд' }, { value: 'freeform', label: 'Свободно', title: 'Колонки можно свободно двигать; Shift включает привязку к сетке' }, { value: 'dependencies', label: 'Зависимости', title: 'Дерево связей между карточками' }] as const;
@@ -1209,6 +1210,7 @@ export default function Home() {
   const [milestoneFilterId, setMilestoneFilterId] = useState<string | null>(null);
   const [cardSort, setCardSort] = useState<CardSort>('manual');
   const [boardContentMode, setBoardContentMode] = useState<BoardContentMode>('columns');
+  const [hideCompletedCards, setHideCompletedCards] = useState(false);
   const [priorityMotionKey, setPriorityMotionKey] = useState(0);
   const [cardMoveMotion, setCardMoveMotion] = useState<CardMoveMotion | null>(null);
   const [cardDragPreview, setCardDragPreview] = useState<CardDragPreview | null>(null);
@@ -1609,6 +1611,7 @@ export default function Home() {
       setBoardContentMode('columns');
       setLabelsCollapsed(false);
       setHideCompletedChecklistItems(false);
+      setHideCompletedCards(false);
       return;
     }
     let stored: Partial<BoardLocalPreferences> = {};
@@ -1628,14 +1631,15 @@ export default function Home() {
     setBoardContentMode(stored.boardContentMode === 'members' || stored.boardContentMode === 'schedule' || stored.boardContentMode === 'columns' ? stored.boardContentMode : 'columns');
     setLabelsCollapsed(Boolean(stored.labelsCollapsed));
     setHideCompletedChecklistItems(Boolean(stored.hideCompletedChecklistItems));
+    setHideCompletedCards(Boolean(stored.hideCompletedCards));
     setBoardPreferencesLoadedKey(boardPreferencesStorageKey);
   }, [authState, boardPreferencesStorageKey, boardUiScaleStorageKey]);
 
   useEffect(() => {
     if (!boardPreferencesStorageKey || boardPreferencesLoadedKey !== boardPreferencesStorageKey) return;
-    const preferences: BoardLocalPreferences = { version: 1, boardUiScale, boardViewMode, filterMode, labelFilterIds, milestoneFilterId, cardSort, boardContentMode, labelsCollapsed, hideCompletedChecklistItems };
+    const preferences: BoardLocalPreferences = { version: 2, boardUiScale, boardViewMode, filterMode, labelFilterIds, milestoneFilterId, cardSort, boardContentMode, labelsCollapsed, hideCompletedChecklistItems, hideCompletedCards };
     try { localStorage.setItem(boardPreferencesStorageKey, JSON.stringify(preferences)); } catch { /* Local storage can be disabled or full. */ }
-  }, [boardContentMode, boardPreferencesLoadedKey, boardPreferencesStorageKey, boardUiScale, boardViewMode, cardSort, filterMode, hideCompletedChecklistItems, labelFilterIds, labelsCollapsed, milestoneFilterId]);
+  }, [boardContentMode, boardPreferencesLoadedKey, boardPreferencesStorageKey, boardUiScale, boardViewMode, cardSort, filterMode, hideCompletedChecklistItems, hideCompletedCards, labelFilterIds, labelsCollapsed, milestoneFilterId]);
 
   function changeBoardUiScale(next: BoardUiScale) { setBoardUiScale(next); }
 
@@ -1735,6 +1739,8 @@ export default function Home() {
       : activityTime(right) - activityTime(left)) };
   }), [cardSort, columns, currentMember.id, filterMode, focusCardId, focusRelatedCardIds, labelFilterIds, milestoneFilterId, myProfileRoleIds, query]);
 
+  const hasCompletedCards = useMemo(() => visibleColumns.some((column) => column.cards.some((card) => Boolean(card.completedAt))), [visibleColumns]);
+
   const memberLanes = useMemo(() => {
     const cards = visibleColumns.flatMap((column) => column.cards);
     return [
@@ -1745,7 +1751,9 @@ export default function Home() {
 
   const renderedColumns = useMemo(() => boardViewMode === 'freeform'
     ? visibleColumns.map((column) => ({ ...column, cards: column.cards.filter((card) => !freeformCardLayout[String(card.id)]) }))
-    : visibleColumns, [boardViewMode, freeformCardLayout, visibleColumns]);
+    : boardViewMode === 'standard' && hideCompletedCards
+      ? visibleColumns.map((column) => ({ ...column, cards: column.cards.filter((card) => !card.completedAt) }))
+      : visibleColumns, [boardViewMode, freeformCardLayout, hideCompletedCards, visibleColumns]);
   const freeformDetachedCards = useMemo(() => visibleColumns.flatMap((column) => column.cards
     .filter((card) => Boolean(freeformCardLayout[String(card.id)]))
     .map((card) => ({ card, listId: column.id, position: freeformCardLayout[String(card.id)] }))), [freeformCardLayout, visibleColumns]);
@@ -5872,6 +5880,7 @@ export default function Home() {
           {focusCardId && <button className="focus-mode-exit" type="button" onClick={() => { setFocusCardId(null); setFocusRelatedCardIds([]); }} title="Вернуть всю доску">◉ Фокус <span>×</span></button>}
           <SegmentedToggle className="board-segmented-toggle" label="Представление задач" options={boardContentToggleOptions} value={boardContentMode} onChange={(next) => setBoardContentMode(next as BoardContentMode)} />
           {!isPublicViewer && boardContentMode === 'columns' && <SegmentedToggle className="board-segmented-toggle" label="Режим расположения колонок" options={boardViewToggleOptions} value={boardViewMode} onChange={(next) => changeBoardViewMode(next as BoardViewMode)} />}
+          {boardContentMode === 'columns' && boardViewMode === 'standard' && hasCompletedCards && <label className="completed-visibility-toggle" title={hideCompletedCards ? 'Показать выполненные задачи в исходных колонках' : 'Скрыть выполненные задачи'}><span>Скрыть выполненные</span><input type="checkbox" checked={hideCompletedCards} onChange={(event) => setHideCompletedCards(event.target.checked)} aria-label="Скрыть выполненные задачи" /><i aria-hidden="true" /></label>}
           <div className="board-scale-control"><button className={`board-icon-button ${boardUiScale !== 'normal' ? 'active-filter' : ''}`} type="button" title="Масштаб доски" aria-label="Масштаб доски" aria-expanded={isBoardScaleOpen} onClick={() => setBoardScaleOpen((current) => !current)}><span aria-hidden="true">A↔</span></button>{isBoardScaleOpen && <div className="board-scale-popover" role="dialog" aria-label="Масштаб доски"><div><b>Масштаб доски</b><small>Только для вас на этой доске</small></div>{([['compact', 'A−', 'Компактнее'], ['normal', 'A', 'Обычный'], ['roomy', 'A+', 'Крупнее']] as [BoardUiScale, string, string][]).map(([value, icon, label]) => <button key={value} type="button" className={boardUiScale === value ? 'active' : ''} onClick={() => { changeBoardUiScale(value); setBoardScaleOpen(false); }}><span>{icon}</span><b>{label}</b>{boardUiScale === value && <i>✓</i>}</button>)}</div>}</div>
           {recentCards.length > 0 && <div className="recent-cards-control"><button className="board-icon-button" type="button" title="Недавно открытые карточки" aria-label="Недавно открытые карточки" aria-expanded={isRecentCardsOpen} onClick={() => setRecentCardsOpen((current) => !current)}>◷</button>{isRecentCardsOpen && <div className="recent-cards-popover" role="dialog" aria-label="Недавно открытые карточки"><div className="popover-heading"><b>Недавно открытые</b><button type="button" onClick={() => { setRecentCardIds([]); setRecentCardsOpen(false); }} title="Очистить историю" aria-label="Очистить историю">×</button></div>{recentCards.map(({ card, listTitle }) => <button type="button" key={String(card.id)} onClick={() => { setRecentCardsOpen(false); openCard(card); }}><span>{card.completedAt ? '✓' : '□'}</span><b>{card.title}</b><small>{listTitle}</small></button>)}</div>}</div>}
           <div className="filter-control">
