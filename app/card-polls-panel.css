@@ -9,6 +9,6 @@
 .poll-empty { margin: 3px 0; color: var(--muted); font-size: 11px; }.poll-skeletons { display: grid; gap: 8px; }.poll-skeletons i { display: block; height: 84px; border-radius: 12px; background: linear-gradient(105deg, color-mix(in srgb, var(--surface-soft) 60%, transparent) 35%, color-mix(in srgb, var(--line) 54%, transparent) 50%, color-mix(in srgb, var(--surface-soft) 60%, transparent) 65%); background-size: 220% 100%; animation: poll-shimmer 1.1s linear infinite; }
 @keyframes poll-enter { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } } @keyframes poll-shimmer { to { background-position: -220% 0; } } @media (prefers-reduced-motion: reduce) { .poll-card, .poll-skeletons i { animation: none; }.poll-options > button, .poll-options > button > i { transition: none; } }
 
-/* The canonical read-only poll list is rendered after card relations.  The
-   editor slot keeps only the optional creator and must not duplicate it. */
-.task-content > .card-polls-panel { display: none; }
+/* Card content owns the canonical relations-and-polls block.  The legacy
+   layout sibling stays mounted only for compatibility and is never shown. */
+.task-layout > .card-polls-panel { display: none; }

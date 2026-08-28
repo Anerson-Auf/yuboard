@@ -89,3 +89,7 @@
 .relation-list article > button:first-child > small:not(:last-child) { grid-area: note; }
 .relation-list article > .relation-remove { position: absolute; z-index: 2; top: 50%; right: 4px; width: 25px; height: 25px; padding: 0; border-radius: 7px; transform: translateY(-50%); }
 .relation-list article > .relation-remove:hover { background: color-mix(in srgb, #ff7287 12%, transparent); }
+
+/* See card-polls-panel.css: the duplicate compatibility slot is outside the
+   card body and must not produce a second relations block in the footer. */
+.task-layout > .card-collaboration-panel { display: none; }
