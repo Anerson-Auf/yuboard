@@ -32,3 +32,12 @@
 .dependency-canvas-actions .dependency-reset:hover { background: rgb(116 158 226 / 20%); color: #e1ebff; }
 .dependency-canvas-actions .dependency-zoom-readout { position: static; padding: 0 4px 0 2px; color: #b2b6bf; font-size: 10px; pointer-events: none; }
 @media (max-width: 620px) { .dependency-graph-scroll, .dependency-empty { min-height: 520px; } }
+
+/* The dependency view fetches before it knows its canvas bounds.  A static
+   layout skeleton preserves the workspace shape and avoids a blank flash. */
+.dependency-empty { position: relative; overflow: hidden; place-items: stretch; padding: 28px; color: transparent; font-size: 0; }
+.dependency-empty::before, .dependency-empty::after { position: absolute; display: block; border: 1px solid rgb(103 111 126 / 38%); border-radius: 12px; background: linear-gradient(105deg, rgb(50 53 60 / 62%) 34%, rgb(82 87 97 / 54%) 50%, rgb(50 53 60 / 62%) 66%); background-size: 220% 100%; content: ''; animation: dependency-skeleton-shimmer 1.15s linear infinite; }
+.dependency-empty::before { top: 23%; left: 14%; width: min(31vw, 258px); height: 92px; box-shadow: 28vw 17vh 0 -1px rgb(38 41 47 / 86%), 47vw 7vh 0 -1px rgb(38 41 47 / 86%); }
+.dependency-empty::after { top: calc(23% + 17vh); left: calc(14% + 28vw); width: min(31vw, 258px); height: 92px; }
+@keyframes dependency-skeleton-shimmer { to { background-position: -220% 0; } }
+@media (prefers-reduced-motion: reduce) { .dependency-empty::before, .dependency-empty::after { animation: none; } }
