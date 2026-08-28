@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import './card-collaboration-panel.css';
 
 type RelationType = 'blocks' | 'depends_on' | 'duplicate' | 'related' | 'part_of';
@@ -33,14 +33,22 @@ export default function CardCollaborationPanel({ cardId, canEdit, candidates, on
   const [relations, setRelations] = useState<Relation[]>([]);
   const [versions, setVersions] = useState<Version[]>([]);
   const [targetId, setTargetId] = useState('');
+  const [targetSearch, setTargetSearch] = useState('');
+  const [isTargetPickerOpen, setTargetPickerOpen] = useState(false);
   const [relationType, setRelationType] = useState<RelationType>('related');
   const [relationNote, setRelationNote] = useState('');
   const [activeSection, setActiveSection] = useState<'relations' | 'history'>('relations');
   const [isSaving, setSaving] = useState(false);
   const [togglingImplementationId, setTogglingImplementationId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const targetPickerRef = useRef<HTMLDivElement>(null);
 
   const targets = useMemo(() => candidates.filter((card) => card.id !== cardId), [candidates, cardId]);
+  const targetMatches = useMemo(() => {
+    const needle = targetSearch.trim().toLocaleLowerCase('ru-RU');
+    return targets.filter((card) => !needle || `${card.title} ${card.listTitle}`.toLocaleLowerCase('ru-RU').includes(needle));
+  }, [targetSearch, targets]);
+  const selectedTarget = targets.find((card) => card.id === targetId);
   const load = () => {
     void Promise.all([
       flowboardFetch(`/v1/cards/${cardId}/relations`).then((response) => response.ok ? response.json() as Promise<Relation[]> : []),
@@ -48,7 +56,16 @@ export default function CardCollaborationPanel({ cardId, canEdit, candidates, on
     ]).then(([nextRelations, nextVersions]) => { setRelations(nextRelations); setVersions(nextVersions); });
   };
 
-  useEffect(() => { setTargetId(''); setActiveSection('relations'); load(); }, [cardId]);
+  useEffect(() => { setTargetId(''); setTargetSearch(''); setTargetPickerOpen(false); setActiveSection('relations'); load(); }, [cardId]);
+
+  useEffect(() => {
+    if (!isTargetPickerOpen) return;
+    const closePicker = (event: PointerEvent) => {
+      if (event.target instanceof Node && !targetPickerRef.current?.contains(event.target)) setTargetPickerOpen(false);
+    };
+    window.addEventListener('pointerdown', closePicker);
+    return () => window.removeEventListener('pointerdown', closePicker);
+  }, [isTargetPickerOpen]);
 
   const createRelation = () => {
     if (!targetId || isSaving) return;
@@ -56,7 +73,7 @@ export default function CardCollaborationPanel({ cardId, canEdit, candidates, on
     setSaving(true);
     void flowboardFetch(`/v1/cards/${cardId}/relations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target_card_id: targetId, relation_type: relationType, note: relationNote }) })
       .then(async (response) => { if (!response.ok) throw new Error(await responseError(response, 'Не удалось создать связь.')); return response.json() as Promise<Relation>; })
-      .then(() => { setTargetId(''); setRelationNote(''); load(); })
+      .then(() => { setTargetId(''); setTargetSearch(''); setTargetPickerOpen(false); setRelationNote(''); load(); })
       .catch((reason) => setError(reason instanceof Error ? reason.message : 'Не удалось создать связь.'))
       .finally(() => setSaving(false));
   };
@@ -111,7 +128,7 @@ export default function CardCollaborationPanel({ cardId, canEdit, candidates, on
       {blockers.length > 0 && <p className="relation-warning">Эта задача не может быть завершена, пока не закрыты: {blockers.map((relation) => relation.other_card_title).join(', ')}.</p>}
       {showExisting && implementationRelations.length > 0 && <section className="implementation-todos" aria-label="Задачи для реализации"><header><div><b>Реализация</b><small>{completedImplementationCount} из {implementationRelations.length}</small></div><progress value={completedImplementationCount} max={implementationRelations.length} /></header><div className="implementation-todo-list">{implementationRelations.map((relation) => <article key={relation.id} className={relation.other_card_completed_at ? 'done' : ''}><button type="button" className="implementation-toggle" disabled={!canEdit || togglingImplementationId === relation.id} onClick={() => toggleImplementationCard(relation)} aria-label={relation.other_card_completed_at ? 'Вернуть задачу в работу' : 'Отметить задачу выполненной'} aria-pressed={Boolean(relation.other_card_completed_at)}>{relation.other_card_completed_at && '✓'}</button><button type="button" className="implementation-open" onClick={() => onOpenCard(relation.other_card_id)}><b>{relation.other_card_title}</b>{relation.note && <small>{relation.note}</small>}<span>{relation.other_card_completed_at ? 'Выполнена' : 'В работе'}</span></button>{canEdit && <button type="button" className="relation-remove" onClick={() => removeRelation(relation.id)} aria-label="Убрать из реализации">×</button>}</article>)}</div></section>}
       {showExisting && (ordinaryRelations.length ? <div className="relation-list">{ordinaryRelations.map((relation) => <article key={relation.id}><button type="button" onClick={() => onOpenCard(relation.other_card_id)}><b>{relationLabels[relation.relation_type]}{relation.direction === 'incoming' ? ' эта задача' : ''}</b><span>{relation.other_card_title}</span>{relation.note && <small>{relation.note}</small>}<small>{relation.other_card_completed_at ? 'Выполнена' : 'Активна'}</small></button>{canEdit && <button type="button" className="relation-remove" onClick={() => removeRelation(relation.id)} aria-label="Удалить связь">×</button>}</article>)}</div> : !hideEmptyRelations && !implementationRelations.length && <p className="collaboration-empty">Связей пока нет.</p>)}
-      {showRelationCreator && <section className="relation-composer" aria-label="Создать связь"><header><div><b>Новая связь</b><small>Текущая карточка → выбранная</small></div></header><div className={`relation-create ${relationType === 'part_of' ? 'relation-create-part-of' : ''}`}><label><span>Тип связи</span><select value={relationType} onChange={(event) => setRelationType(event.target.value as RelationType)} aria-label="Тип связи">{Object.entries(relationLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>{relationType === 'part_of' ? 'Основная карточка' : 'Карточка'}</span><select value={targetId} onChange={(event) => setTargetId(event.target.value)} aria-label={relationType === 'part_of' ? 'Основная карточка' : 'Связать с карточкой'}><option value="">{relationType === 'part_of' ? 'Выберите основную карточку…' : 'Выберите карточку…'}</option>{targets.map((target) => <option value={target.id} key={target.id}>{target.listTitle} · {target.title}</option>)}</select></label><button type="button" disabled={!targetId || isSaving} onClick={createRelation}>{relationType === 'part_of' ? 'Добавить в реализацию' : 'Создать связь'}</button></div>{relationType === 'part_of' && <p className="relation-part-of-hint">Текущая карточка появится в TODO выбранной основной карточки.</p>}<label className="relation-note-field"><span>Пояснение <small>необязательно</small></span><input className="relation-note-input" value={relationNote} maxLength={500} onChange={(event) => setRelationNote(event.target.value)} placeholder="Например, ждём макет" aria-label="Пояснение связи" /></label>{error && <p className="relation-error" role="alert">{error}</p>}</section>}
+      {showRelationCreator && <section className="relation-composer" aria-label="Создать связь"><header><div><b>Новая связь</b><small>Текущая карточка → выбранная</small></div></header><div className={`relation-create ${relationType === 'part_of' ? 'relation-create-part-of' : ''}`}><label className="relation-type-field"><span>Тип связи</span><select value={relationType} onChange={(event) => setRelationType(event.target.value as RelationType)} aria-label="Тип связи">{Object.entries(relationLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><span className="relation-direction" aria-hidden="true">→</span><div className="relation-target-picker" ref={targetPickerRef}><span>{relationType === 'part_of' ? 'Основная карточка' : 'Карточка'}</span><button type="button" className={selectedTarget ? 'selected' : ''} onClick={() => { setTargetSearch(''); setTargetPickerOpen((current) => !current); }} aria-expanded={isTargetPickerOpen} aria-haspopup="listbox">{selectedTarget ? <><small>{selectedTarget.listTitle}</small><b>{selectedTarget.title}</b></> : <><b>{relationType === 'part_of' ? 'Найти основную карточку' : 'Найти карточку'}</b><small>По названию или колонке</small></>}<i>⌄</i></button>{isTargetPickerOpen && <div className="relation-target-options" role="listbox"><input autoFocus value={targetSearch} onChange={(event) => setTargetSearch(event.target.value)} placeholder="Введите название или колонку…" aria-label="Поиск карточки" />{targetMatches.length ? targetMatches.map((target) => <button key={target.id} type="button" role="option" aria-selected={target.id === targetId} onClick={() => { setTargetId(target.id); setTargetPickerOpen(false); }}><small>{target.listTitle}</small><b>{target.title}</b></button>) : <p>Ничего не найдено.</p>}</div>}</div><button type="button" className="relation-submit" disabled={!targetId || isSaving} onClick={createRelation}>{relationType === 'part_of' ? 'Добавить в реализацию' : 'Создать связь'}</button></div>{relationType === 'part_of' && <p className="relation-part-of-hint">Текущая карточка появится в TODO выбранной основной карточки.</p>}<label className="relation-note-field"><span>Пояснение <small>необязательно</small></span><input className="relation-note-input" value={relationNote} maxLength={500} onChange={(event) => setRelationNote(event.target.value)} placeholder="Например, ждём макет" aria-label="Пояснение связи" /></label>{error && <p className="relation-error" role="alert">{error}</p>}</section>}
     </div> : <div className="description-history">{versions.length ? versions.map((version) => <article key={version.id}><div><b>@{version.author_name}</b><time>{new Date(version.created_at).toLocaleString('ru-RU')}</time><p>{version.description || 'Пустое описание'}</p></div>{canEdit && <button type="button" disabled={isSaving} onClick={() => restoreVersion(version)}>Восстановить</button>}</article>) : <p className="collaboration-empty">Правок описания пока нет.</p>}</div>}
   </section>;
 }

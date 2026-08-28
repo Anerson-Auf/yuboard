@@ -47,13 +47,30 @@
 .relation-composer > header > div { display: grid; gap: 2px; }
 .relation-composer > header b { color: var(--text); font-size: 12px; }
 .relation-composer > header small { color: var(--muted); font-size: 10px; }
-.relation-composer .relation-create { grid-template-columns: minmax(112px, .72fr) minmax(0, 1fr) auto; gap: 8px; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.relation-composer .relation-create { grid-template-columns: minmax(112px, .62fr) 16px minmax(0, 1fr) auto; gap: 8px; align-items: end; padding: 0; border: 0; border-radius: 0; background: transparent; }
 .relation-composer .relation-create > label, .relation-note-field { display: grid; min-width: 0; gap: 4px; color: var(--muted); font-size: 10px; font-weight: 700; }
 .relation-composer .relation-create > label > span, .relation-note-field > span { padding-left: 1px; }
 .relation-composer .relation-create select { width: 100%; }
-.relation-composer .relation-create button { align-self: end; min-height: 34px; white-space: nowrap; }
+.relation-direction { align-self: end; padding-bottom: 7px; color: var(--faint); font-size: 16px; line-height: 1; text-align: center; }
+.relation-target-picker { position: relative; display: grid; min-width: 0; gap: 4px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.relation-target-picker > span { padding-left: 1px; }
+.relation-target-picker > button { position: relative; display: grid; min-height: 34px; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; width: 100%; padding: 5px 27px 5px 9px; border: 1px solid color-mix(in srgb, var(--line) 82%, transparent); border-radius: 8px; background: var(--surface-raised); color: var(--text); text-align: left; }
+.relation-target-picker > button:hover, .relation-target-picker > button[aria-expanded='true'] { border-color: color-mix(in srgb, var(--primary) 60%, var(--line)); }
+.relation-target-picker > button > b { overflow: hidden; font-size: 11px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.relation-target-picker > button > small { overflow: hidden; color: var(--faint); font-size: 9px; line-height: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.relation-target-picker > button:not(.selected) > b { color: var(--muted); font-weight: 600; }
+.relation-target-picker > button i { position: absolute; right: 9px; top: 50%; color: var(--primary); font-size: 13px; font-style: normal; transform: translateY(-50%); }
+.relation-target-options { position: absolute; z-index: 180; top: calc(100% + 6px); right: 0; left: 0; display: grid; max-height: 272px; overflow: auto; padding: 6px; border: 1px solid color-mix(in srgb, var(--line) 88%, transparent); border-radius: 9px; background: var(--surface-raised); box-shadow: 0 14px 34px rgb(0 0 0 / 34%); }
+.relation-target-options input { width: 100%; min-height: 32px; margin-bottom: 4px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--line) 78%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--surface) 78%, transparent); color: var(--text); font: inherit; font-size: 11px; }
+.relation-target-options input:focus { border-color: color-mix(in srgb, var(--primary) 60%, var(--line)); outline: 0; }
+.relation-target-options button { display: grid; gap: 2px; min-width: 0; padding: 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; }
+.relation-target-options button:hover, .relation-target-options button[aria-selected='true'] { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.relation-target-options button small { overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.relation-target-options button b { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.relation-target-options p { margin: 7px; color: var(--muted); font-size: 11px; }
+.relation-composer .relation-submit { align-self: end; min-height: 34px; white-space: nowrap; }
 .relation-note-field > span small { color: var(--faint); font-weight: 500; }
 .relation-composer .relation-note-input { margin-top: 0; }
 .relation-composer .relation-part-of-hint { margin: -1px 1px 0; }
 .relation-composer .relation-error { margin-top: -2px; }
-@media (max-width: 620px) { .relation-composer .relation-create { grid-template-columns: 1fr; }.relation-composer .relation-create button { width: 100%; } }
+@media (max-width: 620px) { .relation-composer .relation-create { grid-template-columns: 1fr; }.relation-direction { display: none; }.relation-composer .relation-submit { width: 100%; } }
