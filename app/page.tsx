@@ -607,6 +607,7 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
   const availableRoles = roles.length ? roles : boardRoles;
   const [query, setQuery] = useState<string | null>(null);
   const [commandQuery, setCommandQuery] = useState<string | null>(null);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const isChecklistDescription = ariaLabel.startsWith('Описание пункта ');
   const [isMarkdownPreview, setMarkdownPreview] = useState(isChecklistDescription);
   useEffect(() => {
@@ -618,6 +619,7 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
     const commandMatch = beforeCaret.match(/(?:^|\s)\/([a-zA-Z]*)$/);
     setQuery(match ? match[1].toLowerCase() : '');
     setCommandQuery(commandMatch ? commandMatch[1].toLowerCase() : null);
+    setSelectedSuggestionIndex(-1);
   };
   const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().includes(query));
   const roleSuggestions = query === null ? [] : availableRoles.filter((role) => role.name.toLowerCase().includes(query));
@@ -653,6 +655,35 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
       textarea?.focus(); textarea?.setSelectionRange(nextCaret, nextCaret);
     });
   };
+  const suggestionCount = suggestions.length + roleSuggestions.length + commandSuggestions.length;
+  const selectSuggestion = (index: number) => {
+    if (index < suggestions.length) insertMention(suggestions[index]);
+    else if (index < suggestions.length + roleSuggestions.length) insertRoleMention(roleSuggestions[index - suggestions.length]);
+    else insertCommand(commandSuggestions[index - suggestions.length - roleSuggestions.length]);
+  };
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const buttons = textarea.parentElement?.querySelectorAll<HTMLButtonElement>('.mention-suggestions button') ?? [];
+    buttons.forEach((button, index) => button.toggleAttribute('data-active', index === selectedSuggestionIndex));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!suggestionCount || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter')) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault(); event.stopImmediatePropagation();
+        setSelectedSuggestionIndex((current) => {
+          if (current < 0) return event.key === 'ArrowDown' ? 0 : suggestionCount - 1;
+          return event.key === 'ArrowDown' ? (current + 1) % suggestionCount : (current - 1 + suggestionCount) % suggestionCount;
+        });
+        return;
+      }
+      if (selectedSuggestionIndex >= 0 && !event.shiftKey) {
+        event.preventDefault(); event.stopImmediatePropagation(); selectSuggestion(selectedSuggestionIndex);
+        window.setTimeout(() => { setQuery(null); setCommandQuery(null); setSelectedSuggestionIndex(-1); }, 0);
+      }
+    };
+    textarea.addEventListener('keydown', onKeyDown, true);
+    return () => textarea.removeEventListener('keydown', onKeyDown, true);
+  }, [commandSuggestions, roleSuggestions, selectedSuggestionIndex, suggestions, suggestionCount]);
   if (isChecklistDescription && isMarkdownPreview) {
     return <div className={`checklist-description-preview markdown-editable-description ${className ?? ''}`} role={disabled ? undefined : 'button'} tabIndex={disabled ? undefined : 0} onClick={() => { if (!disabled) setMarkdownPreview(false); }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMarkdownPreview(false); } }}><MarkdownDescription value={value} emptyText="Добавьте описание пункта…" /></div>;
   }
@@ -765,12 +796,14 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
   const delayedValueTimerRef = useRef<number | null>(null);
   const [query, setQuery] = useState<string | null>(null);
   const [commandQuery, setCommandQuery] = useState<string | null>(null);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const findQuery = (nextValue: string, caret: number) => {
     const beforeCaret = nextValue.slice(0, caret);
     const mention = beforeCaret.match(/(?:^|\s)@\{?([^}]*)$/);
     const command = beforeCaret.match(/(?:^|\s)\/([a-zA-Z]*)$/);
     setQuery(mention ? mention[1].toLowerCase() : '');
     setCommandQuery(command ? command[1].toLowerCase() : null);
+    setSelectedSuggestionIndex(-1);
   };
   const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().includes(query));
   const roleSuggestions = query === null ? [] : availableRoles.filter((role) => role.name.toLowerCase().includes(query));
@@ -842,6 +875,39 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     if (slash < 0) return;
     updateValue(`${current.slice(0, slash)}/${item.command} ${current.slice(caret)}`, slash + item.command.length + 2);
   };
+  const suggestionCount = suggestions.length + roleSuggestions.length + commandSuggestions.length;
+  const selectSuggestion = (index: number) => {
+    if (index < suggestions.length) replaceMention(suggestions[index]);
+    else if (index < suggestions.length + roleSuggestions.length) replaceRoleMention(roleSuggestions[index - suggestions.length]);
+    else replaceCommand(commandSuggestions[index - suggestions.length - roleSuggestions.length]);
+  };
+  useEffect(() => {
+    const composer = composerRef.current;
+    if (!composer) return;
+    const buttons = composer.parentElement?.querySelectorAll<HTMLButtonElement>('.mention-suggestions button') ?? [];
+    buttons.forEach((button, index) => button.toggleAttribute('data-active', index === selectedSuggestionIndex));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (!suggestionCount) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+        setSelectedSuggestionIndex((current) => {
+          if (current < 0) return event.key === 'ArrowDown' ? 0 : suggestionCount - 1;
+          return event.key === 'ArrowDown' ? (current + 1) % suggestionCount : (current - 1 + suggestionCount) % suggestionCount;
+        });
+        return;
+      }
+      if (event.key !== 'Enter' || event.shiftKey || !onSubmitShortcut) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (selectedSuggestionIndex >= 0 && suggestionCount) {
+        selectSuggestion(selectedSuggestionIndex);
+        window.setTimeout(() => { setQuery(null); setCommandQuery(null); setSelectedSuggestionIndex(-1); }, 0);
+      } else {
+        flushValue(); onSubmitShortcut(composerText(composer));
+      }
+    };
+    composer.addEventListener('keydown', onKeyDown, true);
+    return () => composer.removeEventListener('keydown', onKeyDown, true);
+  }, [commandSuggestions, onSubmitShortcut, roleSuggestions, selectedSuggestionIndex, suggestions, suggestionCount]);
   const removeStickerNearCaret = (direction: 'backward' | 'forward') => {
     const composer = composerRef.current; if (!composer) return false;
     const current = composerText(composer); const caret = composerSelectionOffset(composer);
