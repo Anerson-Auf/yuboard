@@ -692,7 +692,7 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
         return;
       }
       if (!event.shiftKey) {
-        event.preventDefault(); event.stopImmediatePropagation(); selectSuggestion(selectedSuggestionIndex >= 0 ? selectedSuggestionIndex : 0);
+        event.preventDefault(); event.stopImmediatePropagation(); buttons.item(selectedSuggestionIndex >= 0 ? selectedSuggestionIndex : 0)?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         window.setTimeout(() => { setQuery(null); setCommandQuery(null); setSelectedSuggestionIndex(-1); }, 0);
       }
     };
@@ -931,7 +931,7 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
       if (event.key !== 'Enter' || event.shiftKey) return;
       event.preventDefault(); event.stopImmediatePropagation();
       if (suggestionCount) {
-        selectSuggestion(selectedSuggestionIndex >= 0 ? selectedSuggestionIndex : 0);
+        buttons.item(selectedSuggestionIndex >= 0 ? selectedSuggestionIndex : 0)?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         window.setTimeout(() => { setQuery(null); setCommandQuery(null); setSelectedSuggestionIndex(-1); }, 0);
       } else if (onSubmitShortcut) {
         flushValue(); onSubmitShortcut(composerText(composer));
