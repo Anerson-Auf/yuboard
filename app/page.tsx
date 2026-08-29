@@ -165,6 +165,8 @@ const DEFAULT_STICKERS = [
 ];
 const CardPresenceContext = createContext<{ people: Presence[]; currentUserId?: string }>({ people: [] });
 const MentionRolesContext = createContext<ProfileRole[]>([]);
+const THREAD_OWNER_MENTION_ID = '__flowboard_thread_owner__';
+const threadOwnerMention: Member = { id: THREAD_OWNER_MENTION_ID, initials: '◉', color: 'violet', name: 'owner' };
 
 function assetUrl(url: string | null | undefined) {
   if (!url) return '';
@@ -623,7 +625,10 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
     setCommandQuery(commandMatch ? commandMatch[1].toLowerCase() : null);
     setSelectedSuggestionIndex(-1);
   };
-  const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().includes(query));
+  const suggestions = query === null ? [] : [
+    ...('owner'.startsWith(query) ? [threadOwnerMention] : []),
+    ...members.filter((member) => member.name.toLowerCase().includes(query)),
+  ];
   const roleSuggestions = query === null ? [] : availableRoles.filter((role) => role.name.toLowerCase().includes(query));
   const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
   const insertMention = (member: Member) => {
@@ -683,8 +688,14 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
         window.setTimeout(() => { setQuery(null); setCommandQuery(null); setSelectedSuggestionIndex(-1); }, 0);
       }
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      // React's onKeyUp re-parses the mention and used to clear the current
+      // arrow selection before Enter could accept it.
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') event.stopImmediatePropagation();
+    };
     textarea.addEventListener('keydown', onKeyDown, true);
-    return () => textarea.removeEventListener('keydown', onKeyDown, true);
+    textarea.addEventListener('keyup', onKeyUp, true);
+    return () => { textarea.removeEventListener('keydown', onKeyDown, true); textarea.removeEventListener('keyup', onKeyUp, true); };
   }, [commandSuggestions, roleSuggestions, selectedSuggestionIndex, suggestions, suggestionCount]);
   if (isChecklistDescription && isMarkdownPreview) {
     return <div className={`checklist-description-preview markdown-editable-description ${className ?? ''}`} role={disabled ? undefined : 'button'} tabIndex={disabled ? undefined : 0} onClick={() => { if (!disabled) setMarkdownPreview(false); }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMarkdownPreview(false); } }}><MarkdownDescription value={value} emptyText="Добавьте описание пункта…" /></div>;
@@ -807,7 +818,10 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     setCommandQuery(command ? command[1].toLowerCase() : null);
     setSelectedSuggestionIndex(-1);
   };
-  const suggestions = query === null ? [] : members.filter((member) => member.name.toLowerCase().includes(query));
+  const suggestions = query === null ? [] : [
+    ...('owner'.startsWith(query) ? [threadOwnerMention] : []),
+    ...members.filter((member) => member.name.toLowerCase().includes(query)),
+  ];
   const roleSuggestions = query === null ? [] : availableRoles.filter((role) => role.name.toLowerCase().includes(query));
   const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
   const flushValue = () => {
@@ -907,8 +921,12 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
         flushValue(); onSubmitShortcut(composerText(composer));
       }
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') event.stopImmediatePropagation();
+    };
     composer.addEventListener('keydown', onKeyDown, true);
-    return () => composer.removeEventListener('keydown', onKeyDown, true);
+    composer.addEventListener('keyup', onKeyUp, true);
+    return () => { composer.removeEventListener('keydown', onKeyDown, true); composer.removeEventListener('keyup', onKeyUp, true); };
   }, [commandSuggestions, onSubmitShortcut, roleSuggestions, selectedSuggestionIndex, suggestions, suggestionCount]);
   const removeStickerNearCaret = (direction: 'backward' | 'forward') => {
     const composer = composerRef.current; if (!composer) return false;
