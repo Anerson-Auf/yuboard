@@ -30,6 +30,20 @@ The token returns only the columns of its own board:
 
 Use one of these values as `list_id` when creating a card.
 
+## List Flowboard roles available on the board
+
+```http
+GET /v1/integrations/discord/roles
+```
+
+Returns only roles that are assigned to at least one member of this token's board. The bridge can match an incoming Discord role mention to `name` case-insensitively, retain the visible `@Role` text, and pass the matching Flowboard `id` in `mentioned_role_ids` when creating the comment.
+
+```json
+[
+  { "id": "role-uuid", "name": "Программист", "color": "#579DFF", "icon_shape": "circle", "icon_color": "#FFFFFF" }
+]
+```
+
 ## List cards on the board
 
 ```http
@@ -256,6 +270,7 @@ POST /v1/integrations/discord/cards/{card-id}/comments
   "author_name": "PlayerNick",
   "author_avatar_url": "https://cdn.discordapp.com/avatars/…/avatar.webp",
   "body": "Вот видео с багом:",
+  "mentioned_role_ids": ["role-uuid"],
   "attachments": [
     {
       "url": "https://cdn.discordapp.com/attachments/…/bug.mp4",
@@ -269,6 +284,8 @@ POST /v1/integrations/discord/cards/{card-id}/comments
   ]
 }
 ```
+
+`mentioned_role_ids` is optional. It is the exact role UUID from `GET /roles`, and lets Flowboard notify all active board members assigned to that role. The same payload also accepts `mentionedRoleIds` for JavaScript clients.
 
 ### Refresh expired Discord media without storing files
 
