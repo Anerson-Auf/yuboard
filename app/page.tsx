@@ -697,9 +697,9 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      // React's onKeyUp re-parses the mention and used to clear the current
-      // arrow selection before Enter could accept it.
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') event.stopImmediatePropagation();
+      // React's onKeyUp otherwise re-parses the stale controlled value after
+      // selecting a suggestion and immediately recreates the popover.
+      if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(event.key)) event.stopImmediatePropagation();
     };
     textarea.addEventListener('keydown', onKeyDown, true);
     textarea.addEventListener('keyup', onKeyUp, true);
@@ -938,7 +938,7 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') event.stopImmediatePropagation();
+      if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(event.key)) event.stopImmediatePropagation();
     };
     composer.addEventListener('keydown', onKeyDown, true);
     composer.addEventListener('keyup', onKeyUp, true);
