@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import './inbox-overlay.css';
+import './inbox-unread.css';
 
 export type InboxItem = { id: string; card_id: string; board_id: string; card_title: string; board_title: string; actor_name: string | null; action: string; detail: string; is_read: boolean; created_at: string };
 
@@ -13,7 +14,7 @@ function needsAttention(item: InboxItem) {
     || /(?:вас назначили|ждём вас|ждут вас)/i.test(item.detail);
 }
 
-export default function InboxOverlay({ items, onClose, onOpen, onMarkAllRead }: { items: InboxItem[]; onClose: () => void; onOpen: (item: InboxItem) => void; onMarkAllRead: () => void }) {
+export default function InboxOverlay({ items, onClose, onOpen, onMarkAllRead, onMarkUnread }: { items: InboxItem[]; onClose: () => void; onOpen: (item: InboxItem) => void; onMarkAllRead: () => void; onMarkUnread: (item: InboxItem) => void }) {
   const [section, setSection] = useState<InboxSection>('all');
   const unread = items.filter((item) => !item.is_read);
   const attention = useMemo(() => items.filter(needsAttention), [items]);
@@ -37,8 +38,8 @@ export default function InboxOverlay({ items, onClose, onOpen, onMarkAllRead }: 
         {availableSections.map((item) => <button type="button" key={item.id} className={section === item.id ? 'active' : ''} onClick={() => setSection(item.id)}>{item.label}<span>{item.count}</span></button>)}
       </nav>}
       <div className="inbox-sections">
-        {visibleUnread.length > 0 && <section><h3>{section === 'attention' ? 'Требуют внимания' : 'Новые'}</h3>{visibleUnread.map((item) => <InboxRow item={item} onOpen={onOpen} key={item.id} />)}</section>}
-        {visibleRead.length > 0 && <section><h3>{visibleUnread.length ? 'Ранее' : 'Все события'}</h3>{visibleRead.map((item) => <InboxRow item={item} onOpen={onOpen} key={item.id} />)}</section>}
+        {visibleUnread.length > 0 && <section><h3>{section === 'attention' ? 'Требуют внимания' : 'Новые'}</h3>{visibleUnread.map((item) => <InboxRow item={item} onOpen={onOpen} onMarkUnread={onMarkUnread} key={item.id} />)}</section>}
+        {visibleRead.length > 0 && <section><h3>{visibleUnread.length ? 'Ранее' : 'Все события'}</h3>{visibleRead.map((item) => <InboxRow item={item} onOpen={onOpen} onMarkUnread={onMarkUnread} key={item.id} />)}</section>}
         {!visible.length && <p className="inbox-empty">В этой категории пока нет событий.</p>}
         {!items.length && <p className="inbox-empty">Пока нет событий. Подписывайтесь на карточки — изменения появятся здесь.</p>}
       </div>
@@ -46,6 +47,6 @@ export default function InboxOverlay({ items, onClose, onOpen, onMarkAllRead }: 
   </div>;
 }
 
-function InboxRow({ item, onOpen }: { item: InboxItem; onOpen: (item: InboxItem) => void }) {
-  return <button className={`inbox-row ${item.is_read ? 'read' : 'unread'} ${needsAttention(item) ? 'attention' : ''}`} type="button" onClick={() => onOpen(item)}><span className="inbox-row-dot" /><div><p>{item.actor_name ? `@${item.actor_name} · ` : ''}{item.action}</p><b>{item.card_title}</b>{item.detail && <small>{item.detail}</small>}<time>{item.board_title} · {new Date(item.created_at).toLocaleString('ru-RU')}</time></div></button>;
+function InboxRow({ item, onOpen, onMarkUnread }: { item: InboxItem; onOpen: (item: InboxItem) => void; onMarkUnread: (item: InboxItem) => void }) {
+  return <div className={`inbox-row-wrap ${item.is_read ? 'read' : 'unread'} ${needsAttention(item) ? 'attention' : ''}`}><button className="inbox-row" type="button" onClick={() => onOpen(item)}><span className="inbox-row-dot" /><div><p>{item.actor_name ? `@${item.actor_name} · ` : ''}{item.action}</p><b>{item.card_title}</b>{item.detail && <small>{item.detail}</small>}<time>{item.board_title} · {new Date(item.created_at).toLocaleString('ru-RU')}</time></div></button>{item.is_read && <button className="inbox-mark-unread" type="button" title="Отметить непрочитанным" aria-label="Отметить непрочитанным" onClick={() => onMarkUnread(item)}>●</button>}</div>;
 }

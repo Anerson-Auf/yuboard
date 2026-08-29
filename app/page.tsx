@@ -4024,6 +4024,12 @@ export default function Home() {
     setNotifications((current) => current.map((item) => ({ ...item, is_read: true })));
     void fetch(`${API_URL}/v1/notifications/read`, { method: 'POST' }).catch(() => { void loadNotifications(); });
   }
+  function markNotificationUnread(notification: CardNotification) {
+    setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, is_read: false } : item));
+    void fetch(`${API_URL}/v1/notifications/${notification.id}/unread`, { method: 'POST' })
+      .then((response) => { if (!response.ok) throw new Error('notification unread failed'); })
+      .catch(() => { void loadNotifications(); showToast('Не удалось вернуть уведомление в непрочитанные'); });
+  }
   function toggleCardWatch() {
     if (!selected || authState !== 'signed-in' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
     const watching = !isWatchingCard;
@@ -6364,7 +6370,7 @@ export default function Home() {
         </form>}
       </section>
     </div>}
-    {isInboxOpen && <InboxOverlay items={notifications} onClose={() => setInboxOpen(false)} onOpen={(notification) => { setInboxOpen(false); openNotification(notification); }} onMarkAllRead={markAllNotificationsRead} />}
+    {isInboxOpen && <InboxOverlay items={notifications} onClose={() => setInboxOpen(false)} onOpen={(notification) => { setInboxOpen(false); openNotification(notification); }} onMarkAllRead={markAllNotificationsRead} onMarkUnread={markNotificationUnread} />}
     {isMyTasksOpen && <MyTasksOverlay onClose={() => setMyTasksOpen(false)} onOpenTask={(task) => { setMyTasksOpen(false); setPendingNotificationCardId(task.id); void selectBoard(task.board_id); }} />}
     {isSavedViewsOpen && boardId && account && <SavedViewsOverlay storageKey={`flowboard.saved-views.${account.user.id}.${boardId}`} current={{ filterMode, cardSort, milestoneId: milestoneFilterId }} onClose={() => setSavedViewsOpen(false)} onApply={(saved) => { setFilterMode(saved.filterMode as FilterMode); setCardSort(saved.cardSort as CardSort); setMilestoneFilterId(saved.milestoneId); }} />}
     {isAutomationsOpen && boardId && <AutomationsOverlay boardId={boardId} columns={columns} onClose={() => setAutomationsOpen(false)} />}

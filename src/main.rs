@@ -1960,6 +1960,7 @@ async fn main() {
         .route("/v1/notifications", get(list_notifications))
         .route("/v1/notifications/read", post(mark_all_notifications_read))
         .route("/v1/notifications/{notification_id}/read", post(mark_notification_read))
+        .route("/v1/notifications/{notification_id}/unread", post(mark_notification_unread))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
         .route("/v1/cards/{card_id}/diagram/sync", post(sync_card_diagram))
         .route("/v1/cards/{card_id}/diagram/ws", get(card_diagram_websocket))
@@ -4989,6 +4990,13 @@ async fn list_notifications(State(state): State<AppState>, current: CurrentUser)
 async fn mark_notification_read(State(state): State<AppState>, current: CurrentUser, Path(notification_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
     sqlx::query("UPDATE card_notifications SET read_at = now() WHERE id = $1 AND user_id = $2 AND read_at IS NULL")
         .bind(notification_id).bind(current.id).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn mark_notification_unread(State(state): State<AppState>, current: CurrentUser, Path(notification_id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    sqlx::query("UPDATE card_notifications SET read_at = NULL WHERE id = $1 AND user_id = $2")
+        .bind(notification_id).bind(current.id).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    let _ = state.events.send(());
     Ok(StatusCode::NO_CONTENT)
 }
 
