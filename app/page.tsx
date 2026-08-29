@@ -683,8 +683,8 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
         });
         return;
       }
-      if (selectedSuggestionIndex >= 0 && !event.shiftKey) {
-        event.preventDefault(); event.stopImmediatePropagation(); selectSuggestion(selectedSuggestionIndex);
+      if (!event.shiftKey) {
+        event.preventDefault(); event.stopImmediatePropagation(); selectSuggestion(selectedSuggestionIndex >= 0 ? selectedSuggestionIndex : 0);
         window.setTimeout(() => { setQuery(null); setCommandQuery(null); setSelectedSuggestionIndex(-1); }, 0);
       }
     };
@@ -912,12 +912,12 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
         });
         return;
       }
-      if (event.key !== 'Enter' || event.shiftKey || !onSubmitShortcut) return;
+      if (event.key !== 'Enter' || event.shiftKey) return;
       event.preventDefault(); event.stopImmediatePropagation();
-      if (selectedSuggestionIndex >= 0 && suggestionCount) {
-        selectSuggestion(selectedSuggestionIndex);
+      if (suggestionCount) {
+        selectSuggestion(selectedSuggestionIndex >= 0 ? selectedSuggestionIndex : 0);
         window.setTimeout(() => { setQuery(null); setCommandQuery(null); setSelectedSuggestionIndex(-1); }, 0);
-      } else {
+      } else if (onSubmitShortcut) {
         flushValue(); onSubmitShortcut(composerText(composer));
       }
     };
