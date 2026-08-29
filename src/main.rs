@@ -4774,6 +4774,22 @@ fn mentioned_role_names(value: &str) -> Vec<String> {
     roles.into_iter().collect()
 }
 
+fn has_plain_role_mention(value: &str, role_name: &str) -> bool {
+    let value = value.to_lowercase();
+    let token = format!("@{}", role_name.trim().to_lowercase());
+    if token.len() <= 1 { return false; }
+    let mut from = 0;
+    while let Some(found) = value[from..].find(&token) {
+        let start = from + found;
+        let end = start + token.len();
+        let before_is_name = value[..start].chars().next_back().is_some_and(|character| character.is_alphanumeric() || matches!(character, '_' | '-' | '.'));
+        let after_is_name = value[end..].chars().next().is_some_and(|character| character.is_alphanumeric() || matches!(character, '_' | '-' | '.'));
+        if !before_is_name && !after_is_name { return true; }
+        from = end;
+    }
+    false
+}
+
 async fn replace_card_mentions(pool: &PgPool, card_id: Uuid, actor_id: Uuid, source_kind: &str, source_id: Uuid, body: &str) -> Result<(), ApiError> {
     replace_card_mentions_with_roles(pool, card_id, Some(actor_id), source_kind, source_id, body, &[]).await
 }
@@ -4783,9 +4799,31 @@ async fn replace_card_mentions_with_roles(pool: &PgPool, card_id: Uuid, actor_id
         .bind(source_kind).bind(source_id).execute(pool).await.map_err(ApiError::internal)?;
     let usernames = mentioned_usernames(body);
     let role_names = mentioned_role_names(body);
-    if usernames.is_empty() && role_names.is_empty() && mentioned_role_ids.is_empty() { return Ok(()); }
+    let mut resolved_role_ids = mentioned_role_ids.iter().copied().collect::<HashSet<_>>();
+    // The Discord bridge keeps the visible fallback as `@Role name` so it
+    // remains readable if its cached role endpoint is unavailable. Local
+    // Flowboard text intentionally continues to require `@{Role name}` to
+    // avoid turning an ordinary @username into a role mention.
+    if actor_id.is_none() {
+        let board_roles = sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT DISTINCT pr.id, pr.name FROM cards c \
+             INNER JOIN board_members bm ON bm.board_id = c.board_id \
+             INNER JOIN user_profile_roles upr ON upr.user_id = bm.user_id \
+             INNER JOIN profile_roles pr ON pr.id = upr.role_id \
+             WHERE c.id = $1",
+        )
+        .bind(card_id)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::internal)?;
+        for (role_id, role_name) in board_roles {
+            if has_plain_role_mention(body, &role_name) { resolved_role_ids.insert(role_id); }
+        }
+    }
+    if usernames.is_empty() && role_names.is_empty() && resolved_role_ids.is_empty() { return Ok(()); }
+    let resolved_role_ids = resolved_role_ids.into_iter().collect::<Vec<_>>();
     let users = sqlx::query_scalar::<_, Uuid>("SELECT DISTINCT bm.user_id FROM cards c JOIN board_members bm ON bm.board_id = c.board_id JOIN users u ON u.id = bm.user_id LEFT JOIN user_profile_roles upr ON upr.user_id = u.id LEFT JOIN profile_roles pr ON pr.id = upr.role_id WHERE c.id = $1 AND ($2::uuid IS NULL OR bm.user_id <> $2) AND u.disabled_at IS NULL AND (lower(u.username) = ANY($3) OR lower(pr.name) = ANY($4) OR pr.id = ANY($5))")
-        .bind(card_id).bind(actor_id).bind(usernames).bind(role_names).bind(mentioned_role_ids).fetch_all(pool).await.map_err(ApiError::internal)?;
+        .bind(card_id).bind(actor_id).bind(usernames).bind(role_names).bind(&resolved_role_ids).fetch_all(pool).await.map_err(ApiError::internal)?;
     let mention_detail = body.chars().take(220).collect::<String>();
     for user_id in users {
         sqlx::query("INSERT INTO card_mentions (id, card_id, user_id, source_kind, source_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, source_kind, source_id) DO UPDATE SET card_id = EXCLUDED.card_id, created_at = now(), read_at = NULL")
