@@ -4,6 +4,7 @@
 import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, createContext, CSSProperties, DragEvent as ReactDragEvent, FormEvent, forwardRef, MouseEvent as ReactMouseEvent, MouseEventHandler, PointerEvent as ReactPointerEvent, ReactNode, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './auth.css';
+import './discord-profile.css';
 import BoardPresence, { CardEditingPresence, type Presence, useBoardPresence } from './board-presence';
 import CardCollaborationPanel from './card-collaboration-panel';
 import CardScheduleFields from './card-schedule-fields';
@@ -1494,6 +1495,8 @@ export default function Home() {
   const [nextPassword, setNextPassword] = useState('');
   const [profileError, setProfileError] = useState('');
   const [isSavingProfile, setSavingProfile] = useState(false);
+  const [discordUserId, setDiscordUserId] = useState('');
+  const [isSavingDiscordUserId, setSavingDiscordUserId] = useState(false);
   const [avatarVersion, setAvatarVersion] = useState(0);
   const [isDiagramOpen, setDiagramOpen] = useState(false);
   const [diagram, setDiagram] = useState<Diagram | null>(null);
@@ -1979,6 +1982,15 @@ export default function Home() {
     window.addEventListener('pointercancel', endPointerCard);
     return () => { window.removeEventListener('pointermove', movePointerCard); window.removeEventListener('pointerup', endPointerCard); window.removeEventListener('pointercancel', endPointerCard); };
   }, [boardViewMode, columns]);
+
+  useEffect(() => {
+    if (!isProfileOpen || !account) return;
+    let cancelled = false;
+    void fetch(`${API_URL}/v1/auth/discord`)
+      .then((response) => response.ok ? response.json() as Promise<{ discord_user_id: string | null }> : Promise.resolve({ discord_user_id: null }))
+      .then((profile) => { if (!cancelled) setDiscordUserId(profile.discord_user_id ?? ''); });
+    return () => { cancelled = true; };
+  }, [isProfileOpen, account?.user.id]);
 
   useEffect(() => {
     async function connectToApi() {
@@ -6017,6 +6029,14 @@ export default function Home() {
       .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось сменить пароль'); setCurrentPassword(''); setNextPassword(''); setProfilePanel('overview'); showToast('Пароль обновлён'); })
       .catch((error) => setProfileError(error instanceof Error ? error.message : 'Не удалось сменить пароль')).finally(() => setSavingProfile(false));
   }
+  function saveDiscordUserId(event: FormEvent) {
+    event.preventDefault(); if (isSavingDiscordUserId) return;
+    setSavingDiscordUserId(true); setProfileError('');
+    void fetch(`${API_URL}/v1/auth/discord`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ discord_user_id: discordUserId }) })
+      .then(async (response) => { if (!response.ok) throw new Error((await response.json().catch(() => null) as { message?: string } | null)?.message ?? 'Не удалось сохранить Discord ID'); return response.json() as Promise<{ discord_user_id: string | null }>; })
+      .then((updated) => { setDiscordUserId(updated.discord_user_id ?? ''); showToast(updated.discord_user_id ? 'Discord ID сохранён' : 'Discord ID отвязан'); })
+      .catch((error) => setProfileError(error instanceof Error ? error.message : 'Не удалось сохранить Discord ID')).finally(() => setSavingDiscordUserId(false));
+  }
   function uploadProfileAvatar(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file || isSavingProfile) return;
     setSavingProfile(true); setProfileError(''); const form = new FormData(); form.append('file', file);
@@ -6339,6 +6359,7 @@ export default function Home() {
       filters={{ disabled: view !== 'board', onSelect: () => setFilterOpen(true) }}
     />
     <BuildUpdateNotice />
+    {isProfileOpen && account && <form className="profile-discord-floating" onSubmit={saveDiscordUserId}><label>Discord User ID<input value={discordUserId} inputMode="numeric" pattern="[0-9]*" maxLength={22} onChange={(event) => setDiscordUserId(event.target.value.replace(/\D/g, ''))} placeholder="123456789012345678" /></label><small>Необязательно. Нужен для пингов из Discord.</small><div><button className="secondary-button" type="button" disabled={!discordUserId || isSavingDiscordUserId} onClick={() => setDiscordUserId('')}>Отвязать</button><button className="create-button" type="submit" disabled={isSavingDiscordUserId}>{isSavingDiscordUserId ? 'Сохраняем…' : 'Сохранить'}</button></div></form>}
     {!isPublicViewer && <ReleaseHistoryWidget />}
   </main></CardPresenceContext.Provider></MentionRolesContext.Provider>;
 }

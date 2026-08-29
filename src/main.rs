@@ -259,6 +259,17 @@ struct LoginRequest {
 struct UpdateProfileRequest { username: String }
 
 #[derive(Deserialize)]
+struct UpdateDiscordProfileRequest {
+    #[serde(default)]
+    discord_user_id: String,
+}
+
+#[derive(Serialize)]
+struct DiscordProfileResponse {
+    discord_user_id: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct ChangePasswordRequest { current_password: String, new_password: String }
 
 #[derive(Deserialize)]
@@ -951,6 +962,21 @@ struct CreateDiscordCommentRequest {
     attachments: Vec<DiscordAttachmentRequest>,
     #[serde(default, alias = "mentionedRoleIds")]
     mentioned_role_ids: Vec<Uuid>,
+    #[serde(default, alias = "mentionedUserIds")]
+    mentioned_user_ids: Vec<Uuid>,
+}
+
+#[derive(Deserialize)]
+struct ResolveDiscordUsersRequest {
+    #[serde(alias = "discordUserIds")]
+    discord_user_ids: Vec<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct DiscordUserResolutionResponse {
+    discord_user_id: String,
+    user_id: Uuid,
+    username: String,
 }
 
 #[derive(Deserialize)]
@@ -1832,6 +1858,7 @@ async fn main() {
         // use it to discover an optional signed-in account without generating a 401.
         .route("/v1/auth/state", get(auth_state))
         .route("/v1/auth/me", get(current_account).patch(update_profile))
+        .route("/v1/auth/discord", get(get_discord_profile).patch(update_discord_profile))
         .route("/v1/auth/password", post(change_password))
         .route("/v1/auth/sessions", get(list_sessions).delete(revoke_other_sessions))
         .route("/v1/auth/sessions/{session_id}", axum::routing::delete(revoke_session))
@@ -1950,6 +1977,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/comments/read", post(mark_card_comments_read))
         .route("/v1/integrations/discord/lists", get(list_discord_board_lists))
         .route("/v1/integrations/discord/roles", get(list_discord_profile_roles))
+        .route("/v1/integrations/discord/users/resolve", post(resolve_discord_board_users))
         .route("/v1/discord-media/{token}/cards/{card_id}/avatars/{user_id}", get(download_discord_comment_avatar))
         .route("/v1/integrations/discord/labels", get(list_discord_labels).post(create_discord_label))
         .route("/v1/integrations/discord/labels/{label_id}", patch(update_discord_label).delete(delete_discord_label))
@@ -2036,6 +2064,14 @@ fn valid_username(value: &str) -> Result<String, ApiError> {
         return Err(ApiError::bad_request("username must contain 3 to 32 lowercase letters, digits, dots, dashes, or underscores."));
     }
     Ok(value)
+}
+
+fn valid_discord_user_id(value: &str) -> Result<String, ApiError> {
+    let value = value.trim();
+    if !(16..=22).contains(&value.len()) || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ApiError::bad_request("Discord User ID must be a numeric Discord snowflake."));
+    }
+    Ok(value.to_owned())
 }
 
 fn valid_password(value: &str) -> Result<&str, ApiError> {
@@ -2426,6 +2462,45 @@ async fn update_profile(State(state): State<AppState>, current: CurrentUser, Jso
         .bind(username).bind(current.id).fetch_optional(database(&state)?).await.map_err(ApiError::internal)?
         .ok_or_else(ApiError::unauthorized)?;
     Ok(Json(auth_response(account)))
+}
+
+async fn get_discord_profile(State(state): State<AppState>, current: CurrentUser) -> ApiResult<DiscordProfileResponse> {
+    let discord_user_id = sqlx::query_scalar::<_, String>("SELECT discord_user_id FROM user_discord_accounts WHERE user_id = $1")
+        .bind(current.id)
+        .fetch_optional(database(&state)?)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(DiscordProfileResponse { discord_user_id }))
+}
+
+async fn update_discord_profile(State(state): State<AppState>, current: CurrentUser, Json(request): Json<UpdateDiscordProfileRequest>) -> ApiResult<DiscordProfileResponse> {
+    let pool = database(&state)?;
+    let value = request.discord_user_id.trim();
+    if value.is_empty() {
+        sqlx::query("DELETE FROM user_discord_accounts WHERE user_id = $1")
+            .bind(current.id)
+            .execute(pool)
+            .await
+            .map_err(ApiError::internal)?;
+        return Ok(Json(DiscordProfileResponse { discord_user_id: None }));
+    }
+    let discord_user_id = valid_discord_user_id(value)?;
+    let conflicting_account: Option<Uuid> = sqlx::query_scalar("SELECT user_id FROM user_discord_accounts WHERE discord_user_id = $1 AND user_id <> $2")
+        .bind(&discord_user_id)
+        .bind(current.id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::internal)?;
+    if conflicting_account.is_some() {
+        return Err(ApiError(StatusCode::CONFLICT, "discord_user_id_in_use", "This Discord account is already linked to another Flowboard profile.".to_owned()));
+    }
+    sqlx::query("INSERT INTO user_discord_accounts (user_id, discord_user_id) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET discord_user_id = EXCLUDED.discord_user_id, linked_at = now()")
+        .bind(current.id)
+        .bind(&discord_user_id)
+        .execute(pool)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(DiscordProfileResponse { discord_user_id: Some(discord_user_id) }))
 }
 
 async fn change_password(State(state): State<AppState>, current: CurrentUser, Json(request): Json<ChangePasswordRequest>) -> Result<StatusCode, ApiError> {
@@ -4791,15 +4866,16 @@ fn has_plain_role_mention(value: &str, role_name: &str) -> bool {
 }
 
 async fn replace_card_mentions(pool: &PgPool, card_id: Uuid, actor_id: Uuid, source_kind: &str, source_id: Uuid, body: &str) -> Result<(), ApiError> {
-    replace_card_mentions_with_roles(pool, card_id, Some(actor_id), source_kind, source_id, body, &[]).await
+    replace_card_mentions_with_roles(pool, card_id, Some(actor_id), source_kind, source_id, body, &[], &[]).await
 }
 
-async fn replace_card_mentions_with_roles(pool: &PgPool, card_id: Uuid, actor_id: Option<Uuid>, source_kind: &str, source_id: Uuid, body: &str, mentioned_role_ids: &[Uuid]) -> Result<(), ApiError> {
+async fn replace_card_mentions_with_roles(pool: &PgPool, card_id: Uuid, actor_id: Option<Uuid>, source_kind: &str, source_id: Uuid, body: &str, mentioned_role_ids: &[Uuid], mentioned_user_ids: &[Uuid]) -> Result<(), ApiError> {
     sqlx::query("DELETE FROM card_mentions WHERE source_kind = $1 AND source_id = $2")
         .bind(source_kind).bind(source_id).execute(pool).await.map_err(ApiError::internal)?;
     let usernames = mentioned_usernames(body);
     let role_names = mentioned_role_names(body);
     let mut resolved_role_ids = mentioned_role_ids.iter().copied().collect::<HashSet<_>>();
+    let resolved_user_ids = mentioned_user_ids.iter().copied().collect::<HashSet<_>>().into_iter().collect::<Vec<_>>();
     // The Discord bridge keeps the visible fallback as `@Role name` so it
     // remains readable if its cached role endpoint is unavailable. Local
     // Flowboard text intentionally continues to require `@{Role name}` to
@@ -4820,10 +4896,10 @@ async fn replace_card_mentions_with_roles(pool: &PgPool, card_id: Uuid, actor_id
             if has_plain_role_mention(body, &role_name) { resolved_role_ids.insert(role_id); }
         }
     }
-    if usernames.is_empty() && role_names.is_empty() && resolved_role_ids.is_empty() { return Ok(()); }
+    if usernames.is_empty() && role_names.is_empty() && resolved_role_ids.is_empty() && resolved_user_ids.is_empty() { return Ok(()); }
     let resolved_role_ids = resolved_role_ids.into_iter().collect::<Vec<_>>();
-    let users = sqlx::query_scalar::<_, Uuid>("SELECT DISTINCT bm.user_id FROM cards c JOIN board_members bm ON bm.board_id = c.board_id JOIN users u ON u.id = bm.user_id LEFT JOIN user_profile_roles upr ON upr.user_id = u.id LEFT JOIN profile_roles pr ON pr.id = upr.role_id WHERE c.id = $1 AND ($2::uuid IS NULL OR bm.user_id <> $2) AND u.disabled_at IS NULL AND (lower(u.username) = ANY($3) OR lower(pr.name) = ANY($4) OR pr.id = ANY($5))")
-        .bind(card_id).bind(actor_id).bind(usernames).bind(role_names).bind(&resolved_role_ids).fetch_all(pool).await.map_err(ApiError::internal)?;
+    let users = sqlx::query_scalar::<_, Uuid>("SELECT DISTINCT bm.user_id FROM cards c JOIN board_members bm ON bm.board_id = c.board_id JOIN users u ON u.id = bm.user_id LEFT JOIN user_profile_roles upr ON upr.user_id = u.id LEFT JOIN profile_roles pr ON pr.id = upr.role_id WHERE c.id = $1 AND ($2::uuid IS NULL OR bm.user_id <> $2) AND u.disabled_at IS NULL AND (lower(u.username) = ANY($3) OR lower(pr.name) = ANY($4) OR pr.id = ANY($5) OR bm.user_id = ANY($6))")
+        .bind(card_id).bind(actor_id).bind(usernames).bind(role_names).bind(&resolved_role_ids).bind(&resolved_user_ids).fetch_all(pool).await.map_err(ApiError::internal)?;
     let mention_detail = body.chars().take(220).collect::<String>();
     for user_id in users {
         sqlx::query("INSERT INTO card_mentions (id, card_id, user_id, source_kind, source_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, source_kind, source_id) DO UPDATE SET card_id = EXCLUDED.card_id, created_at = now(), read_at = NULL")
@@ -5802,6 +5878,30 @@ async fn list_discord_profile_roles(State(state): State<AppState>, integration: 
     Ok(Json(roles))
 }
 
+async fn resolve_discord_board_users(State(state): State<AppState>, integration: DiscordIntegration, Json(request): Json<ResolveDiscordUsersRequest>) -> ApiResult<Vec<DiscordUserResolutionResponse>> {
+    if request.discord_user_ids.len() > 100 {
+        return Err(ApiError::bad_request("Resolve at most 100 Discord users per request."));
+    }
+    let discord_user_ids = request.discord_user_ids.iter()
+        .map(|value| valid_discord_user_id(value))
+        .collect::<Result<HashSet<_>, _>>()?
+        .into_iter()
+        .collect::<Vec<_>>();
+    if discord_user_ids.is_empty() { return Ok(Json(Vec::new())); }
+    let users = sqlx::query_as::<_, DiscordUserResolutionResponse>(
+        "SELECT dua.discord_user_id, u.id AS user_id, u.username FROM user_discord_accounts dua \
+         INNER JOIN users u ON u.id = dua.user_id AND u.disabled_at IS NULL \
+         INNER JOIN board_members bm ON bm.user_id = u.id \
+         WHERE bm.board_id = $1 AND dua.discord_user_id = ANY($2) ORDER BY u.username, u.id",
+    )
+    .bind(integration.board_id)
+    .bind(&discord_user_ids)
+    .fetch_all(database(&state)?)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(users))
+}
+
 async fn list_discord_labels(State(state): State<AppState>, integration: DiscordIntegration) -> ApiResult<Vec<LabelResponse>> {
     let labels = sqlx::query_as::<_, LabelResponse>("SELECT id, name, color, icon_shape, icon_color FROM labels WHERE board_id = $1 ORDER BY name")
         .bind(integration.board_id).fetch_all(database(&state)?).await.map_err(ApiError::internal)?;
@@ -6134,6 +6234,7 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
     if !card_exists { return Err(ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found on this Discord integration board.".to_owned())); }
     ensure_card_unfrozen(pool, card_id).await?;
     if request.mentioned_role_ids.len() > 20 { return Err(ApiError::bad_request("A Discord comment can mention at most 20 Flowboard roles.")); }
+    if request.mentioned_user_ids.len() > 50 { return Err(ApiError::bad_request("A Discord comment can mention at most 50 Flowboard users.")); }
     let mentioned_role_ids: Vec<Uuid> = request.mentioned_role_ids.iter().copied().collect::<HashSet<_>>().into_iter().collect();
     if !mentioned_role_ids.is_empty() {
         let found: i64 = sqlx::query_scalar(
@@ -6147,6 +6248,18 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
         .map_err(ApiError::internal)?;
         if found != mentioned_role_ids.len() as i64 {
             return Err(ApiError::bad_request("Every mentioned Discord role must be available on this board."));
+        }
+    }
+    let mentioned_user_ids: Vec<Uuid> = request.mentioned_user_ids.iter().copied().collect::<HashSet<_>>().into_iter().collect();
+    if !mentioned_user_ids.is_empty() {
+        let found: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM board_members bm INNER JOIN users u ON u.id = bm.user_id AND u.disabled_at IS NULL WHERE bm.board_id = $1 AND bm.user_id = ANY($2)")
+            .bind(integration.board_id)
+            .bind(&mentioned_user_ids)
+            .fetch_one(pool)
+            .await
+            .map_err(ApiError::internal)?;
+        if found != mentioned_user_ids.len() as i64 {
+            return Err(ApiError::bad_request("Every mentioned Discord user must be an active member of this board."));
         }
     }
     let author_name = valid_text(&request.author_name, "author_name", 120)?.to_owned();
@@ -6222,7 +6335,7 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
             sqlx::query("UPDATE comments SET body = $1 WHERE id = $2").bind(body).bind(comment_id).execute(&mut *transaction).await.map_err(ApiError::internal)?;
         }
         transaction.commit().await.map_err(ApiError::internal)?;
-        replace_card_mentions_with_roles(pool, card_id, None, "comment", comment_id, &existing_body, &mentioned_role_ids).await?;
+        replace_card_mentions_with_roles(pool, card_id, None, "comment", comment_id, &existing_body, &mentioned_role_ids, &mentioned_user_ids).await?;
         let comment = load_card_comments(pool, card_id, None).await?.into_iter().find(|comment| comment.id == comment_id)
             .ok_or_else(|| ApiError::bad_request("Discord comment could not be loaded."))?;
         let _ = state.events.send(());
@@ -6244,7 +6357,7 @@ async fn create_discord_comment(State(state): State<AppState>, integration: Disc
             .execute(&mut *transaction).await.map_err(ApiError::internal)?;
     }
     transaction.commit().await.map_err(ApiError::internal)?;
-    replace_card_mentions_with_roles(pool, card_id, None, "comment", comment_id, &body, &mentioned_role_ids).await?;
+    replace_card_mentions_with_roles(pool, card_id, None, "comment", comment_id, &body, &mentioned_role_ids, &mentioned_user_ids).await?;
     let comment = load_card_comments(pool, card_id, None).await?.into_iter().find(|comment| comment.id == comment_id)
         .ok_or_else(|| ApiError::bad_request("Discord comment could not be loaded."))?;
     record_external_card_activity(pool, card_id, "Discord: добавлен комментарий", &author_name).await;

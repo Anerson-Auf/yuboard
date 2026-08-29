@@ -44,6 +44,48 @@ Returns only roles that are assigned to at least one member of this token's boar
 ]
 ```
 
+## Resolve Discord users for mentions
+
+Each Flowboard profile can optionally save its own numeric **Discord User ID** in
+the Profile window. The value is unique across Flowboard accounts. It is not
+exposed generally: the board token can resolve only IDs belonging to active
+members of its own board.
+
+When Discord delivers a message, collect the user IDs from
+`message.mentions.users` and resolve them before forwarding the comment:
+
+```http
+POST /v1/integrations/discord/users/resolve
+
+{ "discord_user_ids": ["123456789012345678", "234567890123456789"] }
+```
+
+The same request accepts `discordUserIds`. It returns only mapped board members:
+
+```json
+[
+  {
+    "discord_user_id": "123456789012345678",
+    "user_id": "flowboard-user-uuid",
+    "username": "anerson"
+  }
+]
+```
+
+When forwarding the Discord message to its Flowboard card, keep the human-readable
+`@username` text in `body` and include the resolved Flowboard IDs:
+
+```json
+{
+  "mentioned_user_ids": ["flowboard-user-uuid"]
+}
+```
+
+`mentionedUserIds` is also accepted. Flowboard validates that every supplied ID
+is an active member of the token's board, then creates the usual card mention
+and inbox notification. Unmapped Discord mentions remain readable text but do
+not produce a Flowboard notification.
+
 ## List cards on the board
 
 ```http
