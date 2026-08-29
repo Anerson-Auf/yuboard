@@ -1725,6 +1725,20 @@ struct CardDetail {
     watching: bool,
 }
 
+#[derive(FromRow)]
+struct CardMarkdownExportRow {
+    title: String,
+    description: String,
+    list_title: String,
+    board_title: String,
+    priority: i16,
+    is_frozen: bool,
+    completed_at: Option<String>,
+    archived_at: Option<String>,
+    start_at: Option<String>,
+    due_at: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct BoardActivityQuery {
     user_id: Option<Uuid>,
@@ -1955,6 +1969,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/access-thresholds", patch(update_card_access_thresholds))
         .route("/v1/polls/{poll_id}/vote", post(vote_card_poll))
         .route("/v1/cards/{card_id}/details", get(get_card_detail))
+        .route("/v1/cards/{card_id}/export.md", get(export_card_markdown))
         .route("/v1/cards/{card_id}/watch", put(watch_card).delete(unwatch_card))
         .route("/v1/cards/{card_id}/mentions/read", post(mark_card_mentions_read))
         .route("/v1/notifications", get(list_notifications))
@@ -5118,6 +5133,150 @@ async fn get_card_detail(State(state): State<AppState>, current: Viewer, Path(ca
             .bind(card_id).bind(actor_id).fetch_one(pool).await.map_err(ApiError::internal)?
     } else { false };
     Ok(Json(CardDetail { checklists, comments, attachments, activity, cover_attachment_id, cover_mode, background_image_url, unread_mention_source_ids, watching }))
+}
+
+fn markdown_line(value: &str) -> String {
+    value.replace(['\r', '\n'], " ").trim().to_owned()
+}
+
+fn markdown_list(values: &[String]) -> String {
+    if values.is_empty() { "—".to_owned() } else { values.join(", ") }
+}
+
+async fn export_card_markdown(State(state): State<AppState>, current: Viewer, Path(card_id): Path<Uuid>) -> Result<Response, ApiError> {
+    let pool = database(&state)?;
+    let actor_id = current.0.map(|user| user.id);
+    ensure_card_public_read(pool, card_id, actor_id).await?;
+
+    let card = sqlx::query_as::<_, CardMarkdownExportRow>(
+        "SELECT c.title, c.description, l.title AS list_title, b.title AS board_title, c.priority, c.is_frozen, \
+                c.completed_at::text AS completed_at, c.archived_at::text AS archived_at, c.start_at::text AS start_at, c.due_at::text AS due_at \
+         FROM cards c INNER JOIN lists l ON l.id = c.list_id INNER JOIN boards b ON b.id = c.board_id WHERE c.id = $1",
+    )
+    .bind(card_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "card_not_found", "Card was not found.".to_owned()))?;
+
+    let labels = sqlx::query_scalar::<_, String>(
+        "SELECT l.name FROM card_labels cl INNER JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = $1 ORDER BY l.name, l.id",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let roles = sqlx::query_scalar::<_, String>(
+        "SELECT pr.name FROM card_profile_roles cpr INNER JOIN profile_roles pr ON pr.id = cpr.role_id WHERE cpr.card_id = $1 ORDER BY pr.name, pr.id",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let assignees = sqlx::query_scalar::<_, String>(
+        "SELECT u.display_name FROM card_assignees ca INNER JOIN users u ON u.id = ca.user_id WHERE ca.card_id = $1 ORDER BY u.display_name, u.id",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let attachments = sqlx::query_as::<_, AttachmentResponse>(
+        "SELECT id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE card_id = $1 AND checklist_item_id IS NULL ORDER BY created_at, id",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let checklist_rows = sqlx::query_as::<_, ChecklistRow>("SELECT id, title FROM checklists WHERE card_id = $1 ORDER BY position, id")
+        .bind(card_id).fetch_all(pool).await.map_err(ApiError::internal)?;
+    let checklist_items = sqlx::query_as::<_, ChecklistItemRow>(
+        "SELECT checklist_id, id, title, is_completed, description FROM checklist_items WHERE card_id = $1 ORDER BY position, id",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let checklist_item_attachments = sqlx::query_as::<_, ChecklistItemAttachmentRow>(
+        "SELECT checklist_item_id, id, original_name, media_type, byte_size, '/v1/attachments/' || id::text || '/content' AS url FROM attachments WHERE card_id = $1 AND checklist_item_id IS NOT NULL ORDER BY created_at, id",
+    )
+    .bind(card_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let comments = load_card_comments(pool, card_id, actor_id).await?;
+
+    let mut markdown = String::new();
+    markdown.push_str(&format!("# {}\n\n", markdown_line(&card.title)));
+    markdown.push_str("## Карточка\n\n");
+    markdown.push_str(&format!("- **Доска:** {}\n", markdown_line(&card.board_title)));
+    markdown.push_str(&format!("- **Колонка:** {}\n", markdown_line(&card.list_title)));
+    markdown.push_str(&format!("- **Статус:** {}\n", if card.completed_at.is_some() { "Выполнено" } else { "В работе" }));
+    if let Some(value) = &card.completed_at { markdown.push_str(&format!("- **Выполнена:** {value}\n")); }
+    if let Some(value) = &card.archived_at { markdown.push_str(&format!("- **В архиве с:** {value}\n")); }
+    if card.priority > 0 { markdown.push_str(&format!("- **Приоритет:** {}/5\n", card.priority)); }
+    if card.is_frozen { markdown.push_str("- **Заморожена:** да\n"); }
+    if let Some(value) = &card.start_at { markdown.push_str(&format!("- **Начало:** {value}\n")); }
+    if let Some(value) = &card.due_at { markdown.push_str(&format!("- **Дедлайн:** {value}\n")); }
+    markdown.push_str(&format!("- **Исполнители:** {}\n", markdown_list(&assignees)));
+    markdown.push_str(&format!("- **Метки:** {}\n", markdown_list(&labels)));
+    markdown.push_str(&format!("- **Роли:** {}\n\n", markdown_list(&roles)));
+
+    markdown.push_str("## Описание\n\n");
+    markdown.push_str(if card.description.trim().is_empty() { "_Нет описания._" } else { card.description.trim() });
+    markdown.push_str("\n\n");
+
+    if !checklist_rows.is_empty() {
+        markdown.push_str("## Чек-листы\n\n");
+        for checklist in &checklist_rows {
+            markdown.push_str(&format!("### {}\n\n", markdown_line(&checklist.title)));
+            for item in checklist_items.iter().filter(|item| item.checklist_id == checklist.id) {
+                markdown.push_str(&format!("- [{}] {}\n", if item.is_completed { "x" } else { " " }, markdown_line(&item.title)));
+                if !item.description.trim().is_empty() { markdown.push_str(&format!("  - {}\n", item.description.trim().replace('\n', "\n    "))); }
+                for attachment in checklist_item_attachments.iter().filter(|attachment| attachment.checklist_item_id == item.id) {
+                    markdown.push_str(&format!("  - [{}]({})\n", markdown_line(&attachment.original_name), attachment.url));
+                }
+            }
+            markdown.push('\n');
+        }
+    }
+
+    if !attachments.is_empty() {
+        markdown.push_str("## Вложения\n\n");
+        for attachment in &attachments {
+            markdown.push_str(&format!("- [{}]({}) — {}\n", markdown_line(&attachment.original_name), attachment.url, attachment.media_type));
+        }
+        markdown.push('\n');
+    }
+
+    let root_comments: Vec<&CommentResponse> = comments.iter().filter(|comment| comment.parent_comment_id.is_none()).collect();
+    if !root_comments.is_empty() {
+        markdown.push_str("## Обсуждение\n\n");
+        for comment in root_comments.iter().rev() {
+            markdown.push_str(&format!("### @{} · {}\n\n", markdown_line(&comment.author_name), comment.created_at));
+            markdown.push_str(if comment.body.trim().is_empty() { "_Вложение без текста._" } else { comment.body.trim() });
+            markdown.push_str("\n\n");
+            for attachment in &comment.attachments {
+                markdown.push_str(&format!("- [{}]({})\n", markdown_line(&attachment.original_name), attachment.download_url));
+            }
+            let replies: Vec<&CommentResponse> = comments.iter().filter(|reply| reply.parent_comment_id == Some(comment.id)).collect();
+            if !replies.is_empty() {
+                markdown.push_str("#### Тред\n\n");
+                for reply in replies.iter().rev() {
+                    markdown.push_str(&format!("- **@{} · {}**  \n{}\n", markdown_line(&reply.author_name), reply.created_at, reply.body.trim()));
+                }
+                markdown.push('\n');
+            }
+        }
+    }
+
+    let filename = card.title.chars().map(|character| if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') { character } else { '_' }).collect::<String>();
+    let filename = if filename.trim_matches('_').is_empty() { "flowboard-card".to_owned() } else { filename };
+    let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{}.md\"", filename)).map_err(|_| ApiError::storage())?;
+    Ok(([
+        (header::CONTENT_TYPE, HeaderValue::from_static("text/markdown; charset=utf-8")),
+        (header::CONTENT_DISPOSITION, disposition),
+        (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+    ], markdown).into_response())
 }
 
 fn validate_diagram_document(document: &Value) -> Result<(), ApiError> {
