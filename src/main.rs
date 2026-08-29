@@ -3866,7 +3866,11 @@ async fn search_board_cards(State(state): State<AppState>, current: CurrentUser,
              )
            )
            AND (
-             to_tsvector('simple', concat_ws(' ', c.title, c.description)) @@ websearch_to_tsquery('simple', $2)
+             -- Full-text search intentionally matches complete lexemes. Card
+             -- titles also need the familiar UI behaviour of finding a typed
+             -- fragment, e.g. `эмм` in `Эммм мясо`.
+             strpos(lower(c.title), lower($5)) > 0
+             OR to_tsvector('simple', concat_ws(' ', c.title, c.description)) @@ websearch_to_tsquery('simple', $2)
              OR EXISTS(SELECT 1 FROM comments cm WHERE cm.card_id = c.id AND to_tsvector('simple', cm.body) @@ websearch_to_tsquery('simple', $2))
              OR EXISTS(SELECT 1 FROM checklists cl WHERE cl.card_id = c.id AND to_tsvector('simple', cl.title) @@ websearch_to_tsquery('simple', $2))
              OR EXISTS(SELECT 1 FROM checklist_items ci WHERE ci.card_id = c.id AND to_tsvector('simple', concat_ws(' ', ci.title, ci.description)) @@ websearch_to_tsquery('simple', $2))
@@ -3881,6 +3885,7 @@ async fn search_board_cards(State(state): State<AppState>, current: CurrentUser,
     .bind(needle)
     .bind(current.id)
     .bind(limit)
+    .bind(needle)
     .fetch_all(pool)
     .await
     .map_err(ApiError::internal)?;
