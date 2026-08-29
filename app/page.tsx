@@ -673,6 +673,13 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
     if (!textarea) return;
     const buttons = textarea.parentElement?.querySelectorAll<HTMLButtonElement>('.mention-suggestions button') ?? [];
     buttons.forEach((button, index) => button.toggleAttribute('data-active', index === selectedSuggestionIndex));
+    const menu = textarea.parentElement?.querySelector<HTMLElement>('.mention-suggestions');
+    const activeButton = selectedSuggestionIndex >= 0 ? buttons.item(selectedSuggestionIndex) : null;
+    if (menu && activeButton) {
+      const top = activeButton.offsetTop; const bottom = top + activeButton.offsetHeight;
+      if (top < menu.scrollTop) menu.scrollTop = top;
+      else if (bottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = bottom - menu.clientHeight;
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if (!suggestionCount || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter')) return;
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -902,6 +909,13 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     if (!composer) return;
     const buttons = composer.parentElement?.querySelectorAll<HTMLButtonElement>('.mention-suggestions button') ?? [];
     buttons.forEach((button, index) => button.toggleAttribute('data-active', index === selectedSuggestionIndex));
+    const menu = composer.parentElement?.querySelector<HTMLElement>('.mention-suggestions');
+    const activeButton = selectedSuggestionIndex >= 0 ? buttons.item(selectedSuggestionIndex) : null;
+    if (menu && activeButton) {
+      const top = activeButton.offsetTop; const bottom = top + activeButton.offsetHeight;
+      if (top < menu.scrollTop) menu.scrollTop = top;
+      else if (bottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = bottom - menu.clientHeight;
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         if (!suggestionCount) return;
