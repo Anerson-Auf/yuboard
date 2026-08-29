@@ -891,14 +891,20 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     const composer = composerRef.current; if (!composer) return;
     const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@'); const start = at < 0 ? caret : at;
     const mentionToken = member.mentionToken ?? member.name;
-    updateValue(`${current.slice(0, start)}@${mentionToken} ${current.slice(caret)}`, start + mentionToken.length + 2);
+    const next = `${current.slice(0, start)}@${mentionToken} ${current.slice(caret)}`;
+    const nextCaret = start + mentionToken.length + 2;
+    updateValue(next, nextCaret);
+    renderComposerText(composer, next); placeComposerCaret(composer, nextCaret); pendingCaret.current = null;
   };
-  const replaceRoleMention = (role: ProfileRole) => { const composer = composerRef.current; if (!composer) return; const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@'); const start = at < 0 ? caret : at; const token = `@{${role.name}} `; updateValue(`${current.slice(0, start)}${token}${current.slice(caret)}`, start + token.length); };
+  const replaceRoleMention = (role: ProfileRole) => { const composer = composerRef.current; if (!composer) return; const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@'); const start = at < 0 ? caret : at; const token = `@{${role.name}} `; const next = `${current.slice(0, start)}${token}${current.slice(caret)}`; const nextCaret = start + token.length; updateValue(next, nextCaret); renderComposerText(composer, next); placeComposerCaret(composer, nextCaret); pendingCaret.current = null; };
   const replaceCommand = (item: { command: string }) => {
     const composer = composerRef.current; if (!composer) return;
     const current = composerText(composer); const caret = composerSelectionOffset(composer); const slash = current.slice(0, caret).lastIndexOf('/');
     if (slash < 0) return;
-    updateValue(`${current.slice(0, slash)}/${item.command} ${current.slice(caret)}`, slash + item.command.length + 2);
+    const next = `${current.slice(0, slash)}/${item.command} ${current.slice(caret)}`;
+    const nextCaret = slash + item.command.length + 2;
+    updateValue(next, nextCaret);
+    renderComposerText(composer, next); placeComposerCaret(composer, nextCaret); pendingCaret.current = null;
   };
   const suggestionCount = suggestions.length + roleSuggestions.length + commandSuggestions.length;
   const selectSuggestion = (index: number) => {
