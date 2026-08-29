@@ -26,7 +26,7 @@ import ThemePicker from './theme-picker';
 import ParkingShelf, { ParkingCard } from './parking-shelf';
 
 type EntityId = number | string;
-type Member = { id: EntityId; initials: string; color: string; name: string; avatarUrl?: string | null };
+type Member = { id: EntityId; initials: string; color: string; name: string; mentionToken?: string; avatarUrl?: string | null };
 type RoleShape = 'circle' | 'square' | 'diamond' | 'star' | 'triangle' | 'hexagon' | 'bolt' | 'flag' | 'check' | 'cross';
 type Label = { id: string; name: string; color: string; icon_shape?: RoleShape; icon_color?: string };
 type ProfileRole = { id: string; name: string; color: string; icon_shape: RoleShape; icon_color: string };
@@ -166,7 +166,7 @@ const DEFAULT_STICKERS = [
 const CardPresenceContext = createContext<{ people: Presence[]; currentUserId?: string }>({ people: [] });
 const MentionRolesContext = createContext<ProfileRole[]>([]);
 const THREAD_OWNER_MENTION_ID = '__flowboard_thread_owner__';
-const threadOwnerMention: Member = { id: THREAD_OWNER_MENTION_ID, initials: '◉', color: 'violet', name: 'owner' };
+const threadOwnerMention: Member = { id: THREAD_OWNER_MENTION_ID, initials: '◉', color: 'violet', name: 'owner — Создатель треда', mentionToken: 'owner' };
 
 function assetUrl(url: string | null | undefined) {
   if (!url) return '';
@@ -636,11 +636,12 @@ function MentionTextarea({ value, onValueChange, members, roles = [], className,
     const caret = textarea?.selectionStart ?? value.length;
     const at = value.slice(0, caret).lastIndexOf('@');
     const start = at < 0 ? caret : at;
-    const next = `${value.slice(0, start)}@${member.name} ${value.slice(caret)}`;
+    const mentionToken = member.mentionToken ?? member.name;
+    const next = `${value.slice(0, start)}@${mentionToken} ${value.slice(caret)}`;
     onValueChange(next);
     setQuery(null);
     window.requestAnimationFrame(() => {
-      const nextCaret = start + member.name.length + 2;
+      const nextCaret = start + mentionToken.length + 2;
       textarea?.focus(); textarea?.setSelectionRange(nextCaret, nextCaret);
     });
   };
@@ -889,7 +890,8 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
   const replaceMention = (member: Member) => {
     const composer = composerRef.current; if (!composer) return;
     const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@'); const start = at < 0 ? caret : at;
-    updateValue(`${current.slice(0, start)}@${member.name} ${current.slice(caret)}`, start + member.name.length + 2);
+    const mentionToken = member.mentionToken ?? member.name;
+    updateValue(`${current.slice(0, start)}@${mentionToken} ${current.slice(caret)}`, start + mentionToken.length + 2);
   };
   const replaceRoleMention = (role: ProfileRole) => { const composer = composerRef.current; if (!composer) return; const current = composerText(composer); const caret = composerSelectionOffset(composer); const at = current.slice(0, caret).lastIndexOf('@'); const start = at < 0 ? caret : at; const token = `@{${role.name}} `; updateValue(`${current.slice(0, start)}${token}${current.slice(caret)}`, start + token.length); };
   const replaceCommand = (item: { command: string }) => {
