@@ -1175,3 +1175,35 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 /* Browser push stays a compact device setting inside the existing inbox. */
 .web-push-control { display: grid; gap: 5px; margin: 0 2px 10px; }.web-push-control > button { width: 100%; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--primary) 52%, var(--line)); border-radius: 9px; color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, transparent); font: inherit; font-size: 12px; text-align: left; transition: transform .16s ease, background .16s ease; }.web-push-control > button:hover:not(:disabled) { transform: translateY(-1px); background: color-mix(in srgb, var(--primary) 16%, transparent); }.web-push-control > button.enabled { color: #8ce7bb; border-color: color-mix(in srgb, #48c786 54%, var(--line)); background: color-mix(in srgb, #48c786 10%, transparent); }.web-push-control > small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+
+/* Safety rails for the mobile card: one scroll context, no sticky action bar
+   over content, and no controls positioned over each other. */
+@media (max-width: 760px) {
+  .task-modal { overflow: hidden; }
+  .task-layout { display: block; min-height: 0; height: auto; max-height: none; overflow: visible; }
+  .task-content, .task-sidebar { height: auto; max-height: none; overflow: visible; }
+  .task-modal .modal-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+  }
+  .card-quick-actions { margin-right: 48px; }
+  .task-modal .quick-property-popover {
+    position: absolute;
+    top: 42px;
+    right: 0;
+    bottom: auto;
+    left: auto;
+    width: min(390px, calc(100vw - 44px));
+    max-height: min(62dvh, 520px);
+  }
+  .modal-actions {
+    position: static;
+    bottom: auto;
+    margin: 20px 0 0;
+    padding: 16px 0 max(14px, env(safe-area-inset-bottom));
+    background: transparent;
+    backdrop-filter: none;
+  }
+  .conversation-panel { min-height: 0; }
+}
