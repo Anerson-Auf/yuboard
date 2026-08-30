@@ -1018,5 +1018,160 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 /* A card's discussion and its audit trail need different reading modes. */
 .conversation-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid color-mix(in srgb, var(--line) 82%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--surface-soft) 42%, transparent); }.conversation-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 31px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 750; transition: color .16s ease, background .16s ease, transform .16s ease; }.conversation-tabs button:hover { color: var(--text); background: color-mix(in srgb, var(--surface-raised) 68%, transparent); }.conversation-tabs button.active { color: var(--text); background: var(--surface-raised); box-shadow: 0 2px 8px rgb(0 0 0 / 18%); }.conversation-tabs button span { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }.conversation-tabs button.active span { color: var(--primary); }.conversation-author { font-weight: 800; text-shadow: 0 1px 5px rgb(0 0 0 / 24%); }.conversation-panel .activity-message { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 8px; margin: 0; padding: 9px 2px; border-bottom: 1px solid color-mix(in srgb, var(--line) 54%, transparent); background: transparent; color: #f1f3f6; }.conversation-panel .activity-message:last-child { border-bottom: 0; }.conversation-panel .activity-message .avatar { width: 28px; height: 28px; margin: 1px 0 0; font-size: 8px; }.conversation-panel .activity-message p { color: #f1f3f6; opacity: 1; }.conversation-panel .activity-message small { margin-top: 3px; color: #b7bec9; }
 
+/* A card is a full work surface on a phone. Keep control and context in the
+   first viewport, then use clear sections for the longer-form work below. */
+@media (max-width: 760px) {
+  .task-modal {
+    overflow: visible;
+    border: 0;
+    border-radius: 18px 18px 0 0;
+    background: var(--surface);
+    box-shadow: 0 -14px 46px rgb(0 0 0 / 28%);
+  }
+  .task-modal .modal-close {
+    position: fixed;
+    z-index: 240;
+    top: max(12px, env(safe-area-inset-top));
+    right: max(12px, env(safe-area-inset-right));
+    display: grid;
+    width: 38px;
+    height: 38px;
+    place-items: center;
+    border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+    box-shadow: 0 7px 22px rgb(0 0 0 / 25%);
+    color: var(--text);
+    font-size: 24px;
+    line-height: 1;
+    backdrop-filter: blur(14px);
+  }
+  .task-content { padding: 18px 14px 0; }
+  .card-detail-top.has-card-background {
+    margin: -18px -14px 0;
+    padding: 16px 14px 18px;
+    border-radius: 0 0 18px 18px;
+  }
+  .card-quick-actions {
+    flex-wrap: nowrap;
+    min-height: 38px;
+    margin: 0 43px 10px 0;
+    padding: 2px 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .card-quick-actions::-webkit-scrollbar { display: none; }
+  .card-quick-actions-left, .card-quick-actions-right { flex: 0 0 auto; gap: 3px; }
+  .card-quick-actions .quick-action {
+    width: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--surface-raised) 74%, transparent);
+  }
+  .card-quick-actions .quick-action.active, .card-quick-actions .quick-action:hover {
+    border-color: color-mix(in srgb, var(--primary) 54%, var(--line));
+    background: color-mix(in srgb, var(--primary) 14%, var(--surface-raised));
+    transform: none;
+  }
+  .task-modal .quick-property-popover {
+    position: fixed;
+    z-index: 230;
+    top: auto;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px;
+    width: auto;
+    max-height: min(66dvh, 560px);
+    padding: 14px;
+    border-radius: 16px;
+    box-shadow: 0 -8px 40px rgb(0 0 0 / 42%);
+  }
+  .task-modal .quick-property-popover .popover-heading { margin-bottom: 12px; }
+  .card-column-caption { margin: 11px 43px 1px; font-size: 9px; line-height: 1.35; }
+  .detail-title-row { gap: 10px; margin: 9px 0 3px; }
+  .detail-card-complete {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
+    margin-top: 2px;
+    border-radius: 10px;
+    font-size: 15px;
+  }
+  .detail-title-row .card-title-input {
+    width: calc(100% - 40px);
+    min-height: 39px;
+    font-size: clamp(21px, 6.7vw, 27px);
+    font-weight: 800;
+    line-height: 1.18;
+    letter-spacing: -.65px;
+  }
+  .has-card-background .card-title-input { color: #fff; text-shadow: 0 2px 14px rgb(0 0 0 / 45%); }
+  .card-priority-review-row { align-items: center; gap: 8px; margin: 11px 0 14px; }
+  .card-priority-editor { flex: 1 1 auto; min-width: 0; gap: 7px; margin: 0; }
+  .card-priority-editor > div { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .card-priority-editor > div::-webkit-scrollbar { display: none; }
+  .card-priority-editor button { min-width: 34px; min-height: 31px; }
+  .card-priority-editor button:has(.priority-signal) { min-width: 39px; }
+  .card-diagram-launch { width: 36px; height: 36px; flex-basis: 36px; }
+  .card-members-labels-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin: 0;
+    padding: 13px;
+    border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface-raised) 64%, transparent);
+  }
+  .card-members-row { flex-wrap: wrap; gap: 8px; }
+  .card-members-row > span { width: 100%; color: var(--faint); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+  .card-members-row .card-member-control { min-height: 32px; }
+  .card-members-row .avatar { width: 30px; height: 30px; flex-basis: 30px; }
+  .card-join-button { min-height: 31px; margin-left: auto; }
+  .detail-card-labels { gap: 6px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+  .detail-card-labels > .card-labels { min-height: 30px; gap: 5px; }
+  .detail-card-labels .label, .detail-card-labels .profile-role-chip { font-size: 11px; letter-spacing: 0; text-transform: none; }
+  .description-section {
+    margin-top: 18px;
+    padding: 16px 14px;
+    border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface-raised) 52%, transparent);
+  }
+  .description-section .section-heading { margin-bottom: 10px; }
+  .description-section .section-heading h3 { font-size: 15px; }
+  .markdown-editable-description { min-height: 72px; padding: 0; }
+  .markdown-editable-description .markdown-description, .card-description-input { font-size: 14px; line-height: 1.66; }
+  .card-description-input { min-height: 130px; padding: 4px 0; }
+  .attachments, .checklists { margin-top: 20px; padding-top: 17px; }
+  .attachment-grid { grid-template-columns: 1fr; gap: 9px; }
+  .attachment-preview img, .attachment-preview video { height: min(54vw, 224px); }
+  .checklist { padding: 12px; border-radius: 11px; }
+  .new-checklist-form { align-items: stretch; }
+  .new-checklist-form button { min-width: 78px; }
+  .task-sidebar { padding: 0 14px 14px; border: 0; background: transparent; }
+  .conversation-panel {
+    min-height: min(520px, 64dvh);
+    margin: 22px -14px 0;
+    padding: 17px 14px max(14px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    border-radius: 18px 18px 0 0;
+    background: color-mix(in srgb, var(--surface-raised) 84%, var(--surface));
+  }
+  .conversation-heading h3 { font-size: 15px; }
+  .conversation-scroll { max-height: min(44dvh, 430px); margin-top: 12px; padding-bottom: 10px; }
+  .conversation-panel .comment-composer textarea { min-height: 80px; font-size: 14px; }
+  .comment-reply { margin-left: 18px !important; }
+  .modal-actions {
+    gap: 7px;
+    padding-top: 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .modal-actions > button { min-height: 40px; }
+}
+
 /* Browser push stays a compact device setting inside the existing inbox. */
 .web-push-control { display: grid; gap: 5px; margin: 0 2px 10px; }.web-push-control > button { width: 100%; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--primary) 52%, var(--line)); border-radius: 9px; color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, transparent); font: inherit; font-size: 12px; text-align: left; transition: transform .16s ease, background .16s ease; }.web-push-control > button:hover:not(:disabled) { transform: translateY(-1px); background: color-mix(in srgb, var(--primary) 16%, transparent); }.web-push-control > button.enabled { color: #8ce7bb; border-color: color-mix(in srgb, #48c786 54%, var(--line)); background: color-mix(in srgb, #48c786 10%, transparent); }.web-push-control > small { color: var(--muted); font-size: 11px; line-height: 1.35; }
