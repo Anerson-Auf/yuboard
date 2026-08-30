@@ -1287,13 +1287,9 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 @media (max-width: 760px) {
   /* Card selectors become a bounded bottom sheet instead of opening behind its content. */
-  .task-modal .quick-property-popover,
-  .task-modal .property-popover,
-  .task-modal .assignees-popover,
-  .task-modal .card-milestone-popover,
-  .task-modal .card-roles-popover {
+  .mobile-card-popover {
     position: fixed;
-    z-index: 450;
+    z-index: 500;
     top: auto;
     right: 8px;
     bottom: max(8px, env(safe-area-inset-bottom));
@@ -1303,5 +1299,19 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
     max-height: min(64dvh, 520px);
     overflow-y: auto;
     border-radius: 16px;
+  }
+
+  .task-modal .card-member-control > .assignees-popover { display: none; }
+
+  .column-popover,
+  .card-context-menu {
+    position: fixed;
+    z-index: 350;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px;
+    width: auto;
+    max-height: min(58dvh, 440px);
+    overflow-y: auto;
   }
 }
