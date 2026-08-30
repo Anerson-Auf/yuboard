@@ -903,6 +903,118 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
    editing is deliberately one explicit click away. */
 .top-profile-menu { position: relative; z-index: 120; }.top-profile-menu-popover { position: absolute; top: calc(100% + 10px); right: 0; z-index: 260; display: grid; width: min(294px, calc(100vw - 24px)); gap: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 18px 42px rgb(0 0 0 / 34%); animation: workspace-tools-in .16s ease both; }.top-profile-menu-popover > header { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 7px 8px 10px; border-bottom: 1px solid color-mix(in srgb, var(--line) 76%, transparent); }.top-profile-menu-popover > header .avatar { width: 31px; height: 31px; flex: 0 0 31px; font-size: 9px; }.top-profile-menu-popover > header span { display: grid; min-width: 0; gap: 1px; }.top-profile-menu-popover > header b { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.top-profile-menu-popover > header small { color: var(--muted); font-size: 10px; }.top-profile-menu-popover > button { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 8px 9px; border: 0; border-radius: 9px; background: transparent; color: var(--text); text-align: left; font-size: 17px; transition: background .15s ease, transform .15s ease; }.top-profile-menu-popover > button:hover { background: var(--surface-soft); transform: translateX(2px); }.top-profile-menu-popover > button > span { display: grid; min-width: 0; gap: 2px; }.top-profile-menu-popover > button b { font-size: 12px; }.top-profile-menu-popover > button small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.top-profile-menu-popover > .profile-menu-signout { margin-top: 3px; border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent); border-radius: 0 0 9px 9px; color: #ff9dad; }.top-profile-menu-popover > .profile-menu-signout small { color: color-mix(in srgb, #ff9dad 72%, var(--muted)); }.top-profile-menu-popover > .profile-menu-signout:hover { background: color-mix(in srgb, #ff718c 10%, transparent); color: #ffb3bf; }
 
+/* Mobile is a focused working layout, not a scaled-down desktop board.
+   Keep discovery and creation in reach, then let the board itself own the
+   horizontal swipe. This preserves every desktop action without asking people
+   to hit tiny targets or hunt through clipped controls. */
+@media (max-width: 760px) {
+  body { min-width: 0; overflow-x: hidden; }
+  .app-shell { min-height: 100dvh; }
+
+  .topbar {
+    height: auto;
+    min-height: 64px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'brand actions' 'search search';
+    gap: 7px 10px;
+    padding: max(9px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 9px max(12px, env(safe-area-inset-left));
+  }
+  .brand { grid-area: brand; min-width: 0; width: fit-content; padding: 4px 0; }
+  .brand > span:last-child { display: inline; font-size: 16px; }
+  .search {
+    grid-area: search;
+    display: flex;
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 11px;
+    border-color: color-mix(in srgb, var(--line) 76%, transparent);
+  }
+  .search input { font-size: 16px; }
+  .top-actions { grid-area: actions; gap: 3px; }
+  .top-actions > .create-button { min-width: 36px; min-height: 36px; padding: 8px 10px; font-size: 12px; }
+  .top-actions .theme-button, .top-actions .top-utility-button { width: 36px; min-width: 36px; justify-content: center; padding: 8px; }
+  .top-actions .top-utility-button span, .top-actions .theme-button span { display: none; }
+  .top-profile-menu-popover, .top-workspace-tools-popover, .notifications-popover { position: fixed; top: max(76px, env(safe-area-inset-top)); right: 10px; max-height: calc(100dvh - 88px); }
+
+  .home-screen, .workspace-cards-screen { width: min(100% - 24px, 640px); padding-top: 32px; padding-bottom: 34px; }
+  .workspace-section, .workspace-picker { padding: 18px 16px; border-radius: 15px; }
+  .workspace-options { grid-template-columns: 1fr; }
+  .section-title { align-items: flex-start; gap: 10px; }
+  .section-title h2 { font-size: 18px; }
+  .workspace-cards-section > .section-title { align-items: center; }
+  .workspace-card { min-height: 0; padding: 14px; border-radius: 15px; }
+  .workspace-card > header { flex-direction: row; }
+  .workspace-card-actions { flex: 0 0 auto; }
+  .workspace-card-projects, .workspace-card-new-board, .workspace-card-background-form, .workspace-card-delete { margin-left: 0; }
+  .workspace-card-projects { max-height: none; }
+
+  .board-header { gap: 13px; padding: 19px 12px 12px; }
+  .board-header > :first-child { width: 100%; }
+  .breadcrumbs { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+  .board-title-row { flex-wrap: wrap; gap: 5px 8px; }
+  .board-title-row h1 { max-width: min(100%, 620px); overflow: hidden; font-size: clamp(22px, 7vw, 27px); text-overflow: ellipsis; white-space: nowrap; }
+  .board-tools {
+    width: calc(100% + 24px);
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 4px;
+    margin: 0 -12px;
+    padding: 1px 12px 7px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+  .board-tools::-webkit-scrollbar { display: none; }
+  .board-tools > * { flex: 0 0 auto; scroll-snap-align: start; }
+  .board-tools .segmented-toggle { flex: 0 0 auto; }
+  .board-tools .segmented-toggle button { min-height: 32px; padding-right: 9px; padding-left: 9px; font-size: 11px; }
+  .board-tools .completed-visibility-toggle { min-height: 34px; padding: 0 7px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--surface) 82%, transparent); }
+  .board-tools .completed-visibility-toggle > span { white-space: nowrap; }
+  .board-members-popover, .board-labels-popover, .board-milestones-popover, .filter-popover, .board-menu, .board-scale-popover, .recent-cards-popover { position: fixed; top: max(126px, env(safe-area-inset-top)); right: 10px; left: 10px; width: auto; max-width: none; max-height: calc(100dvh - 138px); }
+
+  .board { min-height: calc(100dvh - 238px); padding: 0 12px max(28px, env(safe-area-inset-bottom)); scroll-padding-inline: 12px; overscroll-behavior-x: contain; }
+  .board-columns { gap: 10px; min-height: calc(100dvh - 238px); padding-right: 18vw; }
+  .column { width: min(84vw, 360px); flex-basis: min(84vw, 360px); max-height: none; min-height: 180px; padding: 9px 7px; border-radius: 13px; scroll-snap-align: start; }
+  .board:not(.board-freeform) { scroll-snap-type: x proximity; }
+  .card-list { max-height: none; overflow: visible; }
+  .task-card { min-height: 112px; padding: 12px; }
+  .task-card h3 { font-size: 14px; }
+  .task-card:hover { transform: none; }
+  .move-button { opacity: .8; }
+  .add-column { flex-basis: min(78vw, 300px); min-height: 80px; }
+  .active-board-filters, .pinned-cards-shelf { margin-right: 12px; margin-left: 12px; }
+
+  .board.board-freeform { height: calc(100dvh - 238px); min-height: 420px; }
+  .board-freeform .column { width: 300px; }
+  .freeform-drawing-toolbar { bottom: max(10px, env(safe-area-inset-bottom)); }
+
+  .modal-backdrop { display: block; overflow-y: auto; padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); }
+  .task-modal, .archive-modal, .workspace-create-modal { width: 100%; max-width: none; margin: 0; border-radius: 15px; }
+  .task-modal { min-height: calc(100dvh - 16px); max-height: none; }
+  .task-layout { min-height: calc(100dvh - 16px); max-height: none; }
+  .task-content { padding: 22px 16px; }
+  .task-sidebar { padding: 18px 16px; }
+  .conversation-panel { margin-right: -16px; margin-bottom: -18px; margin-left: -16px; padding-right: 16px; padding-left: 16px; }
+  .modal-actions { bottom: -22px; margin-right: -16px; margin-bottom: -22px; margin-left: -16px; padding-right: 16px; padding-left: 16px; }
+  .property-preview { max-width: 64%; }
+  .role-guide { grid-template-columns: 1fr; }
+  .workspace-create-modal { padding: 24px 18px; }
+  .workspace-create-form > div { justify-content: stretch; }
+  .workspace-create-form > div > button { flex: 1 1 0; }
+  .toast { right: 10px; bottom: max(10px, env(safe-area-inset-bottom)); left: 10px; }
+}
+
+@media (max-width: 390px) {
+  .top-actions > .create-button { padding-right: 8px; padding-left: 8px; font-size: 0; }
+  .top-actions > .create-button::after { content: '+'; font-size: 20px; line-height: 1; }
+  .brand > span:last-child { display: none; }
+  .board-tools .segmented-toggle button { padding-right: 7px; padding-left: 7px; font-size: 10px; }
+  .board-tools .completed-visibility-toggle > span { display: none; }
+  .column { width: 88vw; flex-basis: 88vw; }
+}
+
 /* A card's discussion and its audit trail need different reading modes. */
 .conversation-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid color-mix(in srgb, var(--line) 82%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--surface-soft) 42%, transparent); }.conversation-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 31px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 750; transition: color .16s ease, background .16s ease, transform .16s ease; }.conversation-tabs button:hover { color: var(--text); background: color-mix(in srgb, var(--surface-raised) 68%, transparent); }.conversation-tabs button.active { color: var(--text); background: var(--surface-raised); box-shadow: 0 2px 8px rgb(0 0 0 / 18%); }.conversation-tabs button span { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }.conversation-tabs button.active span { color: var(--primary); }.conversation-author { font-weight: 800; text-shadow: 0 1px 5px rgb(0 0 0 / 24%); }.conversation-panel .activity-message { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 8px; margin: 0; padding: 9px 2px; border-bottom: 1px solid color-mix(in srgb, var(--line) 54%, transparent); background: transparent; color: #f1f3f6; }.conversation-panel .activity-message:last-child { border-bottom: 0; }.conversation-panel .activity-message .avatar { width: 28px; height: 28px; margin: 1px 0 0; font-size: 8px; }.conversation-panel .activity-message p { color: #f1f3f6; opacity: 1; }.conversation-panel .activity-message small { margin-top: 3px; color: #b7bec9; }
 
