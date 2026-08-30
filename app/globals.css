@@ -1276,6 +1276,15 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .filter-popover, .board-labels-popover, .board-menu, .board-members-popover, .board-milestones-popover, .board-scale-popover, .recent-cards-popover { z-index: 130; }
 .modal-backdrop { z-index: 400; }
 
+/* Home cards create their own stacking contexts, so the topbar needs an explicit layer there too. */
+.app-shell.home-mode > .topbar { z-index: 120; }
+
+.workspace-card-project.has-unread { border-color: color-mix(in srgb, #ff718c 62%, rgb(205 221 238 / 16%)); }
+.workspace-card-project-icon { position: relative; display: grid; place-items: center; width: 24px; height: 24px; color: var(--primary); font-size: 17px; }
+.workspace-card-project-icon > i { position: absolute; top: 0; right: -1px; width: 8px; height: 8px; border: 2px solid #202730; border-radius: 50%; background: #ff647c; box-shadow: 0 0 0 3px rgb(255 100 124 / 15%); animation: workspace-project-unread-pulse 1.8s ease-in-out infinite; }
+@keyframes workspace-project-unread-pulse { 0%, 100% { box-shadow: 0 0 0 3px rgb(255 100 124 / 15%); } 50% { box-shadow: 0 0 0 5px rgb(255 100 124 / 5%); } }
+@media (prefers-reduced-motion: reduce) { .workspace-card-project-icon > i { animation: none; } }
+
 @media (max-width: 760px) {
   /* Card selectors become a bounded bottom sheet instead of opening behind its content. */
   .task-modal .quick-property-popover,
