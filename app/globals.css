@@ -1207,3 +1207,62 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
   }
   .conversation-panel { min-height: 0; }
 }
+
+/* A mobile board is a navigator, not a close-up card reader. Keep enough of
+   the neighbouring columns in view to make swiping and orientation effortless. */
+@media (max-width: 760px) {
+  .board { padding-right: 10px; padding-left: 10px; }
+  .board-columns { gap: 8px; padding-right: 12vw; }
+  .app-shell.board-ui-scale-compact .column,
+  .app-shell.board-ui-scale-normal .column,
+  .app-shell.board-ui-scale-roomy .column {
+    width: clamp(250px, 72vw, 310px);
+    flex-basis: clamp(250px, 72vw, 310px);
+    min-height: 150px;
+    padding: 8px 6px;
+    border-radius: 12px;
+  }
+  .app-shell.board-ui-scale-compact .column-head,
+  .app-shell.board-ui-scale-normal .column-head,
+  .app-shell.board-ui-scale-roomy .column-head { padding: 2px 4px 8px; }
+  .app-shell.board-ui-scale-compact .column-head h2,
+  .app-shell.board-ui-scale-normal .column-head h2,
+  .app-shell.board-ui-scale-roomy .column-head h2 { font-size: 13px; }
+  .app-shell.board-ui-scale-compact .card-list,
+  .app-shell.board-ui-scale-normal .card-list,
+  .app-shell.board-ui-scale-roomy .card-list { gap: 7px; }
+  .app-shell.board-ui-scale-compact .task-card,
+  .app-shell.board-ui-scale-normal .task-card,
+  .app-shell.board-ui-scale-roomy .task-card {
+    min-height: 0;
+    padding: 10px;
+    border-radius: 10px;
+  }
+  .app-shell.board-ui-scale-compact .task-card h3,
+  .app-shell.board-ui-scale-normal .task-card h3,
+  .app-shell.board-ui-scale-roomy .task-card h3 { font-size: 13px; line-height: 1.35; }
+  .app-shell.board-ui-scale-compact .label,
+  .app-shell.board-ui-scale-normal .label,
+  .app-shell.board-ui-scale-roomy .label { padding: 3px 6px; border-radius: 6px; font-size: 10px; }
+  .app-shell.board-ui-scale-compact .due,
+  .app-shell.board-ui-scale-normal .due,
+  .app-shell.board-ui-scale-roomy .due { margin-top: 7px; font-size: 10px; }
+  .app-shell.board-ui-scale-compact .card-footer,
+  .app-shell.board-ui-scale-normal .card-footer,
+  .app-shell.board-ui-scale-roomy .card-footer { min-height: 18px; margin-top: 9px; }
+  .app-shell.board-ui-scale-compact .card-meta,
+  .app-shell.board-ui-scale-normal .card-meta,
+  .app-shell.board-ui-scale-roomy .card-meta { gap: 6px; font-size: 10px; }
+  .app-shell.board-ui-scale-compact .card-avatars .avatar,
+  .app-shell.board-ui-scale-normal .card-avatars .avatar,
+  .app-shell.board-ui-scale-roomy .card-avatars .avatar { width: 20px; height: 20px; font-size: 6px; }
+  .app-shell.board-ui-scale-compact .add-task,
+  .app-shell.board-ui-scale-normal .add-task,
+  .app-shell.board-ui-scale-roomy .add-task { margin-top: 7px; padding: 8px; font-size: 11px; }
+}
+
+@media (max-width: 390px) {
+  .app-shell.board-ui-scale-compact .column,
+  .app-shell.board-ui-scale-normal .column,
+  .app-shell.board-ui-scale-roomy .column { width: 78vw; flex-basis: 78vw; }
+}
