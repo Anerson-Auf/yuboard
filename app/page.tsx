@@ -3560,7 +3560,9 @@ export default function Home() {
     setCardDragPreview((current) => current ? { ...current, x: event.clientX, y: event.clientY } : current);
   }
   function beginPointerCardDrag(event: ReactPointerEvent<HTMLElement>, card: Card, sourceListId: EntityId) {
-    if (event.button !== 0 || boardViewMode !== 'standard' || isPublicViewer || card.frozen) return;
+    // Touch is reserved for scrolling the board and opening a card. Starting a
+    // drag from a finger press makes ordinary mobile navigation unpredictable.
+    if (event.pointerType === 'touch' || event.button !== 0 || boardViewMode !== 'standard' || isPublicViewer || card.frozen) return;
     if (event.target instanceof Element && event.target.closest('button, a, input, textarea, select')) return;
     if (isBulkMode) {
       didDragRef.current = true;
