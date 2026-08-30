@@ -1286,6 +1286,24 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 @media (prefers-reduced-motion: reduce) { .workspace-card-project-icon > i { animation: none; } }
 
 @media (max-width: 760px) {
+  /* Board toolbar popovers are portalled to body, so they cannot be clipped by
+     the horizontally scrolling toolbar or stack behind columns. */
+  .mobile-board-popover {
+    position: fixed;
+    z-index: 350;
+    top: auto;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px;
+    width: auto;
+    max-width: none;
+    max-height: min(72dvh, 580px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 16px;
+    transform-origin: bottom center;
+  }
+
   /* Card selectors become a bounded bottom sheet instead of opening behind its content. */
   .mobile-card-popover {
     position: fixed;
