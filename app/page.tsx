@@ -55,6 +55,8 @@ type BoardActivityItem = { id: string; card_id: string; card_title: string; acti
 type BoardActivityPage = { items: BoardActivityItem[]; page: number; per_page: number; total: number };
 type CardDetail = { checklists: Checklist[]; comments: Comment[]; attachments: Attachment[]; activity: Activity[]; cover_attachment_id: string | null; cover_mode: 'full' | 'top'; background_image_url: string | null; unread_mention_source_ids: string[]; watching: boolean };
 type CardNotification = { id: string; card_id: string; board_id: string; card_title: string; board_title: string; actor_name: string | null; action: string; detail: string; is_read: boolean; created_at: string; source_kind?: string | null; source_id?: string | null };
+type WebPushConfigResponse = { enabled: boolean; public_key: string | null };
+type WebPushSubscriptionPayload = { endpoint: string; keys: { p256dh: string; auth: string } };
 type NotificationTarget = { cardId: string; sourceKind: 'comment_mention' | 'checklist_item_mention'; sourceId: string };
 type AuthAccount = { user: { id: string; username: string; avatar_url: string | null; is_system_owner: boolean } };
 type AuthState = 'checking' | 'signed-out' | 'signed-in' | 'public';
@@ -314,6 +316,22 @@ function fetch(input: RequestInfo | URL, init: RequestInit = {}) {
     if (csrf) headers.set('x-flowboard-csrf', csrf);
   }
   return browserFetch(input, { ...init, headers, credentials: 'include' });
+}
+
+function vapidPublicKeyToBytes(value: string) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = '='.repeat((4 - normalized.length % 4) % 4);
+  const decoded = window.atob(`${normalized}${padding}`);
+  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+}
+
+function isIosStandaloneApp() {
+  const navigatorWithStandalone = navigator as Navigator & { standalone?: boolean };
+  return window.matchMedia('(display-mode: standalone)').matches || navigatorWithStandalone.standalone === true;
+}
+
+function isIosBrowser() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
 const initialColumns: Column[] = [];
@@ -1457,6 +1475,8 @@ export default function Home() {
   const [sessions, setSessions] = useState<AuthSession[]>([]);
   const [notifications, setNotifications] = useState<CardNotification[]>([]);
   const [isNotificationsOpen, setNotificationsOpen] = useState(false);
+  const [webPushStatus, setWebPushStatus] = useState<'idle' | 'enabled' | 'unsupported' | 'install-required' | 'blocked'>('idle');
+  const [isUpdatingWebPush, setUpdatingWebPush] = useState(false);
   const [isWorkspaceToolsOpen, setWorkspaceToolsOpen] = useState(false);
   const [isInboxOpen, setInboxOpen] = useState(false);
   const [isMyTasksOpen, setMyTasksOpen] = useState(false);
@@ -2113,6 +2133,20 @@ export default function Home() {
       .then(async (response) => { if (!response.ok) throw new Error('invitation permission failed'); return response.json() as Promise<{ can_create: boolean }>; })
       .then((payload) => { if (active) setCanCreateAccountInvites(payload.can_create); })
       .catch(() => { if (active) setCanCreateAccountInvites(false); });
+    return () => { active = false; };
+  }, [authState, account?.user.id]);
+
+  useEffect(() => {
+    if (authState !== 'signed-in' || !account) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      setWebPushStatus('unsupported');
+      return;
+    }
+    let active = true;
+    void navigator.serviceWorker.register('/flowboard-sw.js')
+      .then((registration) => registration.pushManager.getSubscription())
+      .then((subscription) => { if (active) setWebPushStatus(subscription ? 'enabled' : 'idle'); })
+      .catch(() => { if (active) setWebPushStatus('unsupported'); });
     return () => { active = false; };
   }, [authState, account?.user.id]);
 
@@ -4029,6 +4063,60 @@ export default function Home() {
     void fetch(`${API_URL}/v1/notifications/${notification.id}/unread`, { method: 'POST' })
       .then((response) => { if (!response.ok) throw new Error('notification unread failed'); })
       .catch(() => { void loadNotifications(); showToast('Не удалось вернуть уведомление в непрочитанные'); });
+  }
+  async function enableWebPushNotifications() {
+    if (isUpdatingWebPush) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      setWebPushStatus('unsupported');
+      showToast('Этот браузер не поддерживает push-уведомления');
+      return;
+    }
+    if (isIosBrowser() && !isIosStandaloneApp()) {
+      setWebPushStatus('install-required');
+      showToast('На iPhone: Safari → Поделиться → На экран «Домой». Затем откройте Flowboard из иконки.');
+      return;
+    }
+    setUpdatingWebPush(true);
+    try {
+      const configResponse = await fetch(`${API_URL}/v1/push/config`);
+      const config = await configResponse.json().catch(() => null) as WebPushConfigResponse | null;
+      if (!configResponse.ok || !config?.enabled || !config.public_key) throw new Error('not configured');
+      const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setWebPushStatus('blocked');
+        showToast('Разрешение на уведомления не выдано');
+        return;
+      }
+      const registration = await navigator.serviceWorker.register('/flowboard-sw.js');
+      const existing = await registration.pushManager.getSubscription();
+      const subscription = existing ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidPublicKeyToBytes(config.public_key) });
+      const payload = subscription.toJSON();
+      if (!payload.endpoint || !payload.keys?.p256dh || !payload.keys.auth) throw new Error('invalid subscription');
+      const saveResponse = await fetch(`${API_URL}/v1/push/subscription`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: payload.endpoint, keys: payload.keys } satisfies WebPushSubscriptionPayload),
+      });
+      if (!saveResponse.ok) throw new Error('subscription save failed');
+      setWebPushStatus('enabled');
+      showToast('Push-уведомления включены на этом устройстве');
+    } catch {
+      showToast('Не удалось включить push-уведомления. Попробуйте ещё раз.');
+    } finally { setUpdatingWebPush(false); }
+  }
+  async function disableWebPushNotifications() {
+    if (isUpdatingWebPush || !('serviceWorker' in navigator)) return;
+    setUpdatingWebPush(true);
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await fetch(`${API_URL}/v1/push/subscription`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: subscription.endpoint }) });
+        await subscription.unsubscribe();
+      }
+      setWebPushStatus('idle');
+      showToast('Push-уведомления отключены на этом устройстве');
+    } catch { showToast('Не удалось отключить push-уведомления'); }
+    finally { setUpdatingWebPush(false); }
   }
   function toggleCardWatch() {
     if (!selected || authState !== 'signed-in' || typeof selected.id !== 'string' || isParkingCardId(selected.id)) return;
@@ -6131,7 +6219,7 @@ export default function Home() {
       <label className={`search ${isContentSearchLoading ? 'searching' : ''}`}><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам и содержимому" aria-label="Поиск по задачам и содержимому" aria-busy={isContentSearchLoading} />{isContentSearchLoading && <i aria-label="Ищем по содержимому" />}</label>
       <div className="top-actions">
         {account && view === 'board' && <BoardPresence people={boardPresence} currentUserId={account.user.id} onPersonClick={(person) => openBoardActivityForUser(person.user_id)} />}
-        {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
+        {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>{webPushStatus !== 'unsupported' && <div className="web-push-control"><button type="button" className={webPushStatus === 'enabled' ? 'enabled' : ''} onClick={() => { void (webPushStatus === 'enabled' ? disableWebPushNotifications() : enableWebPushNotifications()); }} disabled={isUpdatingWebPush}>{isUpdatingWebPush ? 'Проверяем…' : webPushStatus === 'enabled' ? '● Push включены' : '◉ Включить push-уведомления'}</button>{webPushStatus === 'install-required' && <small>Установите Flowboard на экран «Домой» в Safari, затем включите уведомления из иконки приложения.</small>}{webPushStatus === 'blocked' && <small>Разрешите уведомления в настройках браузера, затем попробуйте снова.</small>}</div>}{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
         {account && <ThemePicker className="top-theme-picker" />}
         {account && <div className="top-workspace-tools" ref={workspaceToolsRef}><button className="top-utility-button" type="button" onClick={() => setWorkspaceToolsOpen((current) => !current)} aria-label="Открыть разделы работы" aria-expanded={isWorkspaceToolsOpen}>▦ <span>Работа</span></button>{isWorkspaceToolsOpen && <div className="top-workspace-tools-popover" role="dialog" aria-label="Разделы работы"><button type="button" onClick={() => { setWorkspaceToolsOpen(false); setMyTasksOpen(true); }}>✓ <span><b>Мои задачи</b><small>Назначения, проверки и ожидания</small></span></button>{view === 'board' && <button type="button" onClick={() => { setWorkspaceToolsOpen(false); setSavedViewsOpen(true); }}>▱ <span><b>Сохранённые виды</b><small>Фильтры и порядок этой доски</small></span></button>}<button type="button" onClick={() => { setWorkspaceToolsOpen(false); setNotificationsOpen(false); setInboxOpen(true); }}>▤ <span><b>Входящие</b><small>Все уведомления</small></span></button><button type="button" onClick={() => { setWorkspaceToolsOpen(false); openSessions(); }}>◷ <span><b>Сессии</b><small>Устройства и безопасность</small></span></button>{account.user.is_system_owner && <button type="button" onClick={() => { setWorkspaceToolsOpen(false); openAdmin(); }}>⚙ <span><b>Администрирование</b><small>Аккаунты и пространства</small></span></button>}</div>}</div>}
         {!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }}>＋ Создать</button>}{account && <div className="top-profile-menu" ref={profileMenuRef}><button className="profile-trigger" onClick={() => setProfileMenuOpen((current) => !current)} aria-label="Открыть личное меню" aria-expanded={isProfileMenuOpen}><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>{isProfileMenuOpen && <div className="top-profile-menu-popover" role="dialog" aria-label="Личное меню"><header><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /><span><b>@{account.user.username}</b><small>Личные настройки</small></span></header><button type="button" onClick={() => { setProfileMenuOpen(false); setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }}>◉ <span><b>Профиль</b><small>Ник, пароль, аватар и роли</small></span></button><button type="button" onClick={() => { setProfileMenuOpen(false); openSessions(); }}>◷ <span><b>Сессии</b><small>Устройства и безопасность</small></span></button>{account.user.is_system_owner && <button type="button" onClick={() => { setProfileMenuOpen(false); openAdmin(); }}>⚙ <span><b>Администрирование</b><small>Аккаунты и пространства</small></span></button>}<button className="profile-menu-signout" type="button" onClick={() => { setProfileMenuOpen(false); signOut(); }}>↪ <span><b>Выйти из аккаунта</b><small>Завершить текущую сессию</small></span></button></div>}</div>}</div>

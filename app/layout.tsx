@@ -4,7 +4,10 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Flowboard — работа в потоке',
   description: 'Пространство команды для задач, проектов и решений.',
-  icons: { icon: [{ url: '/icon.png', type: 'image/png', sizes: '512x512' }], apple: [{ url: '/icon.png', type: 'image/png', sizes: '512x512' }] },
+  manifest: '/manifest.webmanifest',
+  themeColor: '#0d1117',
+  appleWebApp: { capable: true, title: 'Flowboard', statusBarStyle: 'black-translucent' },
+  icons: { icon: [{ url: '/flowboard-coin.png', type: 'image/png', sizes: '96x96' }], apple: [{ url: '/flowboard-coin.png', type: 'image/png', sizes: '96x96' }] },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

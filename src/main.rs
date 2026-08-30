@@ -4,6 +4,7 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use base64ct::{Base64UrlUnpadded, Encoding};
 use axum::{
     body::Body,
     extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, State, WebSocketUpgrade},
@@ -25,6 +26,11 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tokio::sync::{broadcast, Mutex};
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use uuid::Uuid;
+use web_push_native::{
+    Auth, WebPushBuilder,
+    jwt_simple::algorithms::ES256KeyPair,
+    p256::PublicKey,
+};
 
 #[derive(Clone)]
 struct AppState {
@@ -34,6 +40,7 @@ struct AppState {
     external_http: reqwest::Client,
     discord_attachment_refresh: Option<DiscordAttachmentRefresh>,
     comment_push: Option<FlowboardCommentPush>,
+    web_push: Option<WebPushConfig>,
     events: broadcast::Sender<()>,
     freeform_live: Arc<Mutex<HashMap<Uuid, FreeformLiveBoard>>>,
     board_presence: Arc<Mutex<HashMap<Uuid, HashMap<Uuid, BoardPresence>>>>,
@@ -60,6 +67,13 @@ struct FlowboardCommentPush {
     endpoint: reqwest::Url,
     token: String,
     public_base_url: Option<reqwest::Url>,
+}
+
+#[derive(Clone)]
+struct WebPushConfig {
+    public_key: String,
+    private_key: String,
+    subject: String,
 }
 
 #[derive(Serialize)]
@@ -1740,6 +1754,44 @@ struct CardMarkdownExportRow {
 }
 
 #[derive(Deserialize)]
+struct WebPushSubscriptionKeysRequest {
+    p256dh: String,
+    auth: String,
+}
+
+#[derive(Deserialize)]
+struct WebPushSubscriptionRequest {
+    endpoint: String,
+    keys: WebPushSubscriptionKeysRequest,
+}
+
+#[derive(Deserialize)]
+struct WebPushUnsubscribeRequest {
+    endpoint: String,
+}
+
+#[derive(Serialize)]
+struct WebPushConfigResponse {
+    enabled: bool,
+    public_key: Option<String>,
+}
+
+#[derive(FromRow)]
+struct WebPushDeliveryJob {
+    notification_id: Uuid,
+    subscription_id: Uuid,
+    endpoint: String,
+    p256dh: String,
+    auth: String,
+    card_id: Uuid,
+    board_id: Uuid,
+    card_title: String,
+    action: String,
+    detail: String,
+    actor_name: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct BoardActivityQuery {
     user_id: Option<Uuid>,
     page: Option<i64>,
@@ -1860,6 +1912,10 @@ async fn main() {
         .expect("could not initialize external media client");
     let discord_attachment_refresh = discord_attachment_refresh_from_env();
     let comment_push = comment_push_from_env();
+    let web_push = web_push_from_env();
+    if let (Some(pool), Some(config)) = (database.clone(), web_push.clone()) {
+        tokio::spawn(run_web_push_delivery_worker(pool, config, external_http.clone()));
+    }
 
     let app = Router::new()
         .route("/health", get(health))
@@ -1976,6 +2032,8 @@ async fn main() {
         .route("/v1/notifications/read", post(mark_all_notifications_read))
         .route("/v1/notifications/{notification_id}/read", post(mark_notification_read))
         .route("/v1/notifications/{notification_id}/unread", post(mark_notification_unread))
+        .route("/v1/push/config", get(get_web_push_config))
+        .route("/v1/push/subscription", put(save_web_push_subscription).delete(remove_web_push_subscription))
         .route("/v1/cards/{card_id}/diagram", get(get_card_diagram).put(replace_card_diagram))
         .route("/v1/cards/{card_id}/diagram/sync", post(sync_card_diagram))
         .route("/v1/cards/{card_id}/diagram/ws", get(card_diagram_websocket))
@@ -2018,7 +2076,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), diagram_presence: Arc::new(Mutex::new(HashMap::new())), diagram_locks: Arc::new(Mutex::new(HashMap::new())), diagram_events: broadcast::channel(1_024).0, freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, web_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), diagram_presence: Arc::new(Mutex::new(HashMap::new())), diagram_locks: Arc::new(Mutex::new(HashMap::new())), diagram_events: broadcast::channel(1_024).0, freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -2458,6 +2516,129 @@ fn comment_push_from_env() -> Option<FlowboardCommentPush> {
             None
         }
     }
+}
+
+fn web_push_from_env() -> Option<WebPushConfig> {
+    let public_key = env::var("FLOWBOARD_WEB_PUSH_VAPID_PUBLIC_KEY").ok()
+        .map(|value| value.trim().to_owned()).filter(|value| (80..=200).contains(&value.len()));
+    let private_key = env::var("FLOWBOARD_WEB_PUSH_VAPID_PRIVATE_KEY").ok()
+        .map(|value| value.trim().to_owned()).filter(|value| (40..=200).contains(&value.len()));
+    let subject = env::var("FLOWBOARD_WEB_PUSH_VAPID_SUBJECT")
+        .unwrap_or_else(|_| "mailto:admin@flowboard.local".to_owned()).trim().to_owned();
+    match (public_key, private_key) {
+        (Some(public_key), Some(private_key)) if subject.starts_with("mailto:") || subject.starts_with("https://") => {
+            Some(WebPushConfig { public_key, private_key, subject })
+        }
+        _ => {
+            tracing::warn!("Web Push is disabled: configure FLOWBOARD_WEB_PUSH_VAPID_PUBLIC_KEY, FLOWBOARD_WEB_PUSH_VAPID_PRIVATE_KEY and FLOWBOARD_WEB_PUSH_VAPID_SUBJECT");
+            None
+        }
+    }
+}
+
+enum WebPushDeliveryError {
+    InvalidSubscription(String),
+    Transient(String),
+}
+
+async fn run_web_push_delivery_worker(pool: PgPool, config: WebPushConfig, http: reqwest::Client) {
+    let mut tick = tokio::time::interval(Duration::from_secs(3));
+    loop {
+        tick.tick().await;
+        if let Err(error) = deliver_web_push_jobs(&pool, &config, &http).await {
+            tracing::error!(?error, "web push delivery worker failed");
+        }
+    }
+}
+
+async fn deliver_web_push_jobs(pool: &PgPool, config: &WebPushConfig, http: &reqwest::Client) -> Result<(), sqlx::Error> {
+    let jobs = sqlx::query_as::<_, WebPushDeliveryJob>(
+        "SELECT d.notification_id, d.subscription_id, s.endpoint, s.p256dh, s.auth, n.card_id, c.board_id, c.title AS card_title, n.action, n.detail, u.username AS actor_name \
+         FROM web_push_delivery_jobs d \
+         INNER JOIN web_push_subscriptions s ON s.id = d.subscription_id \
+         INNER JOIN card_notifications n ON n.id = d.notification_id \
+         INNER JOIN cards c ON c.id = n.card_id \
+         LEFT JOIN users u ON u.id = n.actor_id \
+         WHERE d.delivered_at IS NULL AND d.next_attempt_at <= now() AND (d.locked_until IS NULL OR d.locked_until < now()) AND s.disabled_at IS NULL \
+         ORDER BY d.next_attempt_at, d.notification_id LIMIT 20",
+    )
+    .fetch_all(pool)
+    .await?;
+    for job in jobs {
+        let leased = sqlx::query(
+            "UPDATE web_push_delivery_jobs SET locked_until = now() + interval '45 seconds', attempts = attempts + 1, updated_at = now() \
+             WHERE notification_id = $1 AND subscription_id = $2 AND delivered_at IS NULL AND (locked_until IS NULL OR locked_until < now())",
+        )
+        .bind(job.notification_id)
+        .bind(job.subscription_id)
+        .execute(pool)
+        .await?;
+        if leased.rows_affected() == 0 { continue; }
+        match send_web_push(config, &job, http).await {
+            Ok(()) => {
+                sqlx::query("UPDATE web_push_delivery_jobs SET delivered_at = now(), locked_until = NULL, last_error = '', updated_at = now() WHERE notification_id = $1 AND subscription_id = $2")
+                    .bind(job.notification_id).bind(job.subscription_id).execute(pool).await?;
+                sqlx::query("UPDATE web_push_subscriptions SET last_success_at = now(), updated_at = now() WHERE id = $1")
+                    .bind(job.subscription_id).execute(pool).await?;
+            }
+            Err(WebPushDeliveryError::InvalidSubscription(error)) => {
+                tracing::info!(notification_id = %job.notification_id, subscription_id = %job.subscription_id, %error, "web push subscription expired or became invalid");
+                sqlx::query("UPDATE web_push_subscriptions SET disabled_at = now(), updated_at = now() WHERE id = $1")
+                    .bind(job.subscription_id).execute(pool).await?;
+                sqlx::query("UPDATE web_push_delivery_jobs SET delivered_at = now(), locked_until = NULL, last_error = $3, updated_at = now() WHERE notification_id = $1 AND subscription_id = $2")
+                    .bind(job.notification_id).bind(job.subscription_id).bind(error.chars().take(1_000).collect::<String>()).execute(pool).await?;
+            }
+            Err(WebPushDeliveryError::Transient(error)) => {
+                tracing::warn!(notification_id = %job.notification_id, subscription_id = %job.subscription_id, %error, "web push delivery failed; will retry");
+                sqlx::query(
+                    "UPDATE web_push_delivery_jobs \
+                     SET locked_until = NULL, next_attempt_at = now() + make_interval(secs => LEAST(3600, 15 * (2 ^ LEAST(attempts, 8)))::int), last_error = $3, updated_at = now() \
+                     WHERE notification_id = $1 AND subscription_id = $2",
+                )
+                .bind(job.notification_id).bind(job.subscription_id).bind(error.chars().take(1_000).collect::<String>()).execute(pool).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn send_web_push(config: &WebPushConfig, job: &WebPushDeliveryJob, http: &reqwest::Client) -> Result<(), WebPushDeliveryError> {
+    let vapid_private = Base64UrlUnpadded::decode_vec(&config.private_key)
+        .map_err(|error| WebPushDeliveryError::InvalidSubscription(error.to_string()))?;
+    let vapid_key = ES256KeyPair::from_bytes(&vapid_private)
+        .map_err(|error| WebPushDeliveryError::InvalidSubscription(error.to_string()))?;
+    let p256dh = Base64UrlUnpadded::decode_vec(&job.p256dh)
+        .map_err(|error| WebPushDeliveryError::InvalidSubscription(error.to_string()))?;
+    let auth = Base64UrlUnpadded::decode_vec(&job.auth)
+        .map_err(|error| WebPushDeliveryError::InvalidSubscription(error.to_string()))?;
+    let endpoint = job.endpoint.parse()
+        .map_err(|error: http::uri::InvalidUri| WebPushDeliveryError::InvalidSubscription(error.to_string()))?;
+    let public_key = PublicKey::from_sec1_bytes(&p256dh)
+        .map_err(|error| WebPushDeliveryError::InvalidSubscription(error.to_string()))?;
+    let actor = job.actor_name.as_deref().map(|value| format!("@{value} · ")).unwrap_or_default();
+    let detail = job.detail.trim();
+    let body = if detail.is_empty() { format!("{actor}{}", job.card_title) } else { format!("{actor}{} — {}", job.card_title, detail.chars().take(220).collect::<String>()) };
+    let payload = json!({
+        "title": job.action,
+        "body": body,
+        "tag": format!("flowboard-{}", job.notification_id),
+        "url": format!("/?board={}&card={}", job.board_id, job.card_id),
+    });
+    let request = WebPushBuilder::new(endpoint, public_key, Auth::clone_from_slice(&auth))
+        .with_vapid(&vapid_key, &config.subject)
+        .build(payload.to_string().into_bytes())
+        .map_err(|error| WebPushDeliveryError::InvalidSubscription(error.to_string()))?;
+    let response = http
+        .post(request.uri().to_string())
+        .headers(request.headers().clone())
+        .body(request.into_body())
+        .send()
+        .await
+        .map_err(|error| WebPushDeliveryError::Transient(error.to_string()))?;
+    if response.status().is_success() { return Ok(()); }
+    let status = response.status().as_u16();
+    let message = format!("Push service returned HTTP {status}");
+    if matches!(status, 404 | 410) { Err(WebPushDeliveryError::InvalidSubscription(message)) } else { Err(WebPushDeliveryError::Transient(message)) }
 }
 
 async fn auth_state(
@@ -5023,6 +5204,64 @@ async fn mark_notification_unread(State(state): State<AppState>, current: Curren
 async fn mark_all_notifications_read(State(state): State<AppState>, current: CurrentUser) -> Result<StatusCode, ApiError> {
     sqlx::query("UPDATE card_notifications SET read_at = now() WHERE user_id = $1 AND read_at IS NULL")
         .bind(current.id).execute(database(&state)?).await.map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_web_push_config(State(state): State<AppState>, _current: CurrentUser) -> ApiResult<WebPushConfigResponse> {
+    Ok(Json(WebPushConfigResponse {
+        enabled: state.web_push.is_some(),
+        public_key: state.web_push.as_ref().map(|config| config.public_key.clone()),
+    }))
+}
+
+fn validate_web_push_subscription(request: &WebPushSubscriptionRequest) -> Result<(), ApiError> {
+    let endpoint = reqwest::Url::parse(request.endpoint.trim())
+        .map_err(|_| ApiError::bad_request("Push endpoint is invalid."))?;
+    if endpoint.scheme() != "https" || request.endpoint.len() > 2_000 || !is_allowed_web_push_host(endpoint.host_str()) {
+        return Err(ApiError::bad_request("Push endpoint must belong to a supported browser push service."));
+    }
+    if !(40..=200).contains(&request.keys.p256dh.len()) || !(12..=200).contains(&request.keys.auth.len()) {
+        return Err(ApiError::bad_request("Push subscription keys are invalid."));
+    }
+    Ok(())
+}
+
+fn is_allowed_web_push_host(host: Option<&str>) -> bool {
+    let Some(host) = host.map(|value| value.trim_end_matches('.').to_ascii_lowercase()) else { return false; };
+    host == "fcm.googleapis.com"
+        || host == "updates.push.services.mozilla.com"
+        || host.ends_with(".push.services.mozilla.com")
+        || host.ends_with(".push.apple.com")
+}
+
+async fn save_web_push_subscription(
+    State(state): State<AppState>,
+    current: CurrentUser,
+    headers: HeaderMap,
+    Json(request): Json<WebPushSubscriptionRequest>,
+) -> Result<StatusCode, ApiError> {
+    if state.web_push.is_none() {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "web_push_not_configured", "Push notifications are not configured by the administrator yet.".to_owned()));
+    }
+    validate_web_push_subscription(&request)?;
+    let user_agent = headers.get(header::USER_AGENT).and_then(|value| value.to_str().ok()).unwrap_or_default().chars().take(500).collect::<String>();
+    sqlx::query(
+        "INSERT INTO web_push_subscriptions (id, user_id, endpoint, p256dh, auth, user_agent) VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, user_agent = EXCLUDED.user_agent, disabled_at = NULL, updated_at = now()",
+    )
+    .bind(Uuid::new_v4()).bind(current.id).bind(request.endpoint.trim()).bind(request.keys.p256dh.trim()).bind(request.keys.auth.trim()).bind(user_agent)
+    .execute(database(&state)?).await.map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_web_push_subscription(
+    State(state): State<AppState>,
+    current: CurrentUser,
+    Json(request): Json<WebPushUnsubscribeRequest>,
+) -> Result<StatusCode, ApiError> {
+    if request.endpoint.trim().is_empty() { return Err(ApiError::bad_request("Push endpoint is required.")); }
+    sqlx::query("DELETE FROM web_push_subscriptions WHERE user_id = $1 AND endpoint = $2")
+        .bind(current.id).bind(request.endpoint.trim()).execute(database(&state)?).await.map_err(ApiError::internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
