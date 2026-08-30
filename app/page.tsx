@@ -55,9 +55,16 @@ type BoardActivityItem = { id: string; card_id: string; card_title: string; acti
 type BoardActivityPage = { items: BoardActivityItem[]; page: number; per_page: number; total: number };
 type CardDetail = { checklists: Checklist[]; comments: Comment[]; attachments: Attachment[]; activity: Activity[]; cover_attachment_id: string | null; cover_mode: 'full' | 'top'; background_image_url: string | null; unread_mention_source_ids: string[]; watching: boolean };
 type CardNotification = { id: string; card_id: string; board_id: string; card_title: string; board_title: string; actor_name: string | null; action: string; detail: string; is_read: boolean; created_at: string; source_kind?: string | null; source_id?: string | null };
+type NotificationSection = 'all' | 'attention' | 'updates';
 type WebPushConfigResponse = { enabled: boolean; public_key: string | null };
 type WebPushSubscriptionPayload = { endpoint: string; keys: { p256dh: string; auth: string } };
 type NotificationTarget = { cardId: string; sourceKind: 'comment_mention' | 'checklist_item_mention'; sourceId: string };
+
+function notificationNeedsAttention(notification: Pick<CardNotification, 'action' | 'detail'>) {
+  return notification.action === 'Нужна ваша проверка'
+    || notification.action === 'Ожидают вашего действия'
+    || /(?:вас назначили|ждём вас|ждут вас)/i.test(notification.detail);
+}
 type AuthAccount = { user: { id: string; username: string; avatar_url: string | null; is_system_owner: boolean } };
 type AuthState = 'checking' | 'signed-out' | 'signed-in' | 'public';
 type Workspace = { id: string; name: string; background_image_url?: string | null; can_manage?: boolean };
@@ -1488,6 +1495,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<AuthSession[]>([]);
   const [notifications, setNotifications] = useState<CardNotification[]>([]);
   const [isNotificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationSection, setNotificationSection] = useState<NotificationSection>('all');
   const [webPushStatus, setWebPushStatus] = useState<'idle' | 'enabled' | 'unsupported' | 'install-required' | 'blocked'>('idle');
   const [isUpdatingWebPush, setUpdatingWebPush] = useState(false);
   const [isWorkspaceToolsOpen, setWorkspaceToolsOpen] = useState(false);
@@ -1822,6 +1830,14 @@ export default function Home() {
   const hasSelectedCardBackground = Boolean(selected?.backgroundImageUrl && !unavailableCardBackgroundUrls.has(assetUrl(selected.backgroundImageUrl)));
   const selectedColumnTitle = selected ? columns.find((column) => column.cards.some((card) => String(card.id) === String(selected.id)))?.title : null;
   const unreadNotificationCount = notifications.filter((notification) => !notification.is_read).length;
+  const attentionNotifications = useMemo(() => notifications.filter(notificationNeedsAttention), [notifications]);
+  const updateNotifications = useMemo(() => notifications.filter((notification) => !notificationNeedsAttention(notification)), [notifications]);
+  const notificationSections = useMemo(() => [
+    { id: 'all' as const, label: 'Все', count: notifications.length },
+    ...(attentionNotifications.length ? [{ id: 'attention' as const, label: 'Нужно от вас', count: attentionNotifications.length }] : []),
+    ...(updateNotifications.length ? [{ id: 'updates' as const, label: 'Обновления', count: updateNotifications.length }] : []),
+  ], [attentionNotifications.length, notifications.length, updateNotifications.length]);
+  const visibleNotifications = notificationSection === 'attention' ? attentionNotifications : notificationSection === 'updates' ? updateNotifications : notifications;
   const unreadNotificationBoardIds = useMemo(
     () => new Set(notifications.filter((notification) => !notification.is_read).map((notification) => notification.board_id)),
     [notifications],
@@ -4076,9 +4092,22 @@ export default function Home() {
     setWorkspaceToolsOpen(false);
     setNotificationsOpen((current) => {
       const next = !current;
-      if (next) { setNotificationsLoading(true); void loadNotifications().finally(() => setNotificationsLoading(false)); }
+      if (next) { setNotificationSection('all'); setNotificationsLoading(true); void loadNotifications().finally(() => setNotificationsLoading(false)); }
       return next;
     });
+  }
+  function renderNotificationsControl() {
+    return <div className="notifications-control">
+      <button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>
+      {isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления">
+        <div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>
+        {webPushStatus !== 'unsupported' && <div className="web-push-control"><button type="button" className={webPushStatus === 'enabled' ? 'enabled' : ''} onClick={() => { void (webPushStatus === 'enabled' ? disableWebPushNotifications() : enableWebPushNotifications()); }} disabled={isUpdatingWebPush}>{isUpdatingWebPush ? 'Проверяем…' : webPushStatus === 'enabled' ? '● Push включены' : '◉ Включить push-уведомления'}</button>{webPushStatus === 'install-required' && <small>Установите Flowboard на экран «Домой» в Safari, затем включите уведомления из иконки приложения.</small>}{webPushStatus === 'blocked' && <small>Разрешите уведомления в настройках браузера, затем попробуйте снова.</small>}</div>}
+        {notifications.length > 0 && <nav className="notification-tabs" aria-label="Категории уведомлений">
+          {notificationSections.map((item) => <button type="button" key={item.id} className={notificationSection === item.id ? 'active' : ''} onClick={() => setNotificationSection(item.id)}>{item.label}<span>{item.count}</span></button>)}
+        </nav>}
+        {isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : visibleNotifications.length ? <div className="notification-list">{visibleNotifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">{notifications.length ? 'В этой категории пока нет событий.' : 'Новых событий нет.'}</p>}
+      </div>}
+    </div>;
   }
   function openNotification(notification: CardNotification) {
     setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, is_read: true } : item));
@@ -6261,7 +6290,7 @@ export default function Home() {
       <label className={`search ${isContentSearchLoading ? 'searching' : ''}`}><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по задачам и содержимому" aria-label="Поиск по задачам и содержимому" aria-busy={isContentSearchLoading} />{isContentSearchLoading && <i aria-label="Ищем по содержимому" />}</label>
       <div className="top-actions">
         {account && view === 'board' && <BoardPresence people={boardPresence} currentUserId={account.user.id} onPersonClick={(person) => openBoardActivityForUser(person.user_id)} />}
-        {account && <div className="notifications-control"><button className={`top-utility-button notification-trigger ${unreadNotificationCount ? 'has-unread' : ''}`} type="button" onClick={toggleNotifications} aria-label="Открыть уведомления" aria-expanded={isNotificationsOpen}>♢ <span>Уведомления</span>{unreadNotificationCount > 0 && <i>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</i>}</button>{isNotificationsOpen && <div className="notifications-popover" role="dialog" aria-label="Уведомления"><div className="popover-heading"><b>Уведомления</b>{unreadNotificationCount > 0 && <button type="button" className="text-action notification-mark-all" onClick={markAllNotificationsRead} title="Прочитать всё" aria-label="Прочитать всё"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m1.75 8.25 3.05 3.05L9.45 5.5m-2.9 2.75L9.6 11.3l4.65-5.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}</div>{webPushStatus !== 'unsupported' && <div className="web-push-control"><button type="button" className={webPushStatus === 'enabled' ? 'enabled' : ''} onClick={() => { void (webPushStatus === 'enabled' ? disableWebPushNotifications() : enableWebPushNotifications()); }} disabled={isUpdatingWebPush}>{isUpdatingWebPush ? 'Проверяем…' : webPushStatus === 'enabled' ? '● Push включены' : '◉ Включить push-уведомления'}</button>{webPushStatus === 'install-required' && <small>Установите Flowboard на экран «Домой» в Safari, затем включите уведомления из иконки приложения.</small>}{webPushStatus === 'blocked' && <small>Разрешите уведомления в настройках браузера, затем попробуйте снова.</small>}</div>}{isNotificationsLoading ? <p className="empty-comments">Загружаем…</p> : notifications.length ? <div className="notification-list">{notifications.map((notification) => <button type="button" key={notification.id} className={notification.is_read ? 'read' : 'unread'} onClick={() => openNotification(notification)}><span>{notification.actor_name ? `@${notification.actor_name} · ` : ''}{notification.action}</span><b>{notification.card_title}</b>{notification.detail && <small>{notification.detail}</small>}<time>{new Date(notification.created_at).toLocaleString('ru-RU')}</time></button>)}</div> : <p className="empty-comments">Новых событий нет.</p>}</div>}</div>}
+        {account && renderNotificationsControl()}
         {account && <ThemePicker className="top-theme-picker" />}
         {account && <div className="top-workspace-tools" ref={workspaceToolsRef}><button className="top-utility-button" type="button" onClick={() => setWorkspaceToolsOpen((current) => !current)} aria-label="Открыть разделы работы" aria-expanded={isWorkspaceToolsOpen}>▦ <span>Работа</span></button>{isWorkspaceToolsOpen && <div className="top-workspace-tools-popover" role="dialog" aria-label="Разделы работы"><button type="button" onClick={() => { setWorkspaceToolsOpen(false); setMyTasksOpen(true); }}>✓ <span><b>Мои задачи</b><small>Назначения, проверки и ожидания</small></span></button>{view === 'board' && <button type="button" onClick={() => { setWorkspaceToolsOpen(false); setSavedViewsOpen(true); }}>▱ <span><b>Сохранённые виды</b><small>Фильтры и порядок этой доски</small></span></button>}<button type="button" onClick={() => { setWorkspaceToolsOpen(false); setNotificationsOpen(false); setInboxOpen(true); }}>▤ <span><b>Входящие</b><small>Все уведомления</small></span></button><button type="button" onClick={() => { setWorkspaceToolsOpen(false); openSessions(); }}>◷ <span><b>Сессии</b><small>Устройства и безопасность</small></span></button>{account.user.is_system_owner && <button type="button" onClick={() => { setWorkspaceToolsOpen(false); openAdmin(); }}>⚙ <span><b>Администрирование</b><small>Аккаунты и пространства</small></span></button>}</div>}</div>}
         {!isPublicViewer && <button className="create-button" onClick={() => { openBoard(); if (persistence !== 'connecting') { const firstColumn = columns[0]; if (firstColumn) setComposerOpen(firstColumn.id); else addColumn(); } }} aria-label="Создать задачу" title="Создать задачу">＋ Создать</button>}{account && <div className="top-profile-menu" ref={profileMenuRef}><button className="profile-trigger" onClick={() => setProfileMenuOpen((current) => !current)} aria-label="Открыть личное меню" aria-expanded={isProfileMenuOpen}><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /></button>{isProfileMenuOpen && <div className="top-profile-menu-popover" role="dialog" aria-label="Личное меню"><header><ProfileAvatar account={account} member={currentMember} version={avatarVersion} /><span><b>@{account.user.username}</b><small>Личные настройки</small></span></header><button type="button" onClick={() => { setProfileMenuOpen(false); setProfileOpen(true); setProfilePanel('overview'); setProfileName(account.user.username); setProfileError(''); }}>◉ <span><b>Профиль</b><small>Ник, пароль, аватар и роли</small></span></button><button type="button" onClick={() => { setProfileMenuOpen(false); openSessions(); }}>◷ <span><b>Сессии</b><small>Устройства и безопасность</small></span></button>{account.user.is_system_owner && <button type="button" onClick={() => { setProfileMenuOpen(false); openAdmin(); }}>⚙ <span><b>Администрирование</b><small>Аккаунты и пространства</small></span></button>}<button className="profile-menu-signout" type="button" onClick={() => { setProfileMenuOpen(false); signOut(); }}>↪ <span><b>Выйти из аккаунта</b><small>Завершить текущую сессию</small></span></button></div>}</div>}</div>

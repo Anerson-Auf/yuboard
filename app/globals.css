@@ -1333,3 +1333,20 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
     overflow-y: auto;
   }
 }
+
+/* The quick notification center mirrors Inbox categories while keeping its
+   compact, keyboard-friendly popover form. Only the event list scrolls. */
+.notifications-popover { display: flex; flex-direction: column; overflow: hidden; }
+.notification-tabs { display: flex; flex: 0 0 auto; gap: 5px; padding: 0 2px 8px; overflow-x: auto; scrollbar-width: none; }
+.notification-tabs::-webkit-scrollbar { display: none; }
+.notification-tabs button { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 5px; min-height: 28px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--line) 78%, transparent); border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 750; }
+.notification-tabs button:hover { border-color: color-mix(in srgb, var(--primary) 48%, var(--line)); color: var(--text); }
+.notification-tabs button.active { border-color: color-mix(in srgb, var(--primary) 68%, var(--line)); background: color-mix(in srgb, var(--primary) 13%, transparent); color: var(--primary); }
+.notification-tabs button span { display: grid; min-width: 16px; height: 16px; place-items: center; border-radius: 5px; background: color-mix(in srgb, var(--surface-soft) 78%, transparent); color: inherit; font-size: 9px; font-variant-numeric: tabular-nums; }
+.notifications-popover .notification-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+
+@media (max-width: 760px) {
+  .notifications-popover { right: 10px; left: 10px; width: auto; max-height: calc(100dvh - 88px); }
+  .notification-tabs { padding-bottom: 7px; }
+  .notification-tabs button { min-height: 30px; padding-right: 9px; padding-left: 9px; font-size: 11px; }
+}

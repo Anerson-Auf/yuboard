@@ -111,10 +111,10 @@ export default function BoardPresence({ people, currentUserId, onPersonClick }: 
   const others = useMemo(() => everyone.filter((person) => person.user_id !== currentUserId), [currentUserId, everyone]);
   const count = everyone.length || 1;
   return <div className="board-presence-control" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
-    <button className="board-presence" type="button" onClick={() => setOpen((current) => !current)} aria-expanded={isOpen} aria-haspopup="dialog" title={others.length ? `На доске: ${others.map((person) => '@' + person.username).join(', ')}` : 'Сейчас на доске только вы'}>
+    <button className="board-presence" type="button" onClick={() => setOpen((current) => !current)} aria-expanded={isOpen} aria-haspopup="dialog" aria-label={others.length ? `На доске: ${others.map((person) => '@' + person.username).join(', ')}` : 'Сейчас на доске только вы'} title={others.length ? `На доске: ${others.map((person) => '@' + person.username).join(', ')}` : 'Сейчас на доске только вы'}>
       <span className="presence-dot" />
       <PresenceFaces people={others} />
-      <span>{count > 1 ? `${count} на доске` : 'Вы на доске'}</span>
+      <span className="board-presence-label">{count > 1 ? `${count} на доске` : 'Вы на доске'}</span>
     </button>
     {isOpen && <div className="board-presence-popover" role="dialog" aria-label="Кто сейчас на доске">
       <div className="board-presence-heading"><b>Сейчас на доске</b><span>{count}</span></div>
