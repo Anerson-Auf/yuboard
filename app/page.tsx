@@ -1752,9 +1752,13 @@ export default function Home() {
   }, [recentCardIds, recentCardsStorageKey]);
 
   useEffect(() => {
+    const defaultBoardUiScale: BoardUiScale = window.matchMedia('(max-width: 760px)').matches
+      ? 'compact'
+      : 'normal';
+
     if (!boardPreferencesStorageKey) {
       setBoardPreferencesLoadedKey(null);
-      setBoardUiScale('normal');
+      setBoardUiScale(defaultBoardUiScale);
       setBoardViewMode('standard');
       setFilterMode('all');
       setLabelFilterIds([]);
@@ -1774,7 +1778,7 @@ export default function Home() {
     const legacyScale = localStorage.getItem(boardUiScaleStorageKey ?? '');
     setBoardUiScale(stored.boardUiScale === 'compact' || stored.boardUiScale === 'roomy' || stored.boardUiScale === 'normal'
       ? stored.boardUiScale
-      : legacyScale === 'compact' || legacyScale === 'roomy' ? legacyScale : 'normal');
+      : legacyScale === 'compact' || legacyScale === 'roomy' || legacyScale === 'normal' ? legacyScale : defaultBoardUiScale);
     setBoardViewMode(authState === 'public' ? 'standard' : stored.boardViewMode === 'freeform' || stored.boardViewMode === 'dependencies' || stored.boardViewMode === 'standard' ? stored.boardViewMode : 'standard');
     setFilterMode(stored.filterMode === 'assigned' || stored.filterMode === 'my_roles' || stored.filterMode === 'due' || stored.filterMode === 'overdue' || stored.filterMode === 'unread' || stored.filterMode === 'all' ? stored.filterMode : 'all');
     setLabelFilterIds(Array.isArray(stored.labelFilterIds) ? stored.labelFilterIds.filter((value): value is string => typeof value === 'string') : []);

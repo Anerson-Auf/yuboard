@@ -1266,3 +1266,33 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
   .app-shell.board-ui-scale-normal .column,
   .app-shell.board-ui-scale-roomy .column { width: 78vw; flex-basis: 78vw; }
 }
+
+/* Board chrome lives above all card-local layers; modal content stays above it. */
+.board { position: relative; z-index: 0; isolation: isolate; }
+.topbar { z-index: 120; }
+.board-header { z-index: 100; }
+.board-tools { z-index: 110; }
+.filter-control, .board-labels-control, .board-menu-control, .board-members-control, .board-milestones-control, .board-scale-control, .recent-cards-control { z-index: 120; }
+.filter-popover, .board-labels-popover, .board-menu, .board-members-popover, .board-milestones-popover, .board-scale-popover, .recent-cards-popover { z-index: 130; }
+.modal-backdrop { z-index: 400; }
+
+@media (max-width: 760px) {
+  /* Card selectors become a bounded bottom sheet instead of opening behind its content. */
+  .task-modal .quick-property-popover,
+  .task-modal .property-popover,
+  .task-modal .assignees-popover,
+  .task-modal .card-milestone-popover,
+  .task-modal .card-roles-popover {
+    position: fixed;
+    z-index: 450;
+    top: auto;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px;
+    width: auto;
+    max-width: none;
+    max-height: min(64dvh, 520px);
+    overflow-y: auto;
+    border-radius: 16px;
+  }
+}
