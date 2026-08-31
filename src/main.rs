@@ -1907,7 +1907,7 @@ async fn main() {
     let (events, _) = broadcast::channel(128);
     let external_http = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::limited(3))
+        .redirect(external_attachment_redirect_policy())
         .build()
         .expect("could not initialize external media client");
     let discord_attachment_refresh = discord_attachment_refresh_from_env();
@@ -2269,8 +2269,8 @@ async fn has_registered_account(pool: &PgPool) -> Result<bool, ApiError> {
         .map_err(ApiError::internal)
 }
 
-fn attachment_extension(media_type: &str, original_name: &str) -> Option<&'static str> {
-    let from_media_type = match media_type {
+fn attachment_extension(media_type: &str) -> Option<&'static str> {
+    match media_type {
         "image/jpeg" => Some("jpg"),
         "image/png" => Some("png"),
         "image/gif" => Some("gif"),
@@ -2284,10 +2284,23 @@ fn attachment_extension(media_type: &str, original_name: &str) -> Option<&'stati
         "audio/mpeg" => Some("mp3"),
         "audio/wav" => Some("wav"),
         _ => None,
+    }
+}
+
+fn media_response_headers(media_type: &str, cache_control: &'static str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let content_type = match attachment_extension(media_type) {
+        Some(_) => media_type,
+        None => "application/octet-stream",
     };
-    from_media_type.or_else(|| match original_name.rsplit('.').next()?.to_ascii_lowercase().as_str() {
-        "jpg" | "jpeg" => Some("jpg"), "png" => Some("png"), "gif" => Some("gif"), "webp" => Some("webp"), "mp4" => Some("mp4"), "webm" => Some("webm"), "mov" => Some("mov"), "ogg" => Some("ogg"), "m4a" => Some("m4a"), "mp3" => Some("mp3"), "wav" => Some("wav"), _ => None,
-    })
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(content_type).expect("supported media types are valid headers"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_control));
+    headers.insert(HeaderName::from_static("x-content-type-options"), HeaderValue::from_static("nosniff"));
+    headers.insert(HeaderName::from_static("content-security-policy"), HeaderValue::from_static("sandbox"));
+    if content_type == "application/octet-stream" {
+        headers.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment"));
+    }
+    headers
 }
 
 async fn health(State(state): State<AppState>) -> Json<Health> {
@@ -2476,6 +2489,22 @@ fn is_external_attachment_url(url: &reqwest::Url) -> bool {
             | Some("trello-attachments.s3.amazonaws.com")
             | Some("attachments.trello.services")
     ))
+}
+
+fn external_redirect_target_allowed(url: &reqwest::Url, previous_count: usize) -> bool {
+    previous_count < 3 && is_external_attachment_url(url)
+}
+
+fn external_attachment_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 3 {
+            attempt.error("too many external attachment redirects")
+        } else if external_redirect_target_allowed(attempt.url(), attempt.previous().len()) {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
 }
 
 fn discord_attachment_refresh_from_env() -> Option<DiscordAttachmentRefresh> {
@@ -2719,7 +2748,7 @@ async fn upload_avatar(State(state): State<AppState>, current: CurrentUser, mut 
     if !matches!(media_type.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp") { return Err(ApiError::bad_request("Avatar must be JPEG, PNG, GIF, or WebP.")); }
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Avatar upload could not be read."))?;
     if bytes.is_empty() || bytes.len() > 5 * 1024 * 1024 { return Err(ApiError::bad_request("Avatar must be between 1 byte and 5 MiB.")); }
-    let extension = attachment_extension(&media_type, "avatar").ok_or_else(|| ApiError::bad_request("Avatar format is invalid."))?;
+    let extension = attachment_extension(&media_type).ok_or_else(|| ApiError::bad_request("Avatar format is invalid."))?;
     let key = format!("avatars/{}.{}", Uuid::new_v4(), extension);
     let path = state.upload_dir.join(&key);
     if let Some(parent) = path.parent() { tokio::fs::create_dir_all(parent).await.map_err(|_| ApiError::storage())?; }
@@ -2736,7 +2765,7 @@ async fn avatar_response(state: &AppState, user_id: Uuid) -> Result<Response, Ap
     let avatar = sqlx::query_as::<_, (String, String)>("SELECT avatar_key, avatar_media_type FROM users WHERE id = $1 AND disabled_at IS NULL AND avatar_key IS NOT NULL AND avatar_media_type IS NOT NULL")
         .bind(user_id).fetch_optional(database(state)?).await.map_err(ApiError::internal)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "avatar_not_found", "Avatar was not found.".to_owned()))?;
     let bytes = tokio::fs::read(state.upload_dir.join(avatar.0)).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, "avatar_not_found", "Avatar was not found.".to_owned()))?;
-    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&avatar.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], bytes).into_response())
+    Ok((media_response_headers(&avatar.1, "no-store"), bytes).into_response())
 }
 
 async fn download_avatar(State(state): State<AppState>, current: CurrentUser) -> Result<Response, ApiError> {
@@ -3068,7 +3097,7 @@ async fn upload_workspace_background(State(state): State<AppState>, current: Cur
     }
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Workspace background image could not be read."))?;
     if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Workspace background must be between 1 byte and 50 MiB.")); }
-    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Workspace background image type is unsupported."))?;
+    let extension = attachment_extension(&media_type).ok_or_else(|| ApiError::bad_request("Workspace background image type is unsupported."))?;
     let object_key = format!("workspace-background-{}.{}", Uuid::new_v4(), extension);
     let path = state.upload_dir.join(&object_key);
     tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "workspace background write failed"); ApiError::storage() })?;
@@ -3093,7 +3122,7 @@ async fn download_workspace_background(State(state): State<AppState>, current: C
         if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "workspace_background_not_found", "Workspace background file was not found.".to_owned()) }
         else { tracing::error!(?error, "workspace background read failed"); ApiError::storage() }
     })?;
-    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"))], bytes).into_response())
+    Ok((media_response_headers(&background.1, "private, no-store"), bytes).into_response())
 }
 
 async fn list_workspaces(State(state): State<AppState>, current: CurrentUser) -> ApiResult<Vec<WorkspaceResponse>> {
@@ -4229,7 +4258,7 @@ async fn upload_board_background(State(state): State<AppState>, current: Current
     }
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Background image could not be read."))?;
     if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Board background must be between 1 byte and 50 MiB.")); }
-    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Board background image type is unsupported."))?;
+    let extension = attachment_extension(&media_type).ok_or_else(|| ApiError::bad_request("Board background image type is unsupported."))?;
     let object_key = format!("board-background-{}.{}", Uuid::new_v4(), extension);
     let path = state.upload_dir.join(&object_key);
     tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "board background write failed"); ApiError::storage() })?;
@@ -4257,7 +4286,7 @@ async fn download_board_background(State(state): State<AppState>, current: Viewe
         if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "background_not_found", "Board background file was not found.".to_owned()) }
         else { tracing::error!(?error, "board background read failed"); ApiError::storage() }
     })?;
-    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"))], bytes).into_response())
+    Ok((media_response_headers(&background.1, "private, no-store"), bytes).into_response())
 }
 
 fn board_sticker_response(board_id: Uuid, sticker: BoardStickerRow) -> BoardStickerResponse {
@@ -4310,7 +4339,7 @@ async fn upload_board_sticker(State(state): State<AppState>, current: CurrentUse
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Sticker image could not be read."))?;
     if bytes.is_empty() || bytes.len() > 5 * 1024 * 1024 { return Err(ApiError::bad_request("Sticker must be between 1 byte and 5 MiB.")); }
     let sticker_id = Uuid::new_v4();
-    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Sticker image type is unsupported."))?;
+    let extension = attachment_extension(&media_type).ok_or_else(|| ApiError::bad_request("Sticker image type is unsupported."))?;
     let object_key = format!("stickers/{sticker_id}.{extension}");
     let path = state.upload_dir.join(&object_key);
     if let Some(parent) = path.parent() { tokio::fs::create_dir_all(parent).await.map_err(|_| ApiError::storage())?; }
@@ -4352,7 +4381,7 @@ async fn download_board_sticker(State(state): State<AppState>, current: Viewer, 
         if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "sticker_not_found", "Sticker file was not found.".to_owned()) }
         else { tracing::error!(?error, "board sticker read failed"); ApiError::storage() }
     })?;
-    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&sticker.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
+    Ok((media_response_headers(&sticker.1, "private, max-age=300"), bytes).into_response())
 }
 
 async fn update_board_visibility(State(state): State<AppState>, current: CurrentUser, Path(board_id): Path<Uuid>, Json(request): Json<UpdateBoardVisibilityRequest>) -> Result<StatusCode, ApiError> {
@@ -6861,7 +6890,7 @@ async fn upload_attachment(State(state): State<AppState>, current: CurrentUser, 
     let original_name = field.file_name().unwrap_or("attachment").replace(['/', '\\'], "_");
     if original_name.is_empty() || original_name.chars().count() > 255 { return Err(ApiError::bad_request("Attachment filename must contain 1 to 255 characters.")); }
     let media_type = field.content_type().map(ToString::to_string).unwrap_or_else(|| "application/octet-stream".to_owned());
-    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Only supported image, video, and audio files may be attached."))?;
+    let extension = attachment_extension(&media_type).ok_or_else(|| ApiError::bad_request("Only supported image, video, and audio files may be attached."))?;
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Attachment upload could not be read."))?;
     if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Attachment must be between 1 byte and 50 MiB.")); }
     let attachment_id = Uuid::new_v4();
@@ -6949,8 +6978,7 @@ async fn download_attachment(State(state): State<AppState>, current: Viewer, Pat
             ApiError::storage()
         }
     })?;
-    let content_type = HeaderValue::from_str(&attachment.media_type).map_err(|_| ApiError::storage())?;
-    Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
+    Ok((media_response_headers(&attachment.media_type, "private, max-age=300"), bytes).into_response())
 }
 
 async fn upload_checklist_item_attachment(State(state): State<AppState>, current: CurrentUser, Path(item_id): Path<Uuid>, mut multipart: Multipart) -> ApiResult<AttachmentResponse> {
@@ -6967,7 +6995,7 @@ async fn upload_checklist_item_attachment(State(state): State<AppState>, current
     let original_name = field.file_name().unwrap_or("checklist-attachment").replace(['/', '\\'], "_");
     if original_name.is_empty() || original_name.chars().count() > 255 { return Err(ApiError::bad_request("Attachment filename must contain 1 to 255 characters.")); }
     let media_type = field.content_type().map(ToString::to_string).unwrap_or_else(|| "application/octet-stream".to_owned());
-    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Only supported image, video, and audio files may be attached."))?;
+    let extension = attachment_extension(&media_type).ok_or_else(|| ApiError::bad_request("Only supported image, video, and audio files may be attached."))?;
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Attachment upload could not be read."))?;
     if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Attachment must be between 1 byte and 50 MiB.")); }
     let attachment_id = Uuid::new_v4();
@@ -7009,7 +7037,6 @@ async fn proxy_external_attachment(client: &reqwest::Client, url: &str, media_ty
     if response.content_length().is_some_and(|size| size > 50 * 1024 * 1024) {
         return Err(ApiError::bad_request("External attachment exceeds the 50 MiB limit."));
     }
-    let content_type = HeaderValue::from_str(media_type).map_err(|_| ApiError::storage())?;
     let mut received = 0usize;
     let stream = response.bytes_stream().map(move |chunk| {
         chunk.map_err(std::io::Error::other).and_then(|bytes| {
@@ -7021,7 +7048,7 @@ async fn proxy_external_attachment(client: &reqwest::Client, url: &str, media_ty
             }
         })
     });
-    Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=300"))], Body::from_stream(stream)).into_response())
+    Ok((media_response_headers(media_type, "public, max-age=300"), Body::from_stream(stream)).into_response())
 }
 
 async fn proxy_external_attachment_with_refresh(
@@ -7280,7 +7307,7 @@ async fn upload_card_background(State(state): State<AppState>, current: CurrentU
     }
     let bytes = field.bytes().await.map_err(|_| ApiError::bad_request("Card background image could not be read."))?;
     if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 { return Err(ApiError::bad_request("Card background must be between 1 byte and 50 MiB.")); }
-    let extension = attachment_extension(&media_type, &original_name).ok_or_else(|| ApiError::bad_request("Card background image type is unsupported."))?;
+    let extension = attachment_extension(&media_type).ok_or_else(|| ApiError::bad_request("Card background image type is unsupported."))?;
     let object_key = format!("card-background-{}.{}", Uuid::new_v4(), extension);
     let path = state.upload_dir.join(&object_key);
     tokio::fs::write(&path, bytes.as_ref()).await.map_err(|error| { tracing::error!(?error, "card background write failed"); ApiError::storage() })?;
@@ -7312,7 +7339,7 @@ async fn download_card_background(State(state): State<AppState>, current: Viewer
         if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "background_not_found", "Card background file was not found.".to_owned()) }
         else { tracing::error!(?error, "card background read failed"); ApiError::storage() }
     })?;
-    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"))], bytes).into_response())
+    Ok((media_response_headers(&background.1, "private, no-store"), bytes).into_response())
 }
 
 // Public boards expose only the media that is visibly referenced by that board.
@@ -7325,7 +7352,7 @@ async fn download_public_board_background(State(state): State<AppState>, Path(bo
         if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "background_not_found", "Board background file was not found.".to_owned()) }
         else { tracing::error!(?error, "public board background read failed"); ApiError::storage() }
     })?;
-    Ok(([(header::CONTENT_TYPE, HeaderValue::from_str(&background.1).map_err(|_| ApiError::storage())?), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=300"))], bytes).into_response())
+    Ok((media_response_headers(&background.1, "public, max-age=300"), bytes).into_response())
 }
 
 async fn download_public_board_avatar(State(state): State<AppState>, Path((board_id, user_id)): Path<(Uuid, Uuid)>) -> Result<Response, ApiError> {
@@ -7456,8 +7483,7 @@ async fn download_discord_card_attachment(State(state): State<AppState>, integra
         if error.kind() == std::io::ErrorKind::NotFound { ApiError(StatusCode::NOT_FOUND, "attachment_not_found", "Attachment file was not found.".to_owned()) }
         else { tracing::error!(?error, "Discord attachment read failed"); ApiError::storage() }
     })?;
-    let content_type = HeaderValue::from_str(&attachment.media_type).map_err(|_| ApiError::storage())?;
-    Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"))], bytes).into_response())
+    Ok((media_response_headers(&attachment.media_type, "private, max-age=300"), bytes).into_response())
 }
 
 async fn download_discord_comment_avatar(State(state): State<AppState>, Path((token, card_id, user_id)): Path<(Uuid, Uuid, Uuid)>) -> Result<Response, ApiError> {
@@ -8428,6 +8454,39 @@ mod tests {
 
         assert_eq!(request_source_ip(&headers, peer, false), peer.ip());
         assert_eq!(request_source_ip(&headers, peer, true), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)));
+    }
+
+    #[test]
+    fn attachment_media_types_are_not_inferred_from_filenames() {
+        assert_eq!(attachment_extension("image/jpeg"), Some("jpg"));
+        assert_eq!(attachment_extension("text/html"), None);
+        assert_eq!(attachment_extension("image/svg+xml"), None);
+    }
+
+    #[test]
+    fn media_headers_sandbox_untrusted_stored_types() {
+        let headers = media_response_headers("text/html", "private, max-age=300");
+
+        assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/octet-stream");
+        assert_eq!(headers.get(header::CONTENT_DISPOSITION).unwrap(), "attachment");
+        assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+        assert_eq!(headers.get("content-security-policy").unwrap(), "sandbox");
+
+        let image_headers = media_response_headers("image/png", "no-store");
+        assert_eq!(image_headers.get(header::CONTENT_TYPE).unwrap(), "image/png");
+        assert!(image_headers.get(header::CONTENT_DISPOSITION).is_none());
+    }
+
+    #[test]
+    fn external_attachment_redirects_stay_on_allowed_public_hosts() {
+        let allowed = reqwest::Url::parse("https://cdn.discordapp.com/attachments/file.png").unwrap();
+        let metadata = reqwest::Url::parse("http://169.254.169.254/latest/meta-data").unwrap();
+        let loopback = reqwest::Url::parse("https://127.0.0.1/private").unwrap();
+
+        assert!(external_redirect_target_allowed(&allowed, 2));
+        assert!(!external_redirect_target_allowed(&allowed, 3));
+        assert!(!external_redirect_target_allowed(&metadata, 1));
+        assert!(!external_redirect_target_allowed(&loopback, 1));
     }
 
     #[test]
