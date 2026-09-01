@@ -138,8 +138,10 @@ type DiagramMergeRequest = { operation_id: string; title: string; base_title: st
 type DiagramMergeEvent = DiagramMergeRequest & { type: 'diagram_merge'; card_id: string; actor_id: string };
 type DiagramCursorEvent = { type: 'diagram_cursor'; card_id: string; user_id: string; username: string; avatar_url?: string | null; x: number; y: number };
 type DiagramObjectLockEvent = { type: 'diagram_object_lock'; card_id: string; object_id: string; user_id: string; username: string; active: boolean; expires_in_ms: number };
+type DiagramObjectLockSnapshot = { object_id: string; user_id: string; username: string; expires_in_ms: number };
+type DiagramObjectLocksSnapshotEvent = { type: 'diagram_object_locks_snapshot'; card_id: string; locks: DiagramObjectLockSnapshot[] };
 type DiagramNotesChangedEvent = { type: 'diagram_notes_changed'; card_id: string };
-type DiagramLiveEvent = DiagramMergeEvent | DiagramCursorEvent | DiagramObjectLockEvent | DiagramNotesChangedEvent;
+type DiagramLiveEvent = DiagramMergeEvent | DiagramCursorEvent | DiagramObjectLockEvent | DiagramObjectLocksSnapshotEvent | DiagramNotesChangedEvent;
 type DiagramObjectLock = { user_id: string; username: string; expires_at: number };
 type DiagramNoteComment = { id: string; author_id: string | null; author_name: string; author_avatar_url?: string | null; body: string; created_at: string };
 type DiagramNote = { id: string; x: number; y: number; author_id: string | null; author_name: string; author_avatar_url?: string | null; created_at: string; comments: DiagramNoteComment[] };
@@ -2531,6 +2533,18 @@ export default function Home() {
       if (timer !== undefined) window.clearTimeout(timer);
       lockExpiryTimers.delete(objectId);
     };
+    const scheduleLockExpiry = (objectId: string, lock: DiagramObjectLock) => {
+      lockExpiryTimers.set(objectId, window.setTimeout(() => {
+        lockExpiryTimers.delete(objectId);
+        if (active) setDiagramObjectLocks((current) => {
+          const currentLock = current[objectId];
+          if (!currentLock || currentLock.user_id !== lock.user_id || currentLock.expires_at > Date.now()) return current;
+          const next = { ...current };
+          delete next[objectId];
+          return next;
+        });
+      }, Math.max(0, lock.expires_at - Date.now()) + 80));
+    };
     const applyLock = (event: DiagramObjectLockEvent) => {
       clearLockExpiry(event.object_id);
       if (!event.active) {
@@ -2541,17 +2555,20 @@ export default function Home() {
         });
         return;
       }
-      setDiagramObjectLocks((current) => ({ ...current, [event.object_id]: { user_id: event.user_id, username: event.username, expires_at: Date.now() + event.expires_in_ms } }));
-      lockExpiryTimers.set(event.object_id, window.setTimeout(() => {
-        lockExpiryTimers.delete(event.object_id);
-        if (active) setDiagramObjectLocks((current) => {
-          const lock = current[event.object_id];
-          if (!lock || lock.user_id !== event.user_id || lock.expires_at > Date.now()) return current;
-          const next = { ...current };
-          delete next[event.object_id];
-          return next;
-        });
-      }, event.expires_in_ms + 80));
+      const lock = { user_id: event.user_id, username: event.username, expires_at: Date.now() + event.expires_in_ms };
+      setDiagramObjectLocks((current) => ({ ...current, [event.object_id]: lock }));
+      scheduleLockExpiry(event.object_id, lock);
+    };
+    const applyLockSnapshot = (event: DiagramObjectLocksSnapshotEvent) => {
+      lockExpiryTimers.forEach((timer) => window.clearTimeout(timer));
+      lockExpiryTimers.clear();
+      const now = Date.now();
+      const next = Object.fromEntries(event.locks.map((entry) => {
+        const lock = { user_id: entry.user_id, username: entry.username, expires_at: now + entry.expires_in_ms };
+        scheduleLockExpiry(entry.object_id, lock);
+        return [entry.object_id, lock];
+      }));
+      setDiagramObjectLocks(next);
     };
     const applyCursor = (event: DiagramCursorEvent) => {
       if (event.user_id === account?.user.id) return;
@@ -2585,6 +2602,7 @@ export default function Home() {
           if (event.type === 'diagram_merge') applyMerge(event);
           else if (event.type === 'diagram_cursor') applyCursor(event);
           else if (event.type === 'diagram_object_lock') applyLock(event);
+          else if (event.type === 'diagram_object_locks_snapshot') applyLockSnapshot(event);
           else if (event.type === 'diagram_notes_changed') loadDiagramNotes(event.card_id);
         } catch { /* Ignore malformed diagram events. */ }
       };

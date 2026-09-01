@@ -594,6 +594,22 @@ struct DiagramObjectLockEvent {
 }
 
 #[derive(Clone, Serialize)]
+struct DiagramObjectLockSnapshot {
+    object_id: String,
+    user_id: Uuid,
+    username: String,
+    expires_in_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct DiagramObjectLocksSnapshotEvent {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    card_id: Uuid,
+    locks: Vec<DiagramObjectLockSnapshot>,
+}
+
+#[derive(Clone, Serialize)]
 struct DiagramNotesChangedEvent {
     #[serde(rename = "type")]
     event_type: &'static str,
@@ -5803,6 +5819,66 @@ async fn record_diagram_object_lock(state: &AppState, card_id: Uuid, current: Cu
     DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: current.id, username: account.username.clone(), active: true, expires_in_ms: 6_000 })
 }
 
+fn diagram_object_locks_snapshot_at(cards: &mut HashMap<Uuid, HashMap<String, DiagramObjectLock>>, card_id: Uuid, now: Instant) -> DiagramObjectLocksSnapshotEvent {
+    let mut snapshot_locks = match cards.get_mut(&card_id) {
+        Some(card_locks) => {
+            card_locks.retain(|_, lock| lock.expires_at > now);
+            card_locks.iter().map(|(object_id, lock)| DiagramObjectLockSnapshot {
+                object_id: object_id.clone(),
+                user_id: lock.user_id,
+                username: lock.username.clone(),
+                expires_in_ms: lock.expires_at.saturating_duration_since(now).as_millis().min(u64::MAX as u128) as u64,
+            }).collect::<Vec<_>>()
+        }
+        None => Vec::new(),
+    };
+    if cards.get(&card_id).is_some_and(HashMap::is_empty) { cards.remove(&card_id); }
+    snapshot_locks.sort_by(|left, right| left.object_id.cmp(&right.object_id));
+    DiagramObjectLocksSnapshotEvent { event_type: "diagram_object_locks_snapshot", card_id, locks: snapshot_locks }
+}
+
+async fn diagram_object_locks_snapshot_payload(locks: &Mutex<HashMap<Uuid, HashMap<String, DiagramObjectLock>>>, card_id: Uuid) -> Option<String> {
+    let snapshot = {
+        let mut cards = locks.lock().await;
+        diagram_object_locks_snapshot_at(&mut cards, card_id, Instant::now())
+    };
+    serde_json::to_string(&snapshot).ok()
+}
+
+enum DiagramSocketDelivery {
+    Payload(String),
+    Skip,
+    Closed,
+}
+
+async fn next_card_diagram_socket_payload(
+    receiver: &mut broadcast::Receiver<DiagramLiveEvent>,
+    sender: &broadcast::Sender<DiagramLiveEvent>,
+    locks: &Mutex<HashMap<Uuid, HashMap<String, DiagramObjectLock>>>,
+    card_id: Uuid,
+) -> DiagramSocketDelivery {
+    match receiver.recv().await {
+        Ok(event) => {
+            if diagram_live_event_card_id(&event) != card_id { return DiagramSocketDelivery::Skip; }
+            match diagram_live_event_payload(&event) {
+                Ok(payload) => DiagramSocketDelivery::Payload(payload),
+                Err(_) => DiagramSocketDelivery::Skip,
+            }
+        }
+        Err(broadcast::error::RecvError::Lagged(_)) => {
+            // Drop retained events before taking the authoritative lock
+            // snapshot. Document and note polling recover their durable
+            // state; cursors are intentionally ephemeral.
+            *receiver = sender.subscribe();
+            match diagram_object_locks_snapshot_payload(locks, card_id).await {
+                Some(payload) => DiagramSocketDelivery::Payload(payload),
+                None => DiagramSocketDelivery::Skip,
+            }
+        }
+        Err(broadcast::error::RecvError::Closed) => DiagramSocketDelivery::Closed,
+    }
+}
+
 /// Rejects only modifications to objects another editor has actively locked.
 /// Independent edits remain optimistic and merge as before.
 async fn ensure_diagram_object_locks(state: &AppState, card_id: Uuid, current: CurrentUser, base: &Value, incoming: &Value) -> Result<(), ApiError> {
@@ -6025,6 +6101,8 @@ async fn card_diagram_websocket(State(state): State<AppState>, current: CurrentU
 async fn run_card_diagram_websocket(state: AppState, card_id: Uuid, current: CurrentUser, account: FreeformLiveAccount, can_edit: bool, socket: WebSocket) {
     let (mut sender, mut receiver) = futures_util::StreamExt::split(socket);
     let mut events = state.diagram_events.subscribe();
+    let Some(snapshot) = diagram_object_locks_snapshot_payload(state.diagram_locks.as_ref(), card_id).await else { return; };
+    if sender.send(Message::Text(snapshot.into())).await.is_err() { return; }
     loop {
         tokio::select! {
             incoming = futures_util::StreamExt::next(&mut receiver) => {
@@ -6050,11 +6128,12 @@ async fn run_card_diagram_websocket(state: AppState, card_id: Uuid, current: Cur
                     }
                 }
             }
-            event = events.recv() => {
-                let Ok(event) = event else { continue; };
-                if diagram_live_event_card_id(&event) != card_id { continue; }
-                let Ok(payload) = diagram_live_event_payload(&event) else { continue; };
-                if sender.send(Message::Text(payload.into())).await.is_err() { break; }
+            delivery = next_card_diagram_socket_payload(&mut events, &state.diagram_events, state.diagram_locks.as_ref(), card_id) => {
+                match delivery {
+                    DiagramSocketDelivery::Payload(payload) => if sender.send(Message::Text(payload.into())).await.is_err() { break; },
+                    DiagramSocketDelivery::Skip => {}
+                    DiagramSocketDelivery::Closed => break,
+                }
             }
         }
     }
@@ -8542,6 +8621,53 @@ mod tests {
         assert!(limiter.check_at("login", second, started).await.is_ok());
         assert!(limiter.check_at("login", third, started).await.is_err());
         assert!(limiter.check_at("login", third, started + Duration::from_secs(61)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn diagram_socket_recovers_authoritative_locks_after_broadcast_lag() {
+        let card_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let started = Instant::now();
+        let locks = Mutex::new(HashMap::from([(
+            card_id,
+            HashMap::from([
+                ("active".to_owned(), DiagramObjectLock { user_id, username: "editor".to_owned(), expires_at: started + Duration::from_secs(6) }),
+                ("expired".to_owned(), DiagramObjectLock { user_id, username: "editor".to_owned(), expires_at: started }),
+            ]),
+        )]));
+        let (sender, mut receiver) = broadcast::channel(1);
+        for x in [1, 2] {
+            assert!(sender.send(DiagramLiveEvent::Cursor(DiagramCursorEvent {
+                event_type: "diagram_cursor",
+                card_id,
+                user_id,
+                username: "editor".to_owned(),
+                avatar_url: None,
+                x,
+                y: 0,
+            })).is_ok());
+        }
+
+        let DiagramSocketDelivery::Payload(payload) = next_card_diagram_socket_payload(&mut receiver, &sender, &locks, card_id).await else { panic!("lag recovery did not return a snapshot"); };
+        let snapshot: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(snapshot.get("type").and_then(Value::as_str), Some("diagram_object_locks_snapshot"));
+        let snapshot_locks = snapshot.get("locks").and_then(Value::as_array).unwrap();
+        assert_eq!(snapshot_locks.len(), 1);
+        assert_eq!(snapshot_locks[0].get("object_id").and_then(Value::as_str), Some("active"));
+
+        assert!(sender.send(DiagramLiveEvent::Cursor(DiagramCursorEvent {
+            event_type: "diagram_cursor",
+            card_id,
+            user_id,
+            username: "editor".to_owned(),
+            avatar_url: None,
+            x: 3,
+            y: 0,
+        })).is_ok());
+        let DiagramSocketDelivery::Payload(payload) = next_card_diagram_socket_payload(&mut receiver, &sender, &locks, card_id).await else { panic!("receiver did not continue after recovery"); };
+        let cursor: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(cursor.get("type").and_then(Value::as_str), Some("diagram_cursor"));
+        assert_eq!(cursor.get("x").and_then(Value::as_i64), Some(3));
     }
 
     #[test]
