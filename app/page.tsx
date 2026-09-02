@@ -220,11 +220,13 @@ function CardCover({ card }: { card: Pick<Card, 'id' | 'coverUrl' | 'coverMediaT
       if (!context) throw new Error('Canvas context is unavailable');
       context.drawImage(media, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
       const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-      let luminance = 0;
+      const luminances: number[] = [];
       for (let index = 0; index < pixels.length; index += 4) {
-        luminance += .2126 * pixels[index] + .7152 * pixels[index + 1] + .0722 * pixels[index + 2];
+        luminances.push(.2126 * pixels[index] + .7152 * pixels[index + 1] + .0722 * pixels[index + 2]);
       }
-      taskCard.dataset.coverTone = luminance / (pixels.length / 4) > 150 ? 'light' : 'dark';
+      luminances.sort((first, second) => first - second);
+      const medianLuminance = luminances[Math.floor(luminances.length / 2)];
+      taskCard.dataset.coverTone = medianLuminance > 135 ? 'light' : 'dark';
     } catch {
       // Remote media can disallow pixel reads. Its title gets the safe fallback.
       taskCard.dataset.coverTone = 'unknown';
