@@ -876,10 +876,10 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
    CardCover samples the title area once and chooses the matching text tone. */
 .task-card:has(.card-cover:not(.top)) .card-title-row { z-index: 2; isolation: isolate; }
 .task-card:has(.card-cover:not(.top)) .card-title-row h3 { color: #f8fbff; text-shadow: 0 1px 10px rgb(0 0 0 / 72%); }
-.task-card[data-cover-tone='light'] .card-cover::after { background: rgb(255 255 255 / 12%); }
-.task-card[data-cover-tone='light'] .card-title-row h3 { color: #101925; text-shadow: 0 1px 9px rgb(255 255 255 / 78%); }
-.task-card[data-cover-tone='dark'] .card-title-row h3 { color: #f8fbff; text-shadow: 0 1px 10px rgb(0 0 0 / 72%); }
-.task-card[data-cover-tone='unknown'] .card-title-row::before { position: absolute; z-index: -1; inset: -4px -6px; border-radius: 8px; content: ''; background: rgb(10 15 22 / 64%); backdrop-filter: blur(5px); }
+.task-card:has(.card-cover:not(.top))[data-cover-tone='light'] .card-cover::after { background: rgb(255 255 255 / 12%); }
+.task-card:has(.card-cover:not(.top))[data-cover-tone='light'] .card-title-row h3 { color: #101925; text-shadow: 0 1px 9px rgb(255 255 255 / 78%); }
+.task-card:has(.card-cover:not(.top))[data-cover-tone='dark'] .card-title-row h3 { color: #f8fbff; text-shadow: 0 1px 10px rgb(0 0 0 / 72%); }
+.task-card:has(.card-cover:not(.top))[data-cover-tone='unknown'] .card-title-row::before { position: absolute; z-index: -1; inset: -4px -6px; border-radius: 8px; content: ''; background: rgb(10 15 22 / 64%); backdrop-filter: blur(5px); }
 
 /* Keep both card insets narrow. The list itself reaches four pixels into the
    right column padding: that centres the native scrollbar in the narrow gap
