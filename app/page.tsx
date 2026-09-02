@@ -6232,6 +6232,42 @@ export default function Home() {
       showToast('Экспорт проекта скачан');
     } catch { showToast('Не удалось экспортировать проект'); }
   }
+  function createBoardMarkdown() {
+    const line = (value: string) => value.replace(/[\r\n]+/g, ' ').trim();
+    const lines = [`# ${line(boardTitle)}`, ''];
+    for (const column of columns) {
+      lines.push(`## ${line(column.title)}`, '');
+      if (!column.cards.length) { lines.push('_Нет карточек._', ''); continue; }
+      for (const card of column.cards) {
+        lines.push(`### [${card.completedAt ? 'x' : ' '}] ${line(card.title)}`);
+        const details = [
+          card.priority ? `Приоритет: ${card.priority}/5` : '',
+          card.frozen ? 'Заморожена' : '',
+          card.startAt ? `Начало: ${card.startAt}` : '',
+          card.dueAt ? `Дедлайн: ${card.dueAt}` : '',
+          card.members.length ? `Исполнители: ${card.members.map((member) => member.name).join(', ')}` : '',
+          card.labels.length ? `Метки: ${card.labels.map((label) => label.name).join(', ')}` : '',
+          card.roles.length ? `Роли: ${card.roles.map((role) => role.name).join(', ')}` : '',
+        ].filter(Boolean);
+        if (details.length) lines.push(...details.map((detail) => `- ${detail}`));
+        if (card.description?.trim()) lines.push('', card.description.trim());
+        lines.push('');
+      }
+    }
+    return lines.join('\n').trimEnd() + '\n';
+  }
+  function boardMarkdownFilename() {
+    return boardTitle.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'flowboard-board';
+  }
+  async function copyBoardMarkdown() {
+    try { await navigator.clipboard.writeText(createBoardMarkdown()); showToast('Markdown доски скопирован'); }
+    catch { showToast('Не удалось скопировать Markdown доски'); }
+  }
+  function exportBoardMarkdown() {
+    const source = URL.createObjectURL(new Blob([createBoardMarkdown()], { type: 'text/markdown;charset=utf-8' }));
+    const anchor = document.createElement('a'); anchor.href = source; anchor.download = `${boardMarkdownFilename()}.md`; anchor.click(); URL.revokeObjectURL(source);
+    showToast('Доска экспортирована в Markdown');
+  }
   async function exportCardMarkdown(card: Card) {
     if (persistence !== 'connected' || typeof card.id !== 'string' || isParkingCardId(card.id)) {
       showToast('Локальную карточку пока нельзя экспортировать');
@@ -6409,7 +6445,7 @@ export default function Home() {
           <button className="board-icon-button board-team-button" type="button" title="Команда проекта" aria-label="Команда проекта" onClick={openTeam}><BoardToolbarIcon type="team" /></button>
           <button className="board-icon-button board-archive-button" type="button" title="Архив задач" aria-label="Архив задач" onClick={openArchive}><BoardToolbarIcon type="archive" /></button>
           {canManageBoardAdministration && (() => {
-            const popover = isBoardMenuOpen && <div className="board-menu mobile-board-popover"><button onClick={openBoardActivity}>◷ Активность проекта</button><button onClick={() => { setBoardMenuOpen(false); setAutomationsOpen(true); }}>↻ Автоматизации</button><button onClick={() => { setBoardMenuOpen(false); openChangelog(); }}>✦ Собрать changelog</button><button onClick={() => { setBoardMenuOpen(false); openDiscordIntegration(); }}>⌁ Discord API</button><button onClick={exportCurrentBoard}>⇩ Экспорт JSON</button><button onClick={() => importFileRef.current?.click()}>⇧ Импорт Trello / Flowboard JSON</button><button className="danger-action" onClick={deleteCurrentBoard}>Удалить проект</button><input ref={importFileRef} type="file" accept="application/json,.json" onChange={importBoardFile} /><section className="visibility-control"><b>Доступ к доске</b><p>{boardVisibility === 'public' ? 'Public: любой аккаунт может только смотреть.' : 'Private: видят только участники проекта.'}</p><div><button type="button" className={boardVisibility === 'public' ? 'selected' : ''} onClick={() => changeBoardVisibility('public')}>Public · просмотр всем</button><button type="button" className={boardVisibility === 'private' ? 'selected' : ''} onClick={() => changeBoardVisibility('private')}>Private</button></div>{boardVisibility === 'public' && <button className="copy-public-link" type="button" onClick={copyPublicBoardLink}>Скопировать публичную ссылку</button>}</section><form onSubmit={saveBoardBackground}><label>Фон проекта по ссылке<input value={backgroundDraft} onChange={(event) => setBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" /></label><section className="background-display-control"><b>Отображение фона</b><div className="background-fit-options"><button type="button" className={boardBackgroundFit === 'cover' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('cover')}>Заполнить</button><button type="button" className={boardBackgroundFit === 'contain' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('contain')}>Целиком</button><button type="button" className={boardBackgroundFit === 'fill' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('fill')}>Растянуть</button></div><div className="background-position-options"><button type="button" className={boardBackgroundPosition === 'top' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('top')}>↑ Верх</button><button type="button" className={boardBackgroundPosition === 'center' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('center')}>⊙ Центр</button><button type="button" className={boardBackgroundPosition === 'bottom' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('bottom')}>↓ Низ</button></div><small>«Целиком» сохраняет изображение без обрезки, «Растянуть» подгоняет его под экран.</small></section><div><button type="submit" disabled={isSavingBackground}>{isSavingBackground ? 'Сохраняем…' : 'Сохранить фон'}</button><button type="button" onClick={() => { setBackgroundDraft(''); }}>Снять</button></div></form><input ref={boardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardBackground} /><button type="button" onClick={() => boardBackgroundFileRef.current?.click()} disabled={isUploadingBoardBackground}>{isUploadingBoardBackground ? 'Загружаем фон…' : '▧ Загрузить фон проекта'}</button></div>;
+            const popover = isBoardMenuOpen && <div className="board-menu mobile-board-popover"><button onClick={openBoardActivity}>◷ Активность проекта</button><button onClick={() => { setBoardMenuOpen(false); setAutomationsOpen(true); }}>↻ Автоматизации</button><button onClick={() => { setBoardMenuOpen(false); openChangelog(); }}>✦ Собрать changelog</button><button onClick={() => { setBoardMenuOpen(false); openDiscordIntegration(); }}>⌁ Discord API</button><button onClick={exportCurrentBoard}>⇩ Экспорт JSON</button><button onClick={() => importFileRef.current?.click()}>⇧ Импорт Trello / Flowboard JSON</button><button onClick={copyBoardMarkdown}>Копировать доску .md</button><button onClick={exportBoardMarkdown}>⇩ Экспортировать доску .md</button><button className="danger-action" onClick={deleteCurrentBoard}>Удалить проект</button><input ref={importFileRef} type="file" accept="application/json,.json" onChange={importBoardFile} /><section className="visibility-control"><b>Доступ к доске</b><p>{boardVisibility === 'public' ? 'Public: любой аккаунт может только смотреть.' : 'Private: видят только участники проекта.'}</p><div><button type="button" className={boardVisibility === 'public' ? 'selected' : ''} onClick={() => changeBoardVisibility('public')}>Public · просмотр всем</button><button type="button" className={boardVisibility === 'private' ? 'selected' : ''} onClick={() => changeBoardVisibility('private')}>Private</button></div>{boardVisibility === 'public' && <button className="copy-public-link" type="button" onClick={copyPublicBoardLink}>Скопировать публичную ссылку</button>}</section><form onSubmit={saveBoardBackground}><label>Фон проекта по ссылке<input value={backgroundDraft} onChange={(event) => setBackgroundDraft(event.target.value)} placeholder="https://…/background.jpg" /></label><section className="background-display-control"><b>Отображение фона</b><div className="background-fit-options"><button type="button" className={boardBackgroundFit === 'cover' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('cover')}>Заполнить</button><button type="button" className={boardBackgroundFit === 'contain' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('contain')}>Целиком</button><button type="button" className={boardBackgroundFit === 'fill' ? 'selected' : ''} onClick={() => setBoardBackgroundFit('fill')}>Растянуть</button></div><div className="background-position-options"><button type="button" className={boardBackgroundPosition === 'top' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('top')}>↑ Верх</button><button type="button" className={boardBackgroundPosition === 'center' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('center')}>⊙ Центр</button><button type="button" className={boardBackgroundPosition === 'bottom' ? 'selected' : ''} onClick={() => setBoardBackgroundPosition('bottom')}>↓ Низ</button></div><small>«Целиком» сохраняет изображение без обрезки, «Растянуть» подгоняет его под экран.</small></section><div><button type="submit" disabled={isSavingBackground}>{isSavingBackground ? 'Сохраняем…' : 'Сохранить фон'}</button><button type="button" onClick={() => { setBackgroundDraft(''); }}>Снять</button></div></form><input ref={boardBackgroundFileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={uploadBoardBackground} /><button type="button" onClick={() => boardBackgroundFileRef.current?.click()} disabled={isUploadingBoardBackground}>{isUploadingBoardBackground ? 'Загружаем фон…' : '▧ Загрузить фон проекта'}</button></div>;
             return <><div className="board-menu-control"><button className={`secondary-button more ${isBoardMenuOpen ? 'is-juggling' : ''}`} onClick={() => setBoardMenuOpen((current) => !current)} aria-expanded={isBoardMenuOpen} aria-label="Дополнительные действия"><span className="more-dots" aria-hidden="true"><i /><i /><i /></span></button>{!isMobileViewport && popover}</div>{isMobileViewport && popover && renderBoardToolbarPopover(popover)}</>;
           })()}
         </div>
