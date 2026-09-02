@@ -6246,6 +6246,18 @@ export default function Home() {
       showToast('Карточка экспортирована в Markdown');
     } catch { showToast('Не удалось экспортировать карточку'); }
   }
+  async function copyCardMarkdown(card: Card) {
+    if (persistence !== 'connected' || typeof card.id !== 'string' || isParkingCardId(card.id)) {
+      showToast('Локальную карточку пока нельзя скопировать в Markdown');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_URL}/v1/cards/${card.id}/export.md`);
+      if (!response.ok) throw new Error('card markdown copy failed');
+      await navigator.clipboard.writeText(await response.text());
+      showToast('Markdown карточки скопирован');
+    } catch { showToast('Не удалось скопировать Markdown карточки'); }
+  }
   async function importBoardFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; event.target.value = '';
     if (!file || !workspaceId) return;
@@ -6628,6 +6640,7 @@ export default function Home() {
     {cardContextMenu && <div className="card-context-menu" role="menu" style={{ left: cardContextMenu.x, top: cardContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openCard(cardContextMenu.card); setCardContextMenu(null); }}>Открыть карточку</button>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); void copyCardLink(cardContextMenu.card); setCardContextMenu(null); }}>Копировать ссылку</button>
+      <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); void copyCardMarkdown(cardContextMenu.card); setCardContextMenu(null); }}>Копировать MD</button>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); void exportCardMarkdown(cardContextMenu.card); setCardContextMenu(null); }}>⇩ Экспортировать .md</button>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); openFocusMode(cardContextMenu.card); setCardContextMenu(null); }}>◉ Фокус на карточке</button>
       {!isPublicViewer && <>
