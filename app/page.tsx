@@ -184,16 +184,65 @@ function assetUrl(url: string | null | undefined) {
 
 function CardCover({ card }: { card: Pick<Card, 'id' | 'coverUrl' | 'coverMediaType' | 'coverMode' | 'hasUnvotedPolls' | 'frozen'> }) {
   const [loadFailed, setLoadFailed] = useState(false);
+  const coverRef = useRef<HTMLDivElement>(null);
   const { people, currentUserId } = useContext(CardPresenceContext);
-  useEffect(() => { setLoadFailed(false); }, [card.coverUrl]);
+  useEffect(() => {
+    setLoadFailed(false);
+    if (card.coverMode === 'top' || !card.coverUrl) coverRef.current?.closest<HTMLElement>('.task-card')?.removeAttribute('data-cover-tone');
+  }, [card.coverMode, card.coverUrl]);
+
+  const setCoverTone = (media: HTMLImageElement | HTMLVideoElement) => {
+    const taskCard = coverRef.current?.closest<HTMLElement>('.task-card');
+    if (!taskCard || card.coverMode === 'top') return;
+
+    if (!(media instanceof HTMLImageElement)) {
+      taskCard.dataset.coverTone = 'unknown';
+      return;
+    }
+
+    try {
+      const coverBounds = coverRef.current.getBoundingClientRect();
+      const titleBounds = taskCard.querySelector<HTMLElement>('.card-title-row')?.getBoundingClientRect();
+      if (!titleBounds || !coverBounds.width || !coverBounds.height || !media.naturalWidth || !media.naturalHeight) throw new Error('Cover dimensions are unavailable');
+
+      const scale = Math.max(coverBounds.width / media.naturalWidth, coverBounds.height / media.naturalHeight);
+      const croppedX = (media.naturalWidth * scale - coverBounds.width) / 2;
+      const croppedY = (media.naturalHeight * scale - coverBounds.height) / 2;
+      const sourceX = (titleBounds.left - coverBounds.left + croppedX) / scale;
+      const sourceY = (titleBounds.top - coverBounds.top + croppedY) / scale;
+      const sourceWidth = titleBounds.width / scale;
+      const sourceHeight = titleBounds.height / scale;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 36;
+      canvas.height = 12;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('Canvas context is unavailable');
+      context.drawImage(media, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let luminance = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        luminance += .2126 * pixels[index] + .7152 * pixels[index + 1] + .0722 * pixels[index + 2];
+      }
+      taskCard.dataset.coverTone = luminance / (pixels.length / 4) > 150 ? 'light' : 'dark';
+    } catch {
+      // Remote media can disallow pixel reads. Its title gets the safe fallback.
+      taskCard.dataset.coverTone = 'unknown';
+    }
+  };
+
+  const handleLoadError = () => {
+    coverRef.current?.closest<HTMLElement>('.task-card')?.removeAttribute('data-cover-tone');
+    setLoadFailed(true);
+  };
   const frozenBadge = card.frozen ? <span className="card-frozen-badge" title="Карточка заморожена" aria-label="Карточка заморожена">❄</span> : null;
   const openPresence = <CardOpenPresence people={people} currentUserId={currentUserId} cardId={card.id} />;
   if (!card.coverUrl || loadFailed) return <>{frozenBadge}<CardPollAttention card={card} />{openPresence}</>;
   const isVideo = card.coverMediaType?.startsWith('video/');
-  return <>{frozenBadge}<CardPollAttention card={card} /><div className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
+  return <>{frozenBadge}<CardPollAttention card={card} /><div ref={coverRef} className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
     {isVideo
-      ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onError={() => setLoadFailed(true)} onLoadedMetadata={(event) => { event.currentTarget.controls = false; }} />
-      : <img src={assetUrl(card.coverUrl)} alt="" onError={() => setLoadFailed(true)} />}
+      ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onError={handleLoadError} onLoadedMetadata={(event) => { event.currentTarget.controls = false; setCoverTone(event.currentTarget); }} />
+      : <img src={assetUrl(card.coverUrl)} alt="" onLoad={(event) => setCoverTone(event.currentTarget)} onError={handleLoadError} />}
   </div>{openPresence}</>;
 }
 

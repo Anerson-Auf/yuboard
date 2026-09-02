@@ -872,9 +872,14 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .build-update-notice { position: fixed; z-index: 330; left: max(20px, env(safe-area-inset-left)); bottom: max(20px, env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px; max-width: min(390px, calc(100vw - 40px)); padding: 10px 11px 10px 13px; border: 1px solid color-mix(in srgb, var(--primary) 46%, var(--line)); border-radius: 13px; background: color-mix(in srgb, var(--surface-raised) 91%, #101827); box-shadow: 0 15px 42px rgb(0 0 0 / 32%); backdrop-filter: blur(18px); animation: build-update-notice-in .26s cubic-bezier(.2, .9, .22, 1) both; }.build-update-notice > span { display: grid; min-width: 0; gap: 2px; }.build-update-notice b { color: var(--text); font-size: 12px; }.build-update-notice small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.build-update-notice button { flex: 0 0 auto; min-height: 31px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--primary) 65%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--text); font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; transition: transform .16s ease, background .16s ease; }.build-update-notice button:hover { background: color-mix(in srgb, var(--primary) 30%, transparent); transform: translateY(-1px); }.build-update-notice button:active { transform: translateY(0) scale(.97); }@keyframes build-update-notice-in { from { opacity: 0; transform: translateY(12px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (max-width: 520px) { .build-update-notice { left: max(10px, env(safe-area-inset-left)); bottom: max(10px, env(safe-area-inset-bottom)); max-width: calc(100vw - 20px); } }
 
-/* The full-size cover sits behind the external card title. Difference blending
-   gives it a readable inverse tone on both a bright and a dark image. */
-.task-card:has(.card-cover:not(.top)) .card-title-row h3 { color: #fff; mix-blend-mode: difference; text-shadow: 0 1px 10px rgb(0 0 0 / 28%); }
+/* Full covers are user media, so a hard-coded white title is not reliable.
+   CardCover samples the title area once and chooses the matching text tone. */
+.task-card:has(.card-cover:not(.top)) .card-title-row { z-index: 2; isolation: isolate; }
+.task-card:has(.card-cover:not(.top)) .card-title-row h3 { color: #f8fbff; text-shadow: 0 1px 10px rgb(0 0 0 / 72%); }
+.task-card[data-cover-tone='light'] .card-cover::after { background: rgb(255 255 255 / 12%); }
+.task-card[data-cover-tone='light'] .card-title-row h3 { color: #101925; text-shadow: 0 1px 9px rgb(255 255 255 / 78%); }
+.task-card[data-cover-tone='dark'] .card-title-row h3 { color: #f8fbff; text-shadow: 0 1px 10px rgb(0 0 0 / 72%); }
+.task-card[data-cover-tone='unknown'] .card-title-row::before { position: absolute; z-index: -1; inset: -4px -6px; border-radius: 8px; content: ''; background: rgb(10 15 22 / 64%); backdrop-filter: blur(5px); }
 
 /* Keep both card insets narrow. The list itself reaches four pixels into the
    right column padding: that centres the native scrollbar in the narrow gap
