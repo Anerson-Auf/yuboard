@@ -851,7 +851,6 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
   const availableRoles = roles.length ? roles : boardRoles;
   const pendingCaret = useRef<number | null>(null);
   const localValueRef = useRef(value);
-  const delayedValueTimerRef = useRef<number | null>(null);
   const [query, setQuery] = useState<string | null>(null);
   const [commandQuery, setCommandQuery] = useState<string | null>(null);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
@@ -870,19 +869,15 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
   const roleSuggestions = query === null ? [] : availableRoles.filter((role) => role.name.toLowerCase().includes(query));
   const commandSuggestions = commandQuery === null ? [] : commands.filter((item) => item.command.startsWith(commandQuery)).slice(0, 7);
   const flushValue = () => {
-    if (delayedValueTimerRef.current !== null) {
-      window.clearTimeout(delayedValueTimerRef.current);
-      delayedValueTimerRef.current = null;
-    }
     onValueChange(localValueRef.current);
   };
   const updateValue = (next: string, caret: number) => {
     pendingCaret.current = caret;
     localValueRef.current = next;
-    if (delayedValueTimerRef.current !== null) window.clearTimeout(delayedValueTimerRef.current);
-    // The board may contain hundreds of cards. Keep typing local to this
-    // lightweight composer and synchronise the parent after a short pause.
-    delayedValueTimerRef.current = window.setTimeout(flushValue, 90);
+    // A delayed parent update can arrive after newer browser input and then
+    // project an outdated value back into contenteditable, dropping a letter.
+    // Draft correctness wins over this small render cost.
+    onValueChange(next);
     findQuery(next, caret);
   };
   useEffect(() => {
@@ -894,7 +889,6 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     }
     if (pendingCaret.current !== null) { placeComposerCaret(composer, pendingCaret.current); pendingCaret.current = null; }
   }, [value]);
-  useEffect(() => () => { if (delayedValueTimerRef.current !== null) window.clearTimeout(delayedValueTimerRef.current); }, []);
   useImperativeHandle(ref, () => ({
     insertSticker(sticker) {
       const composer = composerRef.current;
@@ -917,8 +911,6 @@ const InlineStickerComposer = forwardRef<InlineStickerComposerHandle, InlineStic
     },
     getValue() { return composerRef.current ? composerText(composerRef.current) : localValueRef.current; },
     clear() {
-      if (delayedValueTimerRef.current !== null) window.clearTimeout(delayedValueTimerRef.current);
-      delayedValueTimerRef.current = null;
       localValueRef.current = '';
       pendingCaret.current = null;
       if (composerRef.current) renderComposerText(composerRef.current, '');
