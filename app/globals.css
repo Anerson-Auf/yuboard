@@ -874,11 +874,12 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 
 /* Full covers are user media, so a hard-coded white title is not reliable.
    CardCover samples the title area once and chooses the matching text tone. */
-.task-card:has(.card-cover:not(.top)) .card-title-row { z-index: 2; isolation: isolate; }
+.task-card:has(.card-cover:not(.top)) .card-title-row { z-index: 2; }
 .task-card:has(.card-cover:not(.top)) .card-title-row h3 { display: inline-block; max-width: 100%; color: #f8fbff; text-shadow: 0 1px 10px rgb(0 0 0 / 72%); }
 .task-card:has(.card-cover:not(.top))[data-cover-tone='light'] .card-cover::after { background: rgb(255 255 255 / 12%); }
 .task-card:has(.card-cover:not(.top))[data-cover-tone='light'] .card-title-row h3 { color: #101925; text-shadow: 0 1px 9px rgb(255 255 255 / 78%); }
 .task-card:has(.card-cover:not(.top))[data-cover-tone='dark'] .card-title-row h3 { color: #f8fbff; text-shadow: 0 1px 10px rgb(0 0 0 / 72%); }
+.task-card:has(.card-cover:not(.top))[data-cover-tone='unknown'] .card-title-row h3 { color: #fff; mix-blend-mode: difference; text-shadow: none; }
 
 /* Keep both card insets narrow. The list itself reaches four pixels into the
    right column padding: that centres the native scrollbar in the narrow gap

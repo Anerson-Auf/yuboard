@@ -186,9 +186,18 @@ function CardCover({ card }: { card: Pick<Card, 'id' | 'coverUrl' | 'coverMediaT
   const [loadFailed, setLoadFailed] = useState(false);
   const coverRef = useRef<HTMLDivElement>(null);
   const { people, currentUserId } = useContext(CardPresenceContext);
+
+  function clearCoverTone() {
+    const taskCard = coverRef.current?.closest<HTMLElement>('.task-card');
+    taskCard?.removeAttribute('data-cover-tone');
+    const title = taskCard?.querySelector<HTMLElement>('.card-title-row h3');
+    title?.style.removeProperty('color');
+    title?.style.removeProperty('text-shadow');
+  }
+
   useEffect(() => {
     setLoadFailed(false);
-    if (card.coverMode === 'top' || !card.coverUrl) coverRef.current?.closest<HTMLElement>('.task-card')?.removeAttribute('data-cover-tone');
+    if (card.coverMode === 'top' || !card.coverUrl) clearCoverTone();
   }, [card.coverMode, card.coverUrl]);
 
   const setCoverTone = (media: HTMLImageElement | HTMLVideoElement) => {
@@ -226,7 +235,12 @@ function CardCover({ card }: { card: Pick<Card, 'id' | 'coverUrl' | 'coverMediaT
       }
       luminances.sort((first, second) => first - second);
       const medianLuminance = luminances[Math.floor(luminances.length / 2)];
-      taskCard.dataset.coverTone = medianLuminance > 135 ? 'light' : 'dark';
+      const tone = medianLuminance > 135 ? 'light' : 'dark';
+      taskCard.dataset.coverTone = tone;
+      titleBounds && Object.assign(taskCard.querySelector<HTMLElement>('.card-title-row h3')?.style ?? {}, {
+        color: tone === 'light' ? '#101925' : '#f8fbff',
+        textShadow: tone === 'light' ? '0 1px 9px rgb(255 255 255 / 78%)' : '0 1px 10px rgb(0 0 0 / 72%)',
+      });
     } catch {
       // Remote media can disallow pixel reads. Its title gets the safe fallback.
       taskCard.dataset.coverTone = 'unknown';
@@ -234,17 +248,19 @@ function CardCover({ card }: { card: Pick<Card, 'id' | 'coverUrl' | 'coverMediaT
   };
 
   const handleLoadError = () => {
-    coverRef.current?.closest<HTMLElement>('.task-card')?.removeAttribute('data-cover-tone');
+    clearCoverTone();
     setLoadFailed(true);
   };
   const frozenBadge = card.frozen ? <span className="card-frozen-badge" title="Карточка заморожена" aria-label="Карточка заморожена">❄</span> : null;
   const openPresence = <CardOpenPresence people={people} currentUserId={currentUserId} cardId={card.id} />;
   if (!card.coverUrl || loadFailed) return <>{frozenBadge}<CardPollAttention card={card} />{openPresence}</>;
   const isVideo = card.coverMediaType?.startsWith('video/');
+  const mediaSource = assetUrl(card.coverUrl);
+  const canReadApiMedia = Boolean(API_URL && mediaSource.startsWith(API_URL));
   return <>{frozenBadge}<CardPollAttention card={card} /><div ref={coverRef} className={`card-cover ${card.coverMode ?? 'full'} ${isVideo ? 'video-cover' : ''}`}>
     {isVideo
-      ? <video src={assetUrl(card.coverUrl)} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onError={handleLoadError} onLoadedMetadata={(event) => { event.currentTarget.controls = false; setCoverTone(event.currentTarget); }} />
-      : <img src={assetUrl(card.coverUrl)} alt="" onLoad={(event) => setCoverTone(event.currentTarget)} onError={handleLoadError} />}
+      ? <video src={mediaSource} autoPlay loop muted playsInline preload="metadata" controlsList="nodownload nofullscreen noremoteplayback" disablePictureInPicture disableRemotePlayback tabIndex={-1} aria-hidden="true" onError={handleLoadError} onLoadedMetadata={(event) => { event.currentTarget.controls = false; setCoverTone(event.currentTarget); }} />
+      : <img src={mediaSource} crossOrigin={canReadApiMedia ? 'anonymous' : undefined} alt="" onLoad={(event) => setCoverTone(event.currentTarget)} onError={handleLoadError} />}
   </div>{openPresence}</>;
 }
 
