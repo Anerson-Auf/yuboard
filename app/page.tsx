@@ -202,7 +202,7 @@ function CardCover({ card }: { card: Pick<Card, 'id' | 'coverUrl' | 'coverMediaT
 
     try {
       const coverBounds = coverRef.current.getBoundingClientRect();
-      const titleBounds = taskCard.querySelector<HTMLElement>('.card-title-row')?.getBoundingClientRect();
+      const titleBounds = taskCard.querySelector<HTMLElement>('.card-title-row h3')?.getBoundingClientRect();
       if (!titleBounds || !coverBounds.width || !coverBounds.height || !media.naturalWidth || !media.naturalHeight) throw new Error('Cover dimensions are unavailable');
 
       const scale = Math.max(coverBounds.width / media.naturalWidth, coverBounds.height / media.naturalHeight);
