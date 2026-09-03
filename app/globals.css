@@ -1280,6 +1280,7 @@ textarea.mention-highlight { background: color-mix(in srgb, #ef5b68 9%, var(--su
 .filter-control, .board-labels-control, .board-menu-control, .board-members-control, .board-milestones-control, .board-scale-control, .recent-cards-control { z-index: 120; }
 .filter-popover, .board-labels-popover, .board-menu, .board-members-popover, .board-milestones-popover, .board-scale-popover, .recent-cards-popover { z-index: 130; }
 .modal-backdrop { z-index: 400; }
+.modal-backdrop.diagram-backdrop { z-index: 500; }
 
 /* Home cards create their own stacking contexts, so the topbar needs an explicit layer there too. */
 .app-shell.home-mode > .topbar { z-index: 120; }
