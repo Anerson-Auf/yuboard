@@ -138,8 +138,10 @@ type DiagramMergeRequest = { operation_id: string; title: string; base_title: st
 type DiagramMergeEvent = DiagramMergeRequest & { type: 'diagram_merge'; card_id: string; actor_id: string };
 type DiagramCursorEvent = { type: 'diagram_cursor'; card_id: string; user_id: string; username: string; avatar_url?: string | null; x: number; y: number };
 type DiagramObjectLockEvent = { type: 'diagram_object_lock'; card_id: string; object_id: string; user_id: string; username: string; active: boolean; expires_in_ms: number };
+type DiagramObjectLockSnapshot = { object_id: string; user_id: string; username: string; expires_in_ms: number };
+type DiagramObjectLocksSnapshotEvent = { type: 'diagram_object_locks_snapshot'; card_id: string; locks: DiagramObjectLockSnapshot[] };
 type DiagramNotesChangedEvent = { type: 'diagram_notes_changed'; card_id: string };
-type DiagramLiveEvent = DiagramMergeEvent | DiagramCursorEvent | DiagramObjectLockEvent | DiagramNotesChangedEvent;
+type DiagramLiveEvent = DiagramMergeEvent | DiagramCursorEvent | DiagramObjectLockEvent | DiagramObjectLocksSnapshotEvent | DiagramNotesChangedEvent;
 type DiagramObjectLock = { user_id: string; username: string; expires_at: number };
 type DiagramNoteComment = { id: string; author_id: string | null; author_name: string; author_avatar_url?: string | null; body: string; created_at: string };
 type DiagramNote = { id: string; x: number; y: number; author_id: string | null; author_name: string; author_avatar_url?: string | null; created_at: string; comments: DiagramNoteComment[] };
@@ -1202,6 +1204,18 @@ function diagramImage(src: string) {
   return image;
 }
 
+function pruneDiagramImageCache(activeSources: ReadonlySet<string>) {
+  for (const [src, image] of diagramImageCache) {
+    if (activeSources.has(src)) continue;
+    image.removeAttribute('src');
+    diagramImageCache.delete(src);
+  }
+}
+
+function clearDiagramImageCache() {
+  pruneDiagramImageCache(new Set());
+}
+
 function diagramBounds(element: DiagramElement) {
   if (element.type === 'arrow') return { left: Math.min(element.x, element.x2), top: Math.min(element.y, element.y2), right: Math.max(element.x, element.x2), bottom: Math.max(element.y, element.y2) };
   if (element.type === 'callout') {
@@ -1775,6 +1789,7 @@ export default function Home() {
   const diagramCursorFlushTimerRef = useRef<number | null>(null);
   const diagramLockSentAtRef = useRef<Map<string, number>>(new Map());
   const diagramSavedSnapshotRef = useRef('');
+  const diagramSessionRef = useRef(0);
   const diagramBaseDocumentRef = useRef<DiagramDocument>({ strokes: [], elements: [] });
   const diagramInFlightDocumentRef = useRef<DiagramDocument | null>(null);
   const diagramBaseTitleRef = useRef('Схема');
@@ -2498,8 +2513,10 @@ export default function Home() {
   }, [diagramElements, diagramStrokes, diagramTitle]);
 
   useEffect(() => {
-    if (!isDiagramOpen) return;
-    const images = diagramElements.filter((element): element is DiagramImage => element.type === 'image').map((element) => diagramImage(element.src));
+    if (!isDiagramOpen) { clearDiagramImageCache(); return; }
+    const sources = new Set(diagramElements.filter((element): element is DiagramImage => element.type === 'image').map((element) => element.src));
+    pruneDiagramImageCache(sources);
+    const images = [...sources].map(diagramImage);
     const refresh = () => setDiagramImageRevision((current) => current + 1);
     images.forEach((image) => image.addEventListener('load', refresh, { once: true }));
     return () => images.forEach((image) => image.removeEventListener('load', refresh));
@@ -2526,11 +2543,12 @@ export default function Home() {
     }
     let active = true;
     const cardId = selected.id;
+    const session = diagramSessionRef.current;
     const refresh = () => {
       void fetch(`${API_URL}/v1/cards/${cardId}/diagram/presence`)
         .then(async (response) => { if (!response.ok) throw new Error('diagram presence failed'); return response.json() as Promise<DiagramPresence[]>; })
         .then((people) => {
-          if (!active) return;
+          if (!active || session !== diagramSessionRef.current) return;
           // A fallback snapshot must not snap a cursor back to an older point
           // while the WebSocket is already streaming its newer coordinates.
           const socketIsLive = diagramSocketRef.current?.readyState === WebSocket.OPEN;
@@ -2551,6 +2569,7 @@ export default function Home() {
   useEffect(() => {
     if (!isDiagramOpen || authState !== 'signed-in' || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
     let active = true;
+    const session = diagramSessionRef.current;
     let reconnectTimer: number | null = null;
     let socket: WebSocket | null = null;
     const applyMerge = (event: DiagramMergeEvent) => {
@@ -2573,6 +2592,18 @@ export default function Home() {
       if (timer !== undefined) window.clearTimeout(timer);
       lockExpiryTimers.delete(objectId);
     };
+    const scheduleLockExpiry = (objectId: string, lock: DiagramObjectLock) => {
+      lockExpiryTimers.set(objectId, window.setTimeout(() => {
+        lockExpiryTimers.delete(objectId);
+        if (active) setDiagramObjectLocks((current) => {
+          const currentLock = current[objectId];
+          if (!currentLock || currentLock.user_id !== lock.user_id || currentLock.expires_at > Date.now()) return current;
+          const next = { ...current };
+          delete next[objectId];
+          return next;
+        });
+      }, Math.max(0, lock.expires_at - Date.now()) + 80));
+    };
     const applyLock = (event: DiagramObjectLockEvent) => {
       clearLockExpiry(event.object_id);
       if (!event.active) {
@@ -2583,17 +2614,20 @@ export default function Home() {
         });
         return;
       }
-      setDiagramObjectLocks((current) => ({ ...current, [event.object_id]: { user_id: event.user_id, username: event.username, expires_at: Date.now() + event.expires_in_ms } }));
-      lockExpiryTimers.set(event.object_id, window.setTimeout(() => {
-        lockExpiryTimers.delete(event.object_id);
-        if (active) setDiagramObjectLocks((current) => {
-          const lock = current[event.object_id];
-          if (!lock || lock.user_id !== event.user_id || lock.expires_at > Date.now()) return current;
-          const next = { ...current };
-          delete next[event.object_id];
-          return next;
-        });
-      }, event.expires_in_ms + 80));
+      const lock = { user_id: event.user_id, username: event.username, expires_at: Date.now() + event.expires_in_ms };
+      setDiagramObjectLocks((current) => ({ ...current, [event.object_id]: lock }));
+      scheduleLockExpiry(event.object_id, lock);
+    };
+    const applyLockSnapshot = (event: DiagramObjectLocksSnapshotEvent) => {
+      lockExpiryTimers.forEach((timer) => window.clearTimeout(timer));
+      lockExpiryTimers.clear();
+      const now = Date.now();
+      const next = Object.fromEntries(event.locks.map((entry) => {
+        const lock = { user_id: entry.user_id, username: entry.username, expires_at: now + entry.expires_in_ms };
+        scheduleLockExpiry(entry.object_id, lock);
+        return [entry.object_id, lock];
+      }));
+      setDiagramObjectLocks(next);
     };
     const applyCursor = (event: DiagramCursorEvent) => {
       if (event.user_id === account?.user.id) return;
@@ -2621,11 +2655,13 @@ export default function Home() {
       try { socket = new WebSocket(diagramSocketUrl(selected.id)); } catch { reconnectTimer = window.setTimeout(connect, 1_000); return; }
       diagramSocketRef.current = socket;
       socket.onmessage = (message) => {
+        if (session !== diagramSessionRef.current) return;
         try {
           const event = JSON.parse(String(message.data)) as DiagramLiveEvent;
           if (event.type === 'diagram_merge') applyMerge(event);
           else if (event.type === 'diagram_cursor') applyCursor(event);
           else if (event.type === 'diagram_object_lock') applyLock(event);
+          else if (event.type === 'diagram_object_locks_snapshot') applyLockSnapshot(event);
           else if (event.type === 'diagram_notes_changed') loadDiagramNotes(event.card_id);
         } catch { /* Ignore malformed diagram events. */ }
       };
@@ -2661,37 +2697,49 @@ export default function Home() {
   useEffect(() => {
     if (!isDiagramOpen || typeof selected?.id !== 'string' || isParkingCardId(selected.id)) return;
     let active = true;
+    let timer: number | null = null;
+    let controller: AbortController | null = null;
     const cardId = selected.id;
-    const refresh = () => {
-      void fetch(`${API_URL}/v1/cards/${cardId}/diagram`)
-        .then(async (response) => {
-          if (!response.ok) throw new Error('diagram refresh failed');
-          return response.json() as Promise<Diagram | null>;
-        })
-        .then((remote) => {
-          if (!active || !remote || remote.version <= diagramServerVersionRef.current) return;
-          const before = diagramDocumentRef.current;
-          const hadLocalChanges = JSON.stringify({ title: diagramTitleRef.current.trim(), document: before }) !== diagramSavedSnapshotRef.current;
-          const remoteDocument = withDiagramObjectIds(remote.document);
-          const merged = mergeDiagramDocument(before, diagramInFlightDocumentRef.current ?? diagramBaseDocumentRef.current, remoteDocument);
-          const keepLocalTitle = diagramTitleRef.current.trim() !== diagramBaseTitleRef.current;
-          const title = keepLocalTitle ? diagramTitleRef.current : remote.title;
-          diagramServerVersionRef.current = remote.version;
-          diagramDocumentRef.current = merged;
-          diagramBaseDocumentRef.current = remoteDocument;
-          diagramBaseTitleRef.current = remote.title;
-          diagramTitleRef.current = title;
-          if (!hadLocalChanges) diagramSavedSnapshotRef.current = JSON.stringify({ title, document: merged });
-          setDiagramStrokes(merged.strokes);
-          setDiagramElements(merged.elements ?? []);
-          setDiagramTitle(title);
-          setDiagram({ ...remote, document: remoteDocument });
-        })
-        .catch(() => undefined);
+    const session = diagramSessionRef.current;
+    const refresh = async () => {
+      controller = new AbortController();
+      try {
+        const response = await fetch(`${API_URL}/v1/cards/${cardId}/diagram`, { signal: controller.signal });
+        if (!response.ok) throw new Error('diagram refresh failed');
+        const remote = await response.json() as Diagram | null;
+        if (!active || session !== diagramSessionRef.current || !remote || remote.version <= diagramServerVersionRef.current) return;
+        const before = diagramDocumentRef.current;
+        const hadLocalChanges = JSON.stringify({ title: diagramTitleRef.current.trim(), document: before }) !== diagramSavedSnapshotRef.current;
+        const remoteDocument = withDiagramObjectIds(remote.document);
+        const merged = mergeDiagramDocument(before, diagramInFlightDocumentRef.current ?? diagramBaseDocumentRef.current, remoteDocument);
+        const keepLocalTitle = diagramTitleRef.current.trim() !== diagramBaseTitleRef.current;
+        const title = keepLocalTitle ? diagramTitleRef.current : remote.title;
+        diagramServerVersionRef.current = remote.version;
+        diagramDocumentRef.current = merged;
+        diagramBaseDocumentRef.current = remoteDocument;
+        diagramBaseTitleRef.current = remote.title;
+        diagramTitleRef.current = title;
+        if (!hadLocalChanges) diagramSavedSnapshotRef.current = JSON.stringify({ title, document: merged });
+        setDiagramStrokes(merged.strokes);
+        setDiagramElements(merged.elements ?? []);
+        setDiagramTitle(title);
+        setDiagram({ ...remote, document: remoteDocument });
+      } catch {
+        // WebSocket reconnect and the next bounded recovery poll handle failures.
+      } finally {
+        controller = null;
+        if (active) {
+          const delay = diagramSocketRef.current?.readyState === WebSocket.OPEN ? 5_000 : 1_500;
+          timer = window.setTimeout(() => void refresh(), delay);
+        }
+      }
     };
-    refresh();
-    const timer = window.setInterval(refresh, 350);
-    return () => { active = false; window.clearInterval(timer); };
+    void refresh();
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+      controller?.abort();
+    };
   }, [isDiagramOpen, selected?.id]);
 
   useEffect(() => {
@@ -4574,6 +4622,7 @@ export default function Home() {
     void fetch(`${API_URL}/v1/cards/${selected.id}/diagram`)
       .then(async (response) => { if (!response.ok) throw new Error('diagram load failed'); return response.json() as Promise<Diagram | null>; })
       .then((saved) => {
+        diagramSessionRef.current += 1;
         const rawDocument = { strokes: saved?.document?.strokes ?? [], elements: saved?.document?.elements ?? [] };
         const hasLegacyObjects = rawDocument.strokes.some((stroke) => !stroke.id) || rawDocument.elements.some((element) => !element.id);
         const document = withDiagramObjectIds(rawDocument);
@@ -5088,13 +5137,14 @@ export default function Home() {
     const document = withDiagramObjectIds({ strokes: diagramStrokes, elements: diagramElements });
     const baseDocument = diagramBaseDocumentRef.current;
     const baseTitle = diagramBaseTitleRef.current;
-    const snapshot = JSON.stringify({ title, document });
+    const session = diagramSessionRef.current;
     const request: DiagramMergeRequest = { operation_id: crypto.randomUUID(), title, base_title: baseTitle, base_document: baseDocument, document };
     diagramInFlightDocumentRef.current = document;
     setDiagramSaving(true);
     void fetch(`${API_URL}/v1/cards/${selected.id}/diagram/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })
       .then(async (response) => { if (!response.ok) { const message = (await response.json().catch(() => null) as { message?: string } | null)?.message; throw new Error(message ?? 'diagram save failed'); } return response.json() as Promise<Diagram>; })
       .then((saved) => {
+        if (session !== diagramSessionRef.current) return;
         const canonical = withDiagramObjectIds(saved.document);
         // `document` is the exact snapshot sent by this request. Comparing the
         // response against it preserves new points drawn while the request was
@@ -5108,16 +5158,44 @@ export default function Home() {
         setDiagramStrokes(merged.strokes);
         setDiagramElements(merged.elements ?? []);
         setDiagram({ ...saved, document: canonical });
-        if (closeAfterSave) { setDiagramOpen(false); setDiagramFullscreen(false); showToast('Схема сохранена'); }
+        if (closeAfterSave) { releaseDiagramEditorState(); showToast('Схема сохранена'); }
       })
-      .catch((error) => { if (closeAfterSave) showToast(error instanceof Error ? error.message : 'Не удалось сохранить схему'); })
-      .finally(() => { diagramInFlightDocumentRef.current = null; setDiagramSaving(false); });
+      .catch((error) => { if (session === diagramSessionRef.current && closeAfterSave) showToast(error instanceof Error ? error.message : 'Не удалось сохранить схему'); })
+      .finally(() => { if (session === diagramSessionRef.current) { diagramInFlightDocumentRef.current = null; setDiagramSaving(false); } });
   }
   function closeDiagram() {
     const snapshot = JSON.stringify({ title: diagramTitle.trim(), document: { strokes: diagramStrokes, elements: diagramElements } });
     if (!isDiagramSaving && diagramTitle.trim() && snapshot !== diagramSavedSnapshotRef.current) { saveDiagram(true); return; }
+    releaseDiagramEditorState();
+  }
+  function releaseDiagramEditorState() {
     setDiagramOpen(false);
     setDiagramFullscreen(false);
+    setDiagramSaving(false);
+    setDiagram(null);
+    setDiagramStrokes([]);
+    setDiagramElements([]);
+    setDiagramHistory([]);
+    setDiagramPreview(null);
+    setSelectedDiagramElement(null);
+    setEditingDiagramTextIndex(null);
+    setEditingDiagramTextDraft('');
+    setDiagramPresence([]);
+    setDiagramObjectLocks({});
+    setDiagramNotes([]);
+    setSelectedDiagramNoteId(null);
+    setDiagramNoteComposerPoint(null);
+    setDiagramNoteDraft('');
+    setDiagramNoteReplyDrafts({});
+    diagramNotesRequestRef.current += 1;
+    diagramSessionRef.current += 1;
+    diagramServerVersionRef.current = -1;
+    diagramSavedSnapshotRef.current = '';
+    diagramBaseDocumentRef.current = { strokes: [], elements: [] };
+    diagramInFlightDocumentRef.current = null;
+    diagramDocumentRef.current = { strokes: [], elements: [] };
+    diagramLockSentAtRef.current.clear();
+    clearDiagramImageCache();
   }
   function addWorkspaceMember(event: FormEvent) {
     event.preventDefault();

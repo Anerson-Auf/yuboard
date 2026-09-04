@@ -52,6 +52,12 @@ struct AppState {
     trust_proxy: bool,
 }
 
+const FREEFORM_CURSOR_TTL: Duration = Duration::from_secs(12);
+const BOARD_PRESENCE_TTL: Duration = Duration::from_secs(18);
+const DIAGRAM_CURSOR_TTL: Duration = Duration::from_secs(8);
+const REALTIME_STATE_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
+const DIAGRAM_EVENT_BUFFER_CAPACITY: usize = 32;
+
 // Discord CDN URLs are short-lived. The Discord bridge owns the durable
 // channel/message/attachment identifiers and exchanges them for a fresh URL.
 #[derive(Clone)]
@@ -474,6 +480,67 @@ struct DiagramCursorPresence { x: i32, y: i32, username: String, avatar_url: Opt
 #[derive(Clone)]
 struct DiagramObjectLock { user_id: Uuid, username: String, expires_at: Instant }
 
+fn prune_freeform_live_board(board: &mut FreeformLiveBoard, now: Instant) {
+    board.cursors.retain(|_, cursor| now.saturating_duration_since(cursor.last_seen) <= FREEFORM_CURSOR_TTL);
+    board.pings.retain(|ping| ping.expires_at > now);
+}
+
+fn prune_freeform_live_state(boards: &mut HashMap<Uuid, FreeformLiveBoard>, now: Instant) {
+    boards.retain(|_, board| {
+        prune_freeform_live_board(board, now);
+        !board.cursors.is_empty() || !board.pings.is_empty()
+    });
+}
+
+fn prune_board_presence_state(boards: &mut HashMap<Uuid, HashMap<Uuid, BoardPresence>>, now: Instant) {
+    boards.retain(|_, board| {
+        board.retain(|_, presence| now.saturating_duration_since(presence.last_seen) <= BOARD_PRESENCE_TTL);
+        !board.is_empty()
+    });
+}
+
+fn prune_diagram_presence_state(cards: &mut HashMap<Uuid, HashMap<Uuid, DiagramCursorPresence>>, now: Instant) {
+    cards.retain(|_, card| {
+        card.retain(|_, presence| now.saturating_duration_since(presence.last_seen) <= DIAGRAM_CURSOR_TTL);
+        !card.is_empty()
+    });
+}
+
+fn prune_diagram_lock_state(cards: &mut HashMap<Uuid, HashMap<String, DiagramObjectLock>>, now: Instant) {
+    cards.retain(|_, card| {
+        card.retain(|_, lock| lock.expires_at > now);
+        !card.is_empty()
+    });
+}
+
+async fn prune_realtime_state(state: &AppState, now: Instant) {
+    {
+        let mut boards = state.freeform_live.lock().await;
+        prune_freeform_live_state(&mut boards, now);
+    }
+    {
+        let mut boards = state.board_presence.lock().await;
+        prune_board_presence_state(&mut boards, now);
+    }
+    {
+        let mut cards = state.diagram_presence.lock().await;
+        prune_diagram_presence_state(&mut cards, now);
+    }
+    {
+        let mut cards = state.diagram_locks.lock().await;
+        prune_diagram_lock_state(&mut cards, now);
+    }
+}
+
+async fn run_realtime_state_cleanup(state: AppState) {
+    let mut tick = tokio::time::interval(REALTIME_STATE_CLEANUP_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        prune_realtime_state(&state, Instant::now()).await;
+    }
+}
+
 #[derive(Deserialize)]
 struct UpdateDiagramPresenceRequest { x: i32, y: i32 }
 
@@ -524,6 +591,22 @@ struct DiagramObjectLockEvent {
     username: String,
     active: bool,
     expires_in_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct DiagramObjectLockSnapshot {
+    object_id: String,
+    user_id: Uuid,
+    username: String,
+    expires_in_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct DiagramObjectLocksSnapshotEvent {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    card_id: Uuid,
+    locks: Vec<DiagramObjectLockSnapshot>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1917,6 +2000,26 @@ async fn main() {
         tokio::spawn(run_web_push_delivery_worker(pool, config, external_http.clone()));
     }
 
+    let state = AppState {
+        database,
+        upload_dir,
+        cookie_secure,
+        external_http,
+        discord_attachment_refresh,
+        comment_push,
+        web_push,
+        events,
+        freeform_live: Arc::new(Mutex::new(HashMap::new())),
+        board_presence: Arc::new(Mutex::new(HashMap::new())),
+        diagram_presence: Arc::new(Mutex::new(HashMap::new())),
+        diagram_locks: Arc::new(Mutex::new(HashMap::new())),
+        diagram_events: broadcast::channel(DIAGRAM_EVENT_BUFFER_CAPACITY).0,
+        freeform_live_events: broadcast::channel(256).0,
+        auth_rate_limiter: RateLimiter::new(),
+        trust_proxy,
+    };
+    tokio::spawn(run_realtime_state_cleanup(state.clone()));
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/auth/register", post(register))
@@ -2076,7 +2179,7 @@ async fn main() {
         .route("/v1/cards/{card_id}/attachments", post(upload_attachment))
         .route("/v1/attachments/{attachment_id}", get(download_attachment).delete(delete_attachment))
         .route("/v1/attachments/{attachment_id}/content", get(download_attachment))
-        .with_state(AppState { database, upload_dir, cookie_secure, external_http, discord_attachment_refresh, comment_push, web_push, events, freeform_live: Arc::new(Mutex::new(HashMap::new())), board_presence: Arc::new(Mutex::new(HashMap::new())), diagram_presence: Arc::new(Mutex::new(HashMap::new())), diagram_locks: Arc::new(Mutex::new(HashMap::new())), diagram_events: broadcast::channel(1_024).0, freeform_live_events: broadcast::channel(256).0, auth_rate_limiter: RateLimiter::new(), trust_proxy })
+        .with_state(state)
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -3865,13 +3968,14 @@ async fn freeform_live_snapshot(state: &AppState, board_id: Uuid) -> ApiResult<F
     let now = Instant::now();
     let (cursors, pings) = {
         let mut boards = state.freeform_live.lock().await;
-        let board = boards.entry(board_id).or_default();
-        board.cursors.retain(|_, cursor| now.duration_since(cursor.last_seen) <= Duration::from_secs(12));
-        board.pings.retain(|ping| ping.expires_at > now);
-        (
+        let Some(board) = boards.get_mut(&board_id) else { return Ok(Json(FreeformLiveResponse { cursors: Vec::new(), pings: Vec::new() })); };
+        prune_freeform_live_board(board, now);
+        let snapshot = (
             board.cursors.iter().map(|(user_id, cursor)| (*user_id, cursor.x, cursor.y)).collect::<Vec<_>>(),
             board.pings.iter().map(|ping| (ping.id, ping.user_id, ping.x, ping.y, ping.expires_at.saturating_duration_since(now).as_millis().min(u64::MAX as u128) as u64)).collect::<Vec<_>>(),
-        )
+        );
+        if board.cursors.is_empty() && board.pings.is_empty() { boards.remove(&board_id); }
+        snapshot
     };
     let user_ids = cursors.iter().map(|(user_id, _, _)| *user_id).chain(pings.iter().map(|(_, user_id, _, _, _)| *user_id)).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>();
     if user_ids.is_empty() { return Ok(Json(FreeformLiveResponse { cursors: Vec::new(), pings: Vec::new() })); }
@@ -3893,9 +3997,11 @@ async fn board_presence_snapshot(state: &AppState, board_id: Uuid) -> ApiResult<
     let active = {
         let now = Instant::now();
         let mut boards = state.board_presence.lock().await;
-        let board = boards.entry(board_id).or_default();
-        board.retain(|_, presence| now.duration_since(presence.last_seen) <= Duration::from_secs(18));
-        board.iter().map(|(user_id, presence)| (*user_id, presence.clone())).collect::<Vec<_>>()
+        let Some(board) = boards.get_mut(&board_id) else { return Ok(Json(Vec::new())); };
+        board.retain(|_, presence| now.saturating_duration_since(presence.last_seen) <= BOARD_PRESENCE_TTL);
+        let active = board.iter().map(|(user_id, presence)| (*user_id, presence.clone())).collect::<Vec<_>>();
+        if board.is_empty() { boards.remove(&board_id); }
+        active
     };
     if active.is_empty() { return Ok(Json(Vec::new())); }
     let ids = active.iter().map(|(id, _)| *id).collect::<Vec<_>>();
@@ -3958,6 +4064,7 @@ async fn record_freeform_live_update(state: &AppState, board_id: Uuid, current: 
     {
         let mut boards = state.freeform_live.lock().await;
         let board = boards.entry(board_id).or_default();
+        prune_freeform_live_board(board, now);
         board.cursors.insert(current.id, FreeformCursorPresence { x, y, last_seen: now });
         if let Some(id) = ping_id {
             board.pings.push(FreeformPingPresence { id, user_id: current.id, x, y, expires_at: now + Duration::from_secs(5) });
@@ -5655,12 +5762,14 @@ async fn card_diagram_presence_snapshot(state: &AppState, card_id: Uuid, current
     let active = {
         let now = Instant::now();
         let mut cards = state.diagram_presence.lock().await;
-        let card = cards.entry(card_id).or_default();
-        card.retain(|_, presence| now.duration_since(presence.last_seen) <= Duration::from_secs(8));
-        card.iter()
+        let Some(card) = cards.get_mut(&card_id) else { return Ok(Json(Vec::new())); };
+        card.retain(|_, presence| now.saturating_duration_since(presence.last_seen) <= DIAGRAM_CURSOR_TTL);
+        let active = card.iter()
             .filter(|(user_id, _)| **user_id != current_user_id)
             .map(|(user_id, presence)| DiagramPresenceEntry { user_id: *user_id, username: presence.username.clone(), avatar_url: presence.avatar_url.clone(), x: presence.x, y: presence.y })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        if card.is_empty() { cards.remove(&card_id); }
+        active
     };
     Ok(Json(active))
 }
@@ -5675,7 +5784,12 @@ async fn record_diagram_cursor(state: &AppState, card_id: Uuid, current: Current
     if !(0..=20_000).contains(&x) || !(0..=20_000).contains(&y) {
         return Err(ApiError::bad_request("Diagram cursor coordinates must be between 0 and 20000."));
     }
-    state.diagram_presence.lock().await.entry(card_id).or_default().insert(current.id, DiagramCursorPresence { x, y, username: account.username.clone(), avatar_url: account.avatar_url.clone(), last_seen: Instant::now() });
+    let now = Instant::now();
+    let mut cards = state.diagram_presence.lock().await;
+    let card = cards.entry(card_id).or_default();
+    card.retain(|_, presence| now.saturating_duration_since(presence.last_seen) <= DIAGRAM_CURSOR_TTL);
+    card.insert(current.id, DiagramCursorPresence { x, y, username: account.username.clone(), avatar_url: account.avatar_url.clone(), last_seen: now });
+    drop(cards);
     Ok(DiagramLiveEvent::Cursor(DiagramCursorEvent { event_type: "diagram_cursor", card_id, user_id: current.id, username: account.username.clone(), avatar_url: account.avatar_url.clone(), x, y }))
 }
 
@@ -5703,6 +5817,66 @@ async fn record_diagram_object_lock(state: &AppState, card_id: Uuid, current: Cu
     // interaction is active and releases it immediately on pointer-up/blur.
     card_locks.insert(object_id.clone(), DiagramObjectLock { user_id: current.id, username: account.username.clone(), expires_at: now + Duration::from_secs(6) });
     DiagramLiveEvent::ObjectLock(DiagramObjectLockEvent { event_type: "diagram_object_lock", card_id, object_id, user_id: current.id, username: account.username.clone(), active: true, expires_in_ms: 6_000 })
+}
+
+fn diagram_object_locks_snapshot_at(cards: &mut HashMap<Uuid, HashMap<String, DiagramObjectLock>>, card_id: Uuid, now: Instant) -> DiagramObjectLocksSnapshotEvent {
+    let mut snapshot_locks = match cards.get_mut(&card_id) {
+        Some(card_locks) => {
+            card_locks.retain(|_, lock| lock.expires_at > now);
+            card_locks.iter().map(|(object_id, lock)| DiagramObjectLockSnapshot {
+                object_id: object_id.clone(),
+                user_id: lock.user_id,
+                username: lock.username.clone(),
+                expires_in_ms: lock.expires_at.saturating_duration_since(now).as_millis().min(u64::MAX as u128) as u64,
+            }).collect::<Vec<_>>()
+        }
+        None => Vec::new(),
+    };
+    if cards.get(&card_id).is_some_and(HashMap::is_empty) { cards.remove(&card_id); }
+    snapshot_locks.sort_by(|left, right| left.object_id.cmp(&right.object_id));
+    DiagramObjectLocksSnapshotEvent { event_type: "diagram_object_locks_snapshot", card_id, locks: snapshot_locks }
+}
+
+async fn diagram_object_locks_snapshot_payload(locks: &Mutex<HashMap<Uuid, HashMap<String, DiagramObjectLock>>>, card_id: Uuid) -> Option<String> {
+    let snapshot = {
+        let mut cards = locks.lock().await;
+        diagram_object_locks_snapshot_at(&mut cards, card_id, Instant::now())
+    };
+    serde_json::to_string(&snapshot).ok()
+}
+
+enum DiagramSocketDelivery {
+    Payload(String),
+    Skip,
+    Closed,
+}
+
+async fn next_card_diagram_socket_payload(
+    receiver: &mut broadcast::Receiver<DiagramLiveEvent>,
+    sender: &broadcast::Sender<DiagramLiveEvent>,
+    locks: &Mutex<HashMap<Uuid, HashMap<String, DiagramObjectLock>>>,
+    card_id: Uuid,
+) -> DiagramSocketDelivery {
+    match receiver.recv().await {
+        Ok(event) => {
+            if diagram_live_event_card_id(&event) != card_id { return DiagramSocketDelivery::Skip; }
+            match diagram_live_event_payload(&event) {
+                Ok(payload) => DiagramSocketDelivery::Payload(payload),
+                Err(_) => DiagramSocketDelivery::Skip,
+            }
+        }
+        Err(broadcast::error::RecvError::Lagged(_)) => {
+            // Drop retained events before taking the authoritative lock
+            // snapshot. Document and note polling recover their durable
+            // state; cursors are intentionally ephemeral.
+            *receiver = sender.subscribe();
+            match diagram_object_locks_snapshot_payload(locks, card_id).await {
+                Some(payload) => DiagramSocketDelivery::Payload(payload),
+                None => DiagramSocketDelivery::Skip,
+            }
+        }
+        Err(broadcast::error::RecvError::Closed) => DiagramSocketDelivery::Closed,
+    }
 }
 
 /// Rejects only modifications to objects another editor has actively locked.
@@ -5927,6 +6101,8 @@ async fn card_diagram_websocket(State(state): State<AppState>, current: CurrentU
 async fn run_card_diagram_websocket(state: AppState, card_id: Uuid, current: CurrentUser, account: FreeformLiveAccount, can_edit: bool, socket: WebSocket) {
     let (mut sender, mut receiver) = futures_util::StreamExt::split(socket);
     let mut events = state.diagram_events.subscribe();
+    let Some(snapshot) = diagram_object_locks_snapshot_payload(state.diagram_locks.as_ref(), card_id).await else { return; };
+    if sender.send(Message::Text(snapshot.into())).await.is_err() { return; }
     loop {
         tokio::select! {
             incoming = futures_util::StreamExt::next(&mut receiver) => {
@@ -5952,11 +6128,12 @@ async fn run_card_diagram_websocket(state: AppState, card_id: Uuid, current: Cur
                     }
                 }
             }
-            event = events.recv() => {
-                let Ok(event) = event else { continue; };
-                if diagram_live_event_card_id(&event) != card_id { continue; }
-                let Ok(payload) = diagram_live_event_payload(&event) else { continue; };
-                if sender.send(Message::Text(payload.into())).await.is_err() { break; }
+            delivery = next_card_diagram_socket_payload(&mut events, &state.diagram_events, state.diagram_locks.as_ref(), card_id) => {
+                match delivery {
+                    DiagramSocketDelivery::Payload(payload) => if sender.send(Message::Text(payload.into())).await.is_err() { break; },
+                    DiagramSocketDelivery::Skip => {}
+                    DiagramSocketDelivery::Closed => break,
+                }
             }
         }
     }
@@ -8444,6 +8621,102 @@ mod tests {
         assert!(limiter.check_at("login", second, started).await.is_ok());
         assert!(limiter.check_at("login", third, started).await.is_err());
         assert!(limiter.check_at("login", third, started + Duration::from_secs(61)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn diagram_socket_recovers_authoritative_locks_after_broadcast_lag() {
+        let card_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let started = Instant::now();
+        let locks = Mutex::new(HashMap::from([(
+            card_id,
+            HashMap::from([
+                ("active".to_owned(), DiagramObjectLock { user_id, username: "editor".to_owned(), expires_at: started + Duration::from_secs(6) }),
+                ("expired".to_owned(), DiagramObjectLock { user_id, username: "editor".to_owned(), expires_at: started }),
+            ]),
+        )]));
+        let (sender, mut receiver) = broadcast::channel(1);
+        for x in [1, 2] {
+            assert!(sender.send(DiagramLiveEvent::Cursor(DiagramCursorEvent {
+                event_type: "diagram_cursor",
+                card_id,
+                user_id,
+                username: "editor".to_owned(),
+                avatar_url: None,
+                x,
+                y: 0,
+            })).is_ok());
+        }
+
+        let DiagramSocketDelivery::Payload(payload) = next_card_diagram_socket_payload(&mut receiver, &sender, &locks, card_id).await else { panic!("lag recovery did not return a snapshot"); };
+        let snapshot: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(snapshot.get("type").and_then(Value::as_str), Some("diagram_object_locks_snapshot"));
+        let snapshot_locks = snapshot.get("locks").and_then(Value::as_array).unwrap();
+        assert_eq!(snapshot_locks.len(), 1);
+        assert_eq!(snapshot_locks[0].get("object_id").and_then(Value::as_str), Some("active"));
+
+        assert!(sender.send(DiagramLiveEvent::Cursor(DiagramCursorEvent {
+            event_type: "diagram_cursor",
+            card_id,
+            user_id,
+            username: "editor".to_owned(),
+            avatar_url: None,
+            x: 3,
+            y: 0,
+        })).is_ok());
+        let DiagramSocketDelivery::Payload(payload) = next_card_diagram_socket_payload(&mut receiver, &sender, &locks, card_id).await else { panic!("receiver did not continue after recovery"); };
+        let cursor: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(cursor.get("type").and_then(Value::as_str), Some("diagram_cursor"));
+        assert_eq!(cursor.get("x").and_then(Value::as_i64), Some(3));
+    }
+
+    #[test]
+    fn realtime_state_pruning_reclaims_expired_buckets() {
+        let started = Instant::now();
+        let board_id = Uuid::new_v4();
+        let card_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+
+        let mut freeform = HashMap::from([(
+            board_id,
+            FreeformLiveBoard {
+                cursors: HashMap::from([(user_id, FreeformCursorPresence { x: 1, y: 2, last_seen: started })]),
+                pings: vec![FreeformPingPresence { id: Uuid::new_v4(), user_id, x: 1, y: 2, expires_at: started + Duration::from_secs(5) }],
+            },
+        )]);
+        let mut board_presence = HashMap::from([(
+            board_id,
+            HashMap::from([(user_id, BoardPresence { card_id: Some(card_id), editing_description: false, location: BoardPresenceLocation::Board, last_seen: started })]),
+        )]);
+        let mut diagram_presence = HashMap::from([(
+            card_id,
+            HashMap::from([(user_id, DiagramCursorPresence { x: 1, y: 2, username: "user".to_owned(), avatar_url: None, last_seen: started })]),
+        )]);
+        let mut diagram_locks = HashMap::from([(
+            card_id,
+            HashMap::from([("object".to_owned(), DiagramObjectLock { user_id, username: "user".to_owned(), expires_at: started + Duration::from_secs(6) })]),
+        )]);
+
+        let still_active = started + Duration::from_secs(4);
+        prune_freeform_live_state(&mut freeform, still_active);
+        prune_board_presence_state(&mut board_presence, still_active);
+        prune_diagram_presence_state(&mut diagram_presence, still_active);
+        prune_diagram_lock_state(&mut diagram_locks, still_active);
+        assert_eq!(freeform.len(), 1);
+        assert_eq!(board_presence.len(), 1);
+        assert_eq!(diagram_presence.len(), 1);
+        assert_eq!(diagram_locks.len(), 1);
+
+        let expired = started + Duration::from_secs(31);
+        prune_freeform_live_state(&mut freeform, expired);
+        prune_board_presence_state(&mut board_presence, expired);
+        prune_diagram_presence_state(&mut diagram_presence, expired);
+        prune_diagram_lock_state(&mut diagram_locks, expired);
+
+        assert!(freeform.is_empty());
+        assert!(board_presence.is_empty());
+        assert!(diagram_presence.is_empty());
+        assert!(diagram_locks.is_empty());
     }
 
     #[test]
